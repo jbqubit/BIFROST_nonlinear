@@ -60,11 +60,6 @@ $$h_{\text{new}} \sim h \left(\frac{\text{tol}}{\text{err}}\right)^{1/3}$$
 > $$\exp(A) = \cosh(μ) I + \sinh(μ)/μ * A$$
 > where  $μ^2 = -\det(A)$. This is exact, not an approximation. See Appendix A.1.
 
-- [ ] TODO: An observation by one of the GPTs is the following. Is this implemented in the codbase? What does it even mean? 
- > A small-$|h\mu|$ series fallback avoids catastrophic cancellation:
- > $$\frac{\sinh x}{x}\approx 1+\frac{x^2}{6}+\frac{x^4}{120}$$
-
-
 > **INSIGHT** Jones matrices are physically meaningful only up to an overall global phase in many applications. Two matrices differing only by a scalar phase factor often represent the same observable polarization action. So the step-doubling comparison should not use a raw matrix difference alone. Instead, align the phases first:
 > $$\text{err} = \|A-e^{i\phi}B\|,$$
 >where $e^{i\phi}$ is chosen to best match $A$ and $B$.

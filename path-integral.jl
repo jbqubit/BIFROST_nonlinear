@@ -99,6 +99,12 @@ end
 # One exponential-midpoint step
 # ----------------------------
 
+"""
+    sinchc()
+
+sinhc(z) = sinh(z)/z, with Taylor expansion around z=0 to avoid numerical issues
+(catastrophic cancellation).
+"""
 function sinhc(z::ComplexF64)
     if abs(z) < 1e-8
         z2 = z * z
