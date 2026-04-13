@@ -21,7 +21,7 @@ path-plot.jl sits on top of that stack; it provides visual diagnostics
 # ----------------------------
 
 struct PiecewiseProfile{F}
-    breaks::Vector{Float64}   # [z0, z1, ..., zN]
+    breaks::Vector{Float64}   # [s0, s1, ..., sN]
     pieces::Vector{F}         # length N-1
     function PiecewiseProfile(breaks::Vector{Float64}, pieces::Vector{F}) where {F}
         @assert length(breaks) >= 2
@@ -31,11 +31,11 @@ struct PiecewiseProfile{F}
     end
 end
 
-function (p::PiecewiseProfile)(z::Real)
-    @assert p.breaks[1] <= z <= p.breaks[end] "z out of bounds"
-    i = searchsortedlast(p.breaks, z)
-    i = min(i, length(p.pieces))   # handles z == last breakpoint
-    return p.pieces[i](z)
+function (p::PiecewiseProfile)(s::Real)
+    @assert p.breaks[1] <= s <= p.breaks[end] "s out of bounds"
+    i = searchsortedlast(p.breaks, s)
+    i = min(i, length(p.pieces))   # handles s == last breakpoint
+    return p.pieces[i](s)
 end
 
 # ----------------------------
@@ -43,9 +43,9 @@ end
 # ----------------------------
 
 struct FiberInput{FR,FTH,FDTW,FB,FT}
-    Rb::FR                 # z -> bend radius [m]
-    theta_b::FTH          # z -> bend angle [rad]
-    dtwist::FDTW          # z -> d(twist)/dz [rad/m]
+    Rb::FR                 # s -> bend radius [m]
+    theta_b::FTH          # s -> bend angle [rad]
+    dtwist::FDTW          # s -> d(twist)/ds [rad/m]
     bend_strength::FB     # k2 -> Δβ_b [1/m]
     twist_strength::FT    # tau -> Δβ_t [1/m], tau in rad/m
 end
@@ -53,12 +53,12 @@ end
 include("path-plot.jl")
 
 # ----------------------------
-# Generator K(z)
+# Generator K(s)
 # ----------------------------
 
 function make_generator(f::FiberInput)
-    return function (z::Real)
-        R = f.Rb(z)
+    return function (s::Real)
+        R = f.Rb(s)
 
         if isinf(R)
             kx = 0.0
@@ -66,14 +66,14 @@ function make_generator(f::FiberInput)
             k2 = 0.0
         else
             invR = 1.0 / R
-            c = cos(f.theta_b(z))
-            s = sin(f.theta_b(z))
+            c = cos(f.theta_b(s))
+            sn = sin(f.theta_b(s))
             kx = invR * c
-            ky = invR * s
+            ky = invR * sn
             k2 = kx*kx + ky*ky
         end
 
-        tau = f.dtwist(z)   # rad/m
+        tau = f.dtwist(s)   # rad/m
 
         Δβt = f.twist_strength(tau)
 
@@ -100,17 +100,17 @@ end
 # ----------------------------
 
 """
-    sinchc()
+    sinhc()
 
-sinhc(z) = sinh(z)/z, with Taylor expansion around z=0 to avoid numerical issues
+sinhc(μ) = sinh(μ)/μ, with Taylor expansion around μ=0 to avoid numerical issues
 (catastrophic cancellation).
 """
-function sinhc(z::ComplexF64)
-    if abs(z) < 1e-8
-        z2 = z * z
-        return 1 + z2 / 6 + z2 * z2 / 120 + z2 * z2 * z2 / 5040
+function sinhc(μ::ComplexF64)
+    if abs(μ) < 1e-8
+        μ2 = μ * μ
+        return 1 + μ2 / 6 + μ2 * μ2 / 120 + μ2 * μ2 * μ2 / 5040
     end
-    return sinh(z) / z
+    return sinh(μ) / μ
 end
 
 """
@@ -147,8 +147,8 @@ function exp_jones_generator(A::Matrix{ComplexF64})
     ]
 end
 
-function exp_midpoint_step(K, z::Float64, h::Float64, J::Matrix{ComplexF64})
-    M = K(z + 0.5h)
+function exp_midpoint_step(K, s::Float64, h::Float64, J::Matrix{ComplexF64})
+    M = K(s + 0.5h)
     return exp_jones_generator(h * M) * J
 end
 
@@ -178,35 +178,35 @@ end
 
 function propagate_interval!(
     K,
-    z0::Float64,
-    z1::Float64,
+    s0::Float64,
+    s1::Float64,
     J0::Matrix{ComplexF64};
     rtol::Float64 = 1e-9,
     atol::Float64 = 1e-12,
-    h_init::Float64 = (z1 - z0) / 100,
+    h_init::Float64 = (s1 - s0) / 100,
     h_min::Float64 = 1e-12,
-    h_max::Float64 = z1 - z0,
+    h_max::Float64 = s1 - s0,
     safety::Float64 = 0.9,
     growth_max::Float64 = 2.0,
     shrink_min::Float64 = 0.2
 )
-    z = z0
+    s = s0
     J = copy(J0)
-    h = min(h_init, z1 - z0)
+    h = min(h_init, s1 - s0)
 
     accepted = 0
     rejected = 0
 
-    while z < z1
-        h = min(h, z1 - z)
-        @assert h >= h_min "Step size underflow near z=$z"
+    while s < s1
+        h = min(h, s1 - s)
+        @assert h >= h_min "Step size underflow near s=$s"
 
         # one full step
-        J_full = exp_midpoint_step(K, z, h, J)
+        J_full = exp_midpoint_step(K, s, h, J)
 
         # two half steps
-        J_half = exp_midpoint_step(K, z, 0.5h, J)
-        J_twohalf = exp_midpoint_step(K, z + 0.5h, 0.5h, J_half)
+        J_half = exp_midpoint_step(K, s, 0.5h, J)
+        J_twohalf = exp_midpoint_step(K, s + 0.5h, 0.5h, J_half)
 
         err_abs = phase_insensitive_error(J_full, J_twohalf)
         scale = max(opnorm(J_twohalf), opnorm(J_full))
@@ -214,7 +214,7 @@ function propagate_interval!(
 
         if err_abs <= tol
             # accept better solution
-            z += h
+            s += h
             J = J_twohalf
             accepted += 1
 
@@ -231,7 +231,7 @@ function propagate_interval!(
             fac = safety * (tol / err_abs)^(1/3)
             fac = clamp(fac, shrink_min, 0.5)
             h *= fac
-            @assert h >= h_min "Step size fell below h_min near z=$z"
+            @assert h >= h_min "Step size fell below h_min near s=$s"
         end
     end
 
@@ -245,12 +245,12 @@ end
 """
     propagate_piecewise(K, breaks; jumps=Dict(), kwargs...)
 
-Propagate dJ/dz = K(z) J from breaks[1] to breaks[end].
+Propagate dJ/ds = K(s) J from breaks[1] to breaks[end].
 
 Arguments
 ---------
 - K: callable generator
-- breaks: sorted vector [z0, z1, ..., zN]
+- breaks: sorted vector [s0, s1, ..., sN]
 - jumps: optional Dict{Float64, Matrix{ComplexF64}} giving lumped jump matrices
          applied immediately AFTER reaching that breakpoint.
 
@@ -271,14 +271,14 @@ function propagate_piecewise(
     stats = PropagatorStats[]
 
     for i in 1:length(breaks)-1
-        zL = breaks[i]
-        zR = breaks[i+1]
+        sL = breaks[i]
+        sR = breaks[i+1]
 
-        J, st = propagate_interval!(K, zL, zR, J; kwargs...)
+        J, st = propagate_interval!(K, sL, sR, J; kwargs...)
         push!(stats, st)
 
-        if haskey(jumps, zR)
-            J = jumps[zR] * J
+        if haskey(jumps, sR)
+            J = jumps[sR] * J
         end
     end
 

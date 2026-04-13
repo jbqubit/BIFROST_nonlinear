@@ -54,8 +54,6 @@ $$h_{\text{new}} \sim h \left(\frac{\text{tol}}{\text{err}}\right)^{1/3}$$
 
 - In the interest of accuracy the adaptive mechanism for choosing $h$ is not permitted to cross discontinuities in $K$. For example, if the bend radius jumps from one value to another, the algorithm integrates on each side and then combines. 
 
-- [ ] TODO Add explanation of the codebase with reference to the functions in `path-integral.jl`. 
-
 > **INSIGHT** It turns out there is a closed-form exponential for a $2×2$ Jones generator. More generally, for an exactly traceless matrix $A$ the Cayley-Hamilton theorem gives $A^2 = -\det(A) I$, so
 > $$\exp(A) = \cosh(μ) I + \sinh(μ)/μ * A$$
 > where  $μ^2 = -\det(A)$. This is exact, not an approximation. See Appendix A.1.
@@ -64,12 +62,12 @@ $$h_{\text{new}} \sim h \left(\frac{\text{tol}}{\text{err}}\right)^{1/3}$$
 > $$\text{err} = \|A-e^{i\phi}B\|,$$
 >where $e^{i\phi}$ is chosen to best match $A$ and $B$.
 >
->This prevents the adaptive controller from wasting effort on irrelevant common-phase differences.
+>This prevents the adaptive controller from wasting effort on irrelevant common-phase differences. It's implemented in `phase_insensitive_error(A, B)`.
 
 
 ## Integrate $\partial_\omega J$ directly for DGD
 
-TODO: Explain this better. 
+TODO-02: Explain this better in the chat. 
 
 The paper’s DGD formulation uses $J^{-1}\partial_\omega J$, but both the paper and current code obtain that by finite-differencing wavelength. Instead, propagate the sensitivity matrix $G=\partial_\omega J$ alongside $J$:
 
@@ -77,8 +75,18 @@ $$\frac{dG}{ds}=K_\omega J + K G,\qquad G(0)=0.$$
 
 Then form $J^{-1}G$ directly at the end. That removes the extra finite-difference parameter in wavelength and puts the DGD error under the same adaptive s-tolerance as the propagation itself.  
 
+## Code overview
+
+Overview of `path-demo.ml`
+- Structs `PiecewiseProfile` and `FiberInput` define the fiber as callable functions of position.  
+- `make_generator(f)` turns those physical inputs into the local Jones generator `K(s)`. - `exp_jones_generator(A)` computes $\exp(A)$ for a $2\times2$ generator using the closed-form Cayley-Hamilton formula. 
+- `exp_midpoint_step(K, z, h, J)` is the actual exponential midpoint integrator step. 
+- `propagate_interval!()` is the adaptive step-size controller on one smooth interval. It takes one full midpoint step and two half steps, compares them with phase_insensitive_error, accepts or rejects the step, and updates $h$ with the cubic-root rule $(\text{tol}/\text{err})^{1/3}$.
+- `propagate_piecewise()` is how the code handles discontinuities. 
+
 # Example path-demo.jl
-Here's what's in the path-demo.jl file. 
+`path-demo.jl` is just a thin driver on top of that stack. It builds a piecewise fiber, calls make_generator, then calls propagate_piecewise to get the final Jones matrix and per-interval stats. 
+
 
 ## Simplified physics encoded in the generator K(s)
 
