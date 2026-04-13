@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FiberInput 3D centerline</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      font-family: sans-serif;
+    }
+    #viewer {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+    #plot {
+      width: 100%;
+      height: 100%;
+    }
+    #inset {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      width: min(28vw, 340px);
+      height: min(28vw, 340px);
+      min-width: 220px;
+      min-height: 220px;
+      border: 1px solid rgba(0, 0, 0, 0.15);
+      background: rgba(255, 255, 255, 0.88);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    }
+    #status {
+      position: absolute;
+      top: calc(16px + min(28vw, 340px) + 10px);
+      right: 16px;
+      width: min(28vw, 340px);
+      min-width: 220px;
+      padding: 10px 12px;
+      box-sizing: border-box;
+      border: 1px solid rgba(0, 0, 0, 0.15);
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+      font-size: 13px;
+      line-height: 1.4;
+      white-space: pre-line;
+    }
+    #scrub-help {
+      position: absolute;
+      left: 16px;
+      bottom: 18px;
+      padding: 8px 10px;
+      font-size: 13px;
+      background: rgba(255, 255, 255, 0.86);
+      border: 1px solid rgba(0, 0, 0, 0.12);
+    }
+  </style>
+</head>
+<body>
+  <div id="viewer">
+    <div id="plot"></div>
+    <div id="inset"></div>
+    <div id="status"></div>
+    <div id="scrub-help">Move the mouse left-to-right over the plot to scrub the fiber cursor and polarization state.</div>
+  </div>
+  <script>
+    const xs = [0.0, 0.006233736669261385, 0.024547363123563766, 0.05380222677058687, 0.09217940188238824, 0.13729278158734298, 0.18633743443850076, 0.2362640014654923, 0.28396829054597705, 0.32648428003689967, 0.36116853163456325, 0.38586454656506775, 0.39903684623323876, 0.3998664408447062, 0.3883017502246051, 0.36506181082302464, 0.3315915695111378, 0.2899720437832385, 0.24279093416819034, 0.19298173354386644, 0.14364133675814433, 0.09569512302498737, 0.04774890929183039, -0.00019730444132636665, -0.04814351817448334, -0.09608973190764031, -0.14403594564079727, -0.19198215937395424, -0.23992837310711101, -0.287874586840268, -0.335820800573425, -0.383767014306582, -0.431713228039739, -0.47965944177289577, -0.5276056555060528, -0.5755518692392098, -0.6234980829723668, -0.6714442967055237, -0.7193905104386805, -0.7673367241718375, -0.8152829379049945];
+    const ys = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    const zs = [0.0, 0.049609883361466454, 0.09613526445708218, 0.13668342043234305, 0.1687332633405093, 0.1902920891804426, 0.20001947457989197, 0.19731061782854517, 0.18233394251906646, 0.1560206257838512, 0.12000670221101661, 0.07653134313771735, 0.028297635821651602, -0.021695481432432773, -0.07033967873140504, -0.11461049549155611, -0.15175538674895608, -0.1794648630735769, -0.1960160834362213, -0.20037997311927302, -0.19228520659839618, -0.17810209732523485, -0.16391898805207353, -0.14973587877891226, -0.13555276950575093, -0.1213696602325896, -0.10718655095942828, -0.09300344168626695, -0.0788203324131057, -0.06463722313994437, -0.05045411386678304, -0.03627100459362172, -0.022087895320460394, -0.007904786047299136, 0.006278323225862187, 0.02046143249902351, 0.03464454177218483, 0.04882765104534616, 0.06301076031850741, 0.07719386959166874, 0.09137697886483007];
+    const ss = [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0];
+    const s1 = [1.0, 0.9999827008650423, 0.9999544926403598, 0.9999540032526661, 0.999981902862249, 0.9999999861553589, 0.9999834901372007, 0.9999550042116685, 0.9999535365849224, 0.9999810970033763, 0.9999999446366085, 0.9999842698137369, 0.9999555374059454, 0.9999530931485638, 0.9999802841715895, 0.9999998754892501, 0.9999850390401795, 0.999956091638847, 0.9999526734295658, 0.9999794652576953, 0.9999997787890649, 0.9999927589502642, 0.9999758695866461, 0.9999491108649017, 0.9999124830491289, 0.9998659865008294, 0.9998096216789054, 0.999743389139655, 0.9996672895367664, 0.9995813236213119, 0.9994854922417409, 0.9993797963438699, 0.9992642369708751, 0.9991388152632805, 0.999003532458948, 0.9988583898930641, 0.9987033889981274, 0.9985385313039342, 0.9983638184375634, 0.9981792521233604, 0.9979848341829203];
+    const s2 = [0.0, 0.004770081741447434, 0.0030080839209487772, -0.0028731396415150176, -0.004819928167387065, -0.0001663781710341722, 0.004715007638093811, 0.0031397315498794026, -0.0027350466011112624, -0.004864492287701033, -0.00033257400317897995, 0.0046547662147082705, 0.003267938251673139, -0.002593956140093384, -0.004903725263216796, -0.0004984053573757935, 0.004589423491695809, 0.003392563520712771, -0.0024500228837815324, -0.004937584097325254, -0.000663690494008425, -0.003805274009755869, -0.006946819968985089, -0.010088297365905743, -0.013229675195404219, -0.016370922453349555, -0.019512008136899486, -0.022652901244806428, -0.0257935707777234, -0.028933985738510103, -0.032074115132538696, -0.03521392796799978, -0.03835339325620825, -0.04149248001190915, -0.044631157253583555, -0.04776939400375416, -0.05090715928929126, -0.05404442214171822, -0.05718115159751725, -0.060317316698435, -0.06345288649178801];
+    const s3 = [-0.0, -0.0034415535496552887, -0.00905340154224415, -0.00915076213039835, -0.0036003111610965325, -2.75430383080357e-6, -0.0032845328428450175, -0.008951627664113839, -0.009243602728151723, -0.0037606316898820295, -1.1014196798016636e-5, -0.0031294211244259295, -0.008845552033090608, -0.009331821588674292, -0.003922339435876492, -2.4770626634138074e-5, -0.0029763883860398615, -0.008735290900679264, -0.009415322030238225, -0.00408525717865116, -4.400851725002879e-5, -4.400851725002878e-5, -4.400851725002878e-5, -4.4008517250028836e-5, -4.400851725002861e-5, -4.4008517250028504e-5, -4.400851725002872e-5, -4.4008517250028944e-5, -4.4008517250028734e-5, -4.400851725002894e-5, -4.400851725002917e-5, -4.400851725002959e-5, -4.400851725002916e-5, -4.400851725002872e-5, -4.400851725002872e-5, -4.4008517250029154e-5, -4.400851725002873e-5, -4.400851725002872e-5, -4.400851725002872e-5, -4.4008517250029154e-5, -4.400851725002917e-5];
+    const rb = [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity, Infinity];
+    const theta = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25];
+    const dtwist = [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01];
+    const hoverText = ["s=0.0 m<br>x=0.0 m<br>y=0.0 m<br>z=0.0 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=1.0<br>S2=0.0<br>S3=-0.0", "s=0.05 m<br>x=0.006233736669261385 m<br>y=0.0 m<br>z=0.049609883361466454 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999827008650423<br>S2=0.004770081741447434<br>S3=-0.0034415535496552887", "s=0.1 m<br>x=0.024547363123563766 m<br>y=0.0 m<br>z=0.09613526445708218 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999544926403598<br>S2=0.0030080839209487772<br>S3=-0.00905340154224415", "s=0.15 m<br>x=0.05380222677058687 m<br>y=0.0 m<br>z=0.13668342043234305 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999540032526661<br>S2=-0.0028731396415150176<br>S3=-0.00915076213039835", "s=0.2 m<br>x=0.09217940188238824 m<br>y=0.0 m<br>z=0.1687332633405093 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.999981902862249<br>S2=-0.004819928167387065<br>S3=-0.0036003111610965325", "s=0.25 m<br>x=0.13729278158734298 m<br>y=0.0 m<br>z=0.1902920891804426 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999999861553589<br>S2=-0.0001663781710341722<br>S3=-2.75430383080357e-6", "s=0.3 m<br>x=0.18633743443850076 m<br>y=0.0 m<br>z=0.20001947457989197 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999834901372007<br>S2=0.004715007638093811<br>S3=-0.0032845328428450175", "s=0.35 m<br>x=0.2362640014654923 m<br>y=0.0 m<br>z=0.19731061782854517 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999550042116685<br>S2=0.0031397315498794026<br>S3=-0.008951627664113839", "s=0.4 m<br>x=0.28396829054597705 m<br>y=0.0 m<br>z=0.18233394251906646 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999535365849224<br>S2=-0.0027350466011112624<br>S3=-0.009243602728151723", "s=0.45 m<br>x=0.32648428003689967 m<br>y=0.0 m<br>z=0.1560206257838512 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999810970033763<br>S2=-0.004864492287701033<br>S3=-0.0037606316898820295", "s=0.5 m<br>x=0.36116853163456325 m<br>y=0.0 m<br>z=0.12000670221101661 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999999446366085<br>S2=-0.00033257400317897995<br>S3=-1.1014196798016636e-5", "s=0.55 m<br>x=0.38586454656506775 m<br>y=0.0 m<br>z=0.07653134313771735 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999842698137369<br>S2=0.0046547662147082705<br>S3=-0.0031294211244259295", "s=0.6 m<br>x=0.39903684623323876 m<br>y=0.0 m<br>z=0.028297635821651602 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999555374059454<br>S2=0.003267938251673139<br>S3=-0.008845552033090608", "s=0.65 m<br>x=0.3998664408447062 m<br>y=0.0 m<br>z=-0.021695481432432773 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999530931485638<br>S2=-0.002593956140093384<br>S3=-0.009331821588674292", "s=0.7 m<br>x=0.3883017502246051 m<br>y=0.0 m<br>z=-0.07033967873140504 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999802841715895<br>S2=-0.004903725263216796<br>S3=-0.003922339435876492", "s=0.75 m<br>x=0.36506181082302464 m<br>y=0.0 m<br>z=-0.11461049549155611 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999998754892501<br>S2=-0.0004984053573757935<br>S3=-2.4770626634138074e-5", "s=0.8 m<br>x=0.3315915695111378 m<br>y=0.0 m<br>z=-0.15175538674895608 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999850390401795<br>S2=0.004589423491695809<br>S3=-0.0029763883860398615", "s=0.85 m<br>x=0.2899720437832385 m<br>y=0.0 m<br>z=-0.1794648630735769 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.999956091638847<br>S2=0.003392563520712771<br>S3=-0.008735290900679264", "s=0.9 m<br>x=0.24279093416819034 m<br>y=0.0 m<br>z=-0.1960160834362213 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999526734295658<br>S2=-0.0024500228837815324<br>S3=-0.009415322030238225", "s=0.95 m<br>x=0.19298173354386644 m<br>y=0.0 m<br>z=-0.20037997311927302 m<br>Rb=0.2 m<br>theta_b=0.0 turns<br>dtwist=0.02 turns/m<br>S1=0.9999794652576953<br>S2=-0.004937584097325254<br>S3=-0.00408525717865116", "s=1.0 m<br>x=0.14364133675814433 m<br>y=0.0 m<br>z=-0.19228520659839618 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9999997787890649<br>S2=-0.000663690494008425<br>S3=-4.400851725002879e-5", "s=1.05 m<br>x=0.09569512302498737 m<br>y=0.0 m<br>z=-0.17810209732523485 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9999927589502642<br>S2=-0.003805274009755869<br>S3=-4.400851725002878e-5", "s=1.1 m<br>x=0.04774890929183039 m<br>y=0.0 m<br>z=-0.16391898805207353 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9999758695866461<br>S2=-0.006946819968985089<br>S3=-4.400851725002878e-5", "s=1.15 m<br>x=-0.00019730444132636665 m<br>y=0.0 m<br>z=-0.14973587877891226 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9999491108649017<br>S2=-0.010088297365905743<br>S3=-4.4008517250028836e-5", "s=1.2 m<br>x=-0.04814351817448334 m<br>y=0.0 m<br>z=-0.13555276950575093 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9999124830491289<br>S2=-0.013229675195404219<br>S3=-4.400851725002861e-5", "s=1.25 m<br>x=-0.09608973190764031 m<br>y=0.0 m<br>z=-0.1213696602325896 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9998659865008294<br>S2=-0.016370922453349555<br>S3=-4.4008517250028504e-5", "s=1.3 m<br>x=-0.14403594564079727 m<br>y=0.0 m<br>z=-0.10718655095942828 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9998096216789054<br>S2=-0.019512008136899486<br>S3=-4.400851725002872e-5", "s=1.35 m<br>x=-0.19198215937395424 m<br>y=0.0 m<br>z=-0.09300344168626695 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.999743389139655<br>S2=-0.022652901244806428<br>S3=-4.4008517250028944e-5", "s=1.4 m<br>x=-0.23992837310711101 m<br>y=0.0 m<br>z=-0.0788203324131057 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9996672895367664<br>S2=-0.0257935707777234<br>S3=-4.4008517250028734e-5", "s=1.45 m<br>x=-0.287874586840268 m<br>y=0.0 m<br>z=-0.06463722313994437 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9995813236213119<br>S2=-0.028933985738510103<br>S3=-4.400851725002894e-5", "s=1.5 m<br>x=-0.335820800573425 m<br>y=0.0 m<br>z=-0.05045411386678304 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9994854922417409<br>S2=-0.032074115132538696<br>S3=-4.400851725002917e-5", "s=1.55 m<br>x=-0.383767014306582 m<br>y=0.0 m<br>z=-0.03627100459362172 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9993797963438699<br>S2=-0.03521392796799978<br>S3=-4.400851725002959e-5", "s=1.6 m<br>x=-0.431713228039739 m<br>y=0.0 m<br>z=-0.022087895320460394 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9992642369708751<br>S2=-0.03835339325620825<br>S3=-4.400851725002916e-5", "s=1.65 m<br>x=-0.47965944177289577 m<br>y=0.0 m<br>z=-0.007904786047299136 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9991388152632805<br>S2=-0.04149248001190915<br>S3=-4.400851725002872e-5", "s=1.7 m<br>x=-0.5276056555060528 m<br>y=0.0 m<br>z=0.006278323225862187 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.999003532458948<br>S2=-0.044631157253583555<br>S3=-4.400851725002872e-5", "s=1.75 m<br>x=-0.5755518692392098 m<br>y=0.0 m<br>z=0.02046143249902351 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9988583898930641<br>S2=-0.04776939400375416<br>S3=-4.4008517250029154e-5", "s=1.8 m<br>x=-0.6234980829723668 m<br>y=0.0 m<br>z=0.03464454177218483 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9987033889981274<br>S2=-0.05090715928929126<br>S3=-4.400851725002873e-5", "s=1.85 m<br>x=-0.6714442967055237 m<br>y=0.0 m<br>z=0.04882765104534616 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9985385313039342<br>S2=-0.05404442214171822<br>S3=-4.400851725002872e-5", "s=1.9 m<br>x=-0.7193905104386805 m<br>y=0.0 m<br>z=0.06301076031850741 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9983638184375634<br>S2=-0.05718115159751725<br>S3=-4.400851725002872e-5", "s=1.95 m<br>x=-0.7673367241718375 m<br>y=0.0 m<br>z=0.07719386959166874 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9981792521233604<br>S2=-0.060317316698435<br>S3=-4.4008517250029154e-5", "s=2.0 m<br>x=-0.8152829379049945 m<br>y=0.0 m<br>z=0.09137697886483007 m<br>Rb=Inf m<br>theta_b=0.25 turns<br>dtwist=-0.01 turns/m<br>S1=0.9979848341829203<br>S2=-0.06345288649178801<br>S3=-4.400851725002917e-5"];
+
+    const fiberTrace = {
+      type: "scatter3d",
+      mode: "lines+markers",
+      x: xs,
+      y: ys,
+      z: zs,
+      text: hoverText,
+      hovertemplate: "%{text}<extra></extra>",
+      line: {
+        width: 4,
+        color: "rgba(30, 30, 30, 0.22)"
+      },
+      marker: {
+        size: 3.5,
+        color: ss,
+        colorscale: "Turbo",
+        cmin: ss[0],
+        cmax: ss[ss.length - 1],
+        colorbar: {
+          title: "s (m)",
+          len: 0.55,
+          y: 0.5
+        }
+      }
+    };
+
+    const startTrace = {
+      type: "scatter3d",
+      mode: "markers",
+      x: [0.0],
+      y: [0.0],
+      z: [0.0],
+      hovertemplate: "Start<br>x=%{x} m<br>y=%{y} m<br>z=%{z} m<extra></extra>",
+      marker: {
+        size: 7,
+        color: "#2ca02c",
+        symbol: "circle"
+      },
+      name: "start"
+    };
+
+    const endTrace = {
+      type: "scatter3d",
+      mode: "markers",
+      x: [-0.8152829379049945],
+      y: [0.0],
+      z: [0.09137697886483007],
+      hovertemplate: "End<br>x=%{x} m<br>y=%{y} m<br>z=%{z} m<extra></extra>",
+      marker: {
+        size: 7,
+        color: "#d62728",
+        symbol: "circle"
+      },
+      name: "end"
+    };
+
+    const cursorTrace = {
+      type: "scatter3d",
+      mode: "markers",
+      x: [xs[0]],
+      y: [ys[0]],
+      z: [zs[0]],
+      hoverinfo: "skip",
+      marker: {
+        size: 6,
+        color: "#111111",
+        symbol: "circle"
+      },
+      name: "cursor"
+    };
+
+    const layout = {
+      title: "FiberInput 3D centerline",
+      showlegend: true,
+      legend: { x: 0.02, y: 0.98 },
+      margin: { l: 0, r: 0, b: 0, t: 48 },
+      scene: {
+        xaxis: { title: "x (m)" },
+        yaxis: { title: "y (m)" },
+        zaxis: { title: "z (m)" },
+        camera: {
+          eye: { x: 1.6, y: 1.6, z: 0.9 }
+        }
+      }
+    };
+
+    Plotly.newPlot("plot", [fiberTrace, startTrace, endTrace, cursorTrace], layout, {
+      responsive: true,
+      scrollZoom: true,
+      displaylogo: false
+    });
+
+    const sphereU = [];
+    const sphereV = [];
+    const sphereW = [];
+    for (let i = 0; i <= 30; i += 1) {
+      const theta = Math.PI * i / 30;
+      const rowU = [];
+      const rowV = [];
+      const rowW = [];
+      for (let j = 0; j <= 60; j += 1) {
+        const phi = 2 * Math.PI * j / 60;
+        rowU.push(Math.sin(theta) * Math.cos(phi));
+        rowV.push(Math.sin(theta) * Math.sin(phi));
+        rowW.push(Math.cos(theta));
+      }
+      sphereU.push(rowU);
+      sphereV.push(rowV);
+      sphereW.push(rowW);
+    }
+
+    function circleTrace(axis) {
+      const t = Array.from({ length: 181 }, (_, i) => 2 * Math.PI * i / 180);
+      if (axis === "xy") {
+        return { x: t.map(a => Math.cos(a)), y: t.map(a => Math.sin(a)), z: t.map(() => 0) };
+      }
+      if (axis === "xz") {
+        return { x: t.map(a => Math.cos(a)), y: t.map(() => 0), z: t.map(a => Math.sin(a)) };
+      }
+      return { x: t.map(() => 0), y: t.map(a => Math.cos(a)), z: t.map(a => Math.sin(a)) };
+    }
+
+    const eqXY = circleTrace("xy");
+    const eqXZ = circleTrace("xz");
+    const eqYZ = circleTrace("yz");
+
+    const sphereSurface = {
+      type: "surface",
+      x: sphereU,
+      y: sphereV,
+      z: sphereW,
+      opacity: 0.18,
+      showscale: false,
+      colorscale: [[0, "#cfd8dc"], [1, "#cfd8dc"]],
+      hoverinfo: "skip"
+    };
+
+    const sphereLines = [eqXY, eqXZ, eqYZ].map(curve => ({
+      type: "scatter3d",
+      mode: "lines",
+      x: curve.x,
+      y: curve.y,
+      z: curve.z,
+      line: { color: "#90a4ae", width: 4 },
+      hoverinfo: "skip",
+      showlegend: false
+    }));
+
+    const stateTrail = {
+      type: "scatter3d",
+      mode: "markers",
+      x: [s1[0]],
+      y: [s2[0]],
+      z: [s3[0]],
+      marker: {
+        size: 3.5,
+        color: [ss[0]],
+        colorscale: "Turbo",
+        cmin: ss[0],
+        cmax: ss[ss.length - 1],
+        showscale: false
+      },
+      hoverinfo: "skip",
+      showlegend: false
+    };
+
+    const stateVector = {
+      type: "scatter3d",
+      mode: "lines",
+      x: [0, s1[0]],
+      y: [0, s2[0]],
+      z: [0, s3[0]],
+      line: { color: "#111111", width: 6 },
+      hoverinfo: "skip",
+      showlegend: false
+    };
+
+    const statePoint = {
+      type: "scatter3d",
+      mode: "markers",
+      x: [s1[0]],
+      y: [s2[0]],
+      z: [s3[0]],
+      hovertemplate: "Poincare state<br>S1=%{x:.4f}<br>S2=%{y:.4f}<br>S3=%{z:.4f}<extra></extra>",
+      marker: { size: 6, color: "#ff7f0e" },
+      name: "state"
+    };
+
+    const insetLayout = {
+      margin: { l: 0, r: 0, b: 0, t: 26 },
+      title: { text: "Poincare Sphere", x: 0.5, xanchor: "center", font: { size: 14 } },
+      showlegend: false,
+      scene: {
+        xaxis: { title: "S1", range: [-1.05, 1.05] },
+        yaxis: { title: "S2", range: [-1.05, 1.05] },
+        zaxis: { title: "S3", range: [-1.05, 1.05] },
+        aspectmode: "cube",
+        camera: { eye: { x: 1.35, y: 1.35, z: 1.0 } }
+      }
+    };
+
+    Plotly.newPlot(
+      "inset",
+      [sphereSurface, ...sphereLines, stateTrail, stateVector, statePoint],
+      insetLayout,
+      { responsive: true, displaylogo: false, scrollZoom: true }
+    );
+
+    const statusBox = document.getElementById("status");
+    let activeIndex = 0;
+
+    function formatStatus(index) {
+      return [
+        "s = " + ss[index].toFixed(4) + " m",
+        "x = " + xs[index].toFixed(4) + " m",
+        "y = " + ys[index].toFixed(4) + " m",
+        "z = " + zs[index].toFixed(4) + " m",
+        "Rb = " + (Number.isFinite(rb[index]) ? rb[index].toFixed(4) : "Inf") + " m",
+        "theta_b = " + theta[index].toFixed(4) + " turns",
+        "dtwist = " + dtwist[index].toFixed(4) + " turns/m",
+        "S1 = " + s1[index].toFixed(4),
+        "S2 = " + s2[index].toFixed(4),
+        "S3 = " + s3[index].toFixed(4)
+      ].join("\n");
+    }
+
+    function updateCursor(index) {
+      activeIndex = Math.max(0, Math.min(xs.length - 1, index));
+      Plotly.restyle("plot", {
+        x: [[xs[activeIndex]]],
+        y: [[ys[activeIndex]]],
+        z: [[zs[activeIndex]]]
+      }, [3]);
+      Plotly.restyle("inset", {
+        x: [s1.slice(0, activeIndex + 1)],
+        y: [s2.slice(0, activeIndex + 1)],
+        z: [s3.slice(0, activeIndex + 1)],
+        "marker.color": [ss.slice(0, activeIndex + 1)]
+      }, [4]);
+      Plotly.restyle("inset", {
+        x: [[0, s1[activeIndex]]],
+        y: [[0, s2[activeIndex]]],
+        z: [[0, s3[activeIndex]]]
+      }, [5]);
+      Plotly.restyle("inset", {
+        x: [[s1[activeIndex]]],
+        y: [[s2[activeIndex]]],
+        z: [[s3[activeIndex]]]
+      }, [6]);
+      statusBox.textContent = formatStatus(activeIndex);
+    }
+
+    const viewer = document.getElementById("viewer");
+    viewer.addEventListener("mousemove", event => {
+      if (event.buttons !== 0) {
+        return;
+      }
+      const rect = viewer.getBoundingClientRect();
+      const t = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+      const index = Math.round(t * (xs.length - 1));
+      if (index !== activeIndex) {
+        updateCursor(index);
+      }
+    });
+
+    viewer.addEventListener("touchmove", event => {
+      if (event.touches.length === 0) {
+        return;
+      }
+      const rect = viewer.getBoundingClientRect();
+      const t = Math.max(0, Math.min(1, (event.touches[0].clientX - rect.left) / rect.width));
+      const index = Math.round(t * (xs.length - 1));
+      if (index !== activeIndex) {
+        updateCursor(index);
+      }
+    }, { passive: true });
+
+    updateCursor(0);
+  </script>
+</body>
+</html>
