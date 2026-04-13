@@ -6,14 +6,14 @@ $$J_{\text{total}}=\prod_{i}J_{i}$$
 with the matrix order matching the order light encounters along the length of the fiber. There is no consideration of the non-commutative behavior of eg linear birefringence and fiber twist. Therefore it's hard to put a bound on the PTF error. 
 
 # a new approach
-This approach is refactored around a generator $K(z)$, not around pre-sliced segments. The generator is defined by
+This approach is refactored around a generator $K(s)$, not around pre-sliced segments. The generator is defined by
 
-$$\frac{dJ}{dz}=K(z)\,J,\qquad J(0)=I.$$
+$$\frac{dJ}{ds}=K(s)\,J,\qquad J(0)=I.$$
 
 The design is
 - The physical inputs describing the fiber must be available as functions so that the fiber is described parametrically (not just on a coarse sampled grid). 
-- Each birefringence mechanism returns a local generator contribution $K_m(z,\lambda)$.
-- The solver assembles $K(z)=\sum_m K_m(z)$.
+- Each birefringence mechanism returns a local generator contribution $K_m(s,\lambda)$.
+- The solver assembles $K(s)=\sum_m K_m(s)$.
 - The propagator advances $J$ adaptively over smooth intervals. 
 - The interval size is selected dynamically to keep error below a specified threshold.
     - smooth fiber → large steps,
@@ -23,18 +23,18 @@ The design is
 
 
 ## simple analytic case
-If the length of a fiber segment is short, its Jones matrix is close to identity $J\approx I+K(z)\,\Delta z,$ where $K(z)$ is the local generator of polarization evolution.
+If the length of a fiber segment is short, its Jones matrix is close to identity $J\approx I+K(s)\,\Delta s,$ where $K(s)$ is the local generator of polarization evolution.
 
-$$ J(L)\approx\prod_{i=1}^{N}\bigl(I+K(z_{i})\Delta z\bigr)$$
+$$ J(L)\approx\prod_{i=1}^{N}\bigl(I+K(s_{i})\Delta s\bigr)$$
 
-If the matrices commute you can integrate analytically. $$\prod_{i}\bigl(I+K(z_{i})\Delta z\bigr)\to\exp\!\left(\int_{0}^{L}K(z)\,dz\right)$$
+If the matrices commute you can integrate analytically. $$\prod_{i}\bigl(I+K(s_{i})\Delta s\bigr)\to\exp\!\left(\int_{0}^{L}K(s)\,ds\right)$$
  
 
 ## numerical solving
 
 The most natural framework is a Magnus-type Lie-group integrator. These methods are built for non-autonomous linear matrix ODEs and propagate by products of exponentials, such as Jones matrices. The simplest useful version is the exponential midpoint rule 
 
-$$J_{n+1}=e^{h\,K(z_{n}+h/2)}J_{n}$$
+$$J_{n+1}=e^{h\,K(s_{n}+h/2)}J_{n}$$
 
 where $h$ is a small step. 
 
@@ -78,57 +78,57 @@ TODO: Explain this better.
 
 The paper’s DGD formulation uses $J^{-1}\partial_\omega J$, but both the paper and current code obtain that by finite-differencing wavelength. Instead, propagate the sensitivity matrix $G=\partial_\omega J$ alongside $J$:
 
-$$\frac{dG}{dz}=K_\omega J + K G,\qquad G(0)=0.$$
+$$\frac{dG}{ds}=K_\omega J + K G,\qquad G(0)=0.$$
 
-Then form $J^{-1}G$ directly at the end. That removes the extra finite-difference parameter in wavelength and puts the DGD error under the same adaptive z-tolerance as the propagation itself.  
+Then form $J^{-1}G$ directly at the end. That removes the extra finite-difference parameter in wavelength and puts the DGD error under the same adaptive s-tolerance as the propagation itself.  
 
 # Example path-demo.jl
 Here's what's in the path-demo.jl file. 
 
-## Simplified physics encoded in the generator K(z)
+## Simplified physics encoded in the generator K(s)
 
 *Bending → linear birefringence*
 
-For a bend of radius $R(z)$, the fiber experiences stress-induced birefringence with magnitude proportional to $1/R(z)^2$ in the simplest bending model. In the paper, the bend-induced birefringence is given by Eq. (9).  ￼The bend axis has an orientation in the transverse plane. If the bend angle is $\theta_b(z)$ in turns, the corresponding physical axis angle is
+For a bend of radius $R(s)$, the fiber experiences stress-induced birefringence with magnitude proportional to $1/R(s)^2$ in the simplest bending model. In the paper, the bend-induced birefringence is given by Eq. (9).  ￼The bend axis has an orientation in the transverse plane. If the bend angle is $\theta_b(s)$ in turns, the corresponding physical axis angle is
 
-$$\phi_b(z)=2\pi\,\theta_b(z).$$
+$$\phi_b(s)=2\pi\,\theta_b(s).$$
 
 Linear birefringence aligned with this axis gives a generator proportional to a rotated Pauli-matrix combination. The double-angle dependence appears because Jones matrices represent polarization axes modulo $180^\circ$, not $360^\circ$.
 
 *Twisting → circular birefringence*
 
-Twisting creates circular birefringence proportional to the local twist rate $\tau(z)$. In the paper, the left-right circular propagation-constant difference is linear in $\tau$ [Eq. (11)], and the corresponding Jones matrix has the circular-birefringence form shown in Eq. (16).  ￼
+Twisting creates circular birefringence proportional to the local twist rate $\tau(s)$. In the paper, the left-right circular propagation-constant difference is linear in $\tau$ [Eq. (11)], and the corresponding Jones matrix has the circular-birefringence form shown in Eq. (16).  ￼
 
-If $\text{twist}(z)$ is the accumulated twist angle in turns, then the solver really needs
-$\tau(z)=2\pi \frac{d}{dz}\text{twist}(z)$,
+If $\text{twist}(s)$ is the accumulated twist angle in turns, then the solver really needs
+$\tau(s)=2\pi \frac{d}{ds}\text{twist}(s)$,
 in rad/m.
 
 **Combined generator**
 
 The total local generator is the sum
 
-$$K(z)=K_{\text{bend}}(z)+K_{\text{twist}}(z).$$
+$$K(s)=K_{\text{bend}}(s)+K_{\text{twist}}(s).$$
 
 Because the bending and twisting terms generally point along different Pauli directions, they do not commute:
-$[K_{\text{bend}}(z),K_{\text{twist}}(z)]\neq 0$. That noncommutation is why one cannot usually collapse the whole problem into a single scalar integral.
+$[K_{\text{bend}}(s),K_{\text{twist}}(s)]\neq 0$. That noncommutation is why one cannot usually collapse the whole problem into a single scalar integral.
 
 **Fiber representation**
 
-The adaptive solver evaluates the fiber at arbitrary points such as $z+h/2$, $z+h/4$, and so on. Therefore the physical inputs must be available as functions, not just a coarse sampled grid.
+The adaptive solver evaluates the fiber at arbitrary points such as $s+h/2$, $s+h/4$, and so on. Therefore the physical inputs must be available as functions, not just a coarse sampled grid.
 
 The clean representation is:
-	•	$R_b(z)$: bend radius
-	•	$\theta_b(z)$: bend-axis orientation
-	•	$d(\text{twist})/dz$: twist gradient
+	•	$R_b(s)$: bend radius
+	•	$\theta_b(s)$: bend-axis orientation
+	•	$d(\text{twist})/ds$: twist gradient
 
 These are then converted internally into more solver-friendly quantities:
 
-$$\kappa_x(z)=\frac{\cos(2\pi\theta_b(z))}{R_b(z)},\qquad
-\kappa_y(z)=\frac{\sin(2\pi\theta_b(z))}{R_b(z)},$$
+$$\kappa_x(s)=\frac{\cos(2\pi\theta_b(s))}{R_b(s)},\qquad
+\kappa_y(s)=\frac{\sin(2\pi\theta_b(s))}{R_b(s)},$$
 
 and
 
-$$\tau(z)=2\pi\,\frac{d}{dz}\text{twist}(z).$$
+$$\tau(s)=2\pi\,\frac{d}{ds}\text{twist}(s).$$
 
 This formulation is numerically better because it avoids angle singularities when the bend goes to zero and makes straight fiber simply $\kappa_x=\kappa_y=0$.
 
