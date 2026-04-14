@@ -11,6 +11,12 @@ Code Overview:
     - phase_insensitive_error
     - propagate_interval!
     - propagate_piecewise
+- the DGD sensitivity stack consists of
+    - exp_sensitivity_midpoint_step
+    - sensitivity_phase_insensitive_error
+    - propagate_interval_sensitivity!
+    - propagate_piecewise_sensitivity
+    - output_dgd
 
 path-plot.jl sits on top of that stack; it provides visual diagnostics 
 
@@ -152,6 +158,27 @@ function exp_midpoint_step(K, s::Float64, h::Float64, J::Matrix{ComplexF64})
     return exp_jones_generator(h * M) * J
 end
 
+function exp_sensitivity_midpoint_step(
+    K,
+    Kω,
+    s::Float64,
+    h::Float64,
+    J::Matrix{ComplexF64},
+    G::Matrix{ComplexF64}
+)
+    M = K(s + 0.5h)
+    Mω = Kω(s + 0.5h)
+
+    A = zeros(ComplexF64, 4, 4)
+    A[1:2, 1:2] = M
+    A[1:2, 3:4] = Mω
+    A[3:4, 3:4] = M
+
+    Y0 = vcat(G, J)
+    Y1 = exp(h * A) * Y0
+    return Y1[3:4, :], Y1[1:2, :]
+end
+
 # ----------------------------
 # Matrix error metric
 # Global phase insensitive
@@ -165,6 +192,26 @@ function phase_insensitive_error(A::Matrix{ComplexF64}, B::Matrix{ComplexF64})
     end
     ϕ = α / abs(α)
     return opnorm(A - ϕ * B)
+end
+
+function align_global_phase(A::Matrix{ComplexF64}, B::Matrix{ComplexF64})
+    α = tr(A' * B)
+    if abs(α) == 0
+        return 1.0 + 0.0im
+    end
+    return α / abs(α)
+end
+
+function sensitivity_phase_insensitive_error(
+    J_ref::Matrix{ComplexF64},
+    G_ref::Matrix{ComplexF64},
+    J_cmp::Matrix{ComplexF64},
+    G_cmp::Matrix{ComplexF64}
+)
+    ϕ = align_global_phase(J_ref, J_cmp)
+    errJ = opnorm(J_ref - ϕ * J_cmp)
+    errG = opnorm(G_ref - ϕ * G_cmp)
+    return max(errJ, errG)
 end
 
 # ----------------------------
@@ -238,6 +285,68 @@ function propagate_interval!(
     return J, PropagatorStats(accepted, rejected)
 end
 
+function propagate_interval_sensitivity!(
+    K,
+    Kω,
+    s0::Float64,
+    s1::Float64,
+    J0::Matrix{ComplexF64};
+    G0::Matrix{ComplexF64} = zeros(ComplexF64, 2, 2),
+    rtol::Float64 = 1e-9,
+    atol::Float64 = 1e-12,
+    h_init::Float64 = (s1 - s0) / 100,
+    h_min::Float64 = 1e-12,
+    h_max::Float64 = s1 - s0,
+    safety::Float64 = 0.9,
+    growth_max::Float64 = 2.0,
+    shrink_min::Float64 = 0.2
+)
+    s = s0
+    J = copy(J0)
+    G = copy(G0)
+    h = min(h_init, s1 - s0)
+
+    accepted = 0
+    rejected = 0
+
+    while s < s1
+        h = min(h, s1 - s)
+        @assert h >= h_min "Step size underflow near s=$s"
+
+        J_full, G_full = exp_sensitivity_midpoint_step(K, Kω, s, h, J, G)
+
+        J_half, G_half = exp_sensitivity_midpoint_step(K, Kω, s, 0.5h, J, G)
+        J_twohalf, G_twohalf = exp_sensitivity_midpoint_step(K, Kω, s + 0.5h, 0.5h, J_half, G_half)
+
+        err_abs = sensitivity_phase_insensitive_error(J_full, G_full, J_twohalf, G_twohalf)
+        scale = max(opnorm(J_full), opnorm(J_twohalf), opnorm(G_full), opnorm(G_twohalf))
+        tol = atol + rtol * scale
+
+        if err_abs <= tol
+            s += h
+            J = J_twohalf
+            G = G_twohalf
+            accepted += 1
+
+            if err_abs == 0.0
+                fac = growth_max
+            else
+                fac = safety * (tol / err_abs)^(1/3)
+                fac = clamp(fac, 1.0, growth_max)
+            end
+            h = min(h * fac, h_max)
+        else
+            rejected += 1
+            fac = safety * (tol / err_abs)^(1/3)
+            fac = clamp(fac, shrink_min, 0.5)
+            h *= fac
+            @assert h >= h_min "Step size fell below h_min near s=$s"
+        end
+    end
+
+    return J, G, PropagatorStats(accepted, rejected)
+end
+
 # ----------------------------
 # Domain decomposition with optional jump matrices
 # ----------------------------
@@ -283,4 +392,67 @@ function propagate_piecewise(
     end
 
     return J, stats
+end
+
+"""
+    propagate_piecewise_sensitivity(K, Kω, breaks; jumps=Dict(), jump_omegas=Dict(), kwargs...)
+
+Propagate the coupled system
+`dJ/ds = K(s) J`,
+`dG/ds = Kω(s) J + K(s) G`
+from `breaks[1]` to `breaks[end]`.
+
+Returns
+-------
+- `J_final`
+- `G_final = ∂ωJ_final`
+- `stats_per_interval`
+"""
+function propagate_piecewise_sensitivity(
+    K,
+    Kω,
+    breaks::Vector{Float64};
+    jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
+    jump_omegas::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
+    J0::Matrix{ComplexF64} = Matrix{ComplexF64}(I, 2, 2),
+    G0::Matrix{ComplexF64} = zeros(ComplexF64, 2, 2),
+    kwargs...
+)
+    @assert issorted(breaks)
+    J = copy(J0)
+    G = copy(G0)
+    stats = PropagatorStats[]
+
+    for i in 1:length(breaks)-1
+        sL = breaks[i]
+        sR = breaks[i+1]
+
+        J, G, st = propagate_interval_sensitivity!(K, Kω, sL, sR, J; G0 = G, kwargs...)
+        push!(stats, st)
+
+        if haskey(jumps, sR)
+            J_pre = J
+            G_pre = G
+            J_jump = jumps[sR]
+            G_jump = haskey(jump_omegas, sR) ? jump_omegas[sR] : zeros(ComplexF64, 2, 2)
+            J = J_jump * J_pre
+            G = G_jump * J_pre + J_jump * G_pre
+        end
+    end
+
+    return J, G, stats
+end
+
+function pmd_generator(J::Matrix{ComplexF64}, G::Matrix{ComplexF64}; hermitianize::Bool = true)
+    H = -1im * (J \ G)
+    if hermitianize
+        H = 0.5 * (H + H')
+    end
+    return H
+end
+
+function output_dgd(J::Matrix{ComplexF64}, G::Matrix{ComplexF64}; hermitianize::Bool = true)
+    H = pmd_generator(J, G; hermitianize = hermitianize)
+    λ = eigvals(H)
+    return maximum(real.(λ)) - minimum(real.(λ))
 end

@@ -8,7 +8,7 @@ with the matrix order matching the order light encounters along the length of th
 # a new approach
 This approach is refactored around a generator $K(s)$, not around pre-sliced segments. The generator is defined by
 
-$$\frac{dJ}{ds}=K(s)\,J,\qquad J(0)=I.$$
+$$\frac{dJ}{ds}=K(s)\,J,\qquad J(0)=I. \tag{1}$$
 
 The design is
 - The physical inputs describing the fiber must be available as functions so that the fiber is described parametrically (not just on a coarse sampled grid). 
@@ -67,13 +67,37 @@ $$h_{\text{new}} \sim h \left(\frac{\text{tol}}{\text{err}}\right)^{1/3}$$
 
 ## Integrate $\partial_\omega J$ directly for DGD
 
-TODO-02: Explain this better in the chat. 
+For a polarization maintaining fiber the differential group delay (DGD) is a measure of the difference in transit time for light launched into the fast axis and light launched in the slow axis. It can be shown that DGD can be written as 
 
-The paper’s DGD formulation uses $J^{-1}\partial_\omega J$, but both the paper and current code obtain that by finite-differencing wavelength. Instead, propagate the sensitivity matrix $G=\partial_\omega J$ alongside $J$:
+$$ G(s, \omega) \equiv  \frac{\partial J(s, \omega)}{\partial \omega}$$
 
-$$\frac{dG}{ds}=K_\omega J + K G,\qquad G(0)=0.$$
+The BIFROST paper’s DGD formulation is Eq (19) (in the code it is `calcDGD()`) 
 
-Then form $J^{-1}G$ directly at the end. That removes the extra finite-difference parameter in wavelength and puts the DGD error under the same adaptive s-tolerance as the propagation itself.  
+$$\partial_\omega J \approx \frac{J(\omega + \Delta\omega) - J(\omega)}{\Delta\omega}.$$
+
+This relies on an additional numerical parameter $\Delta \omega$ and the finite difference is subject to round-off error. 
+
+An alternate approach remove this avoidable source of numerical error and puts DGD under the same adaptive tolerance as the main propagator. Recall the definition of the propagator where we make the frequency dependence explicit. 
+
+$$\frac{dJ}{ds}=K(s,\omega)\,J,\qquad J(0,\omega)=I. $$
+
+Differentiate with respect to $\omega$. We get a coupled system
+
+$$\frac{dJ}{ds} = KJ,\quad J(0) = I,\tag{2}$$
+
+$$\frac{dG}{ds} = K_\omega J + KG,\quad G(0) = 0. \tag{2}$$
+
+Then form $J^{-1}G$ directly at the end. 
+
+### Implementation in code
+The original code was built around a very specialized solver for one 2x2 matrix ODE.
+Once you add the pair of equations (2) this is now a coupled block system. It requires extending the machinery for $J$ to now include both $J$ and $G$. This is implmented as
+- `exp_sensitivity_midpoint_step()` propagates the coupled ($J$, $G$) system over one midpoint step
+- `propagate_interval_sensitivity!()` adaptive step-doubling over smooth intervals
+- `propagate_piecewise_sensitivity()` adaptive step-doubling over breakpoints
+- `pmd_generator(J, G)` forms -im * J^{-1}G
+- `output_dgd(J, G)` extracts the DGD 
+
 
 ## Code overview
 
