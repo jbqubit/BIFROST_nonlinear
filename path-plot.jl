@@ -306,7 +306,7 @@ function render_poincare_sphere(
 end
 
 # ----------------------------
-# visualize the trajectory of a FiberInput by sampling the centerline
+# visualize the trajectory of a Fiber by sampling the centerline
 # geometry and polarization evolution
 # ----------------------------
 module PlotRuntime
@@ -401,9 +401,9 @@ module PlotRuntime
     end
 
     """
-        sample_fiber_centerline(f::Main.FiberInput, s1, s2; n = 1001)
+        sample_fiber_centerline(f::Main.Fiber, s1, s2; n = 1001)
 
-    Reconstruct a fiber centerline from a [`FiberInput`](path-integral.jl)
+    Reconstruct a fiber centerline from a [`Fiber`](path-integral.jl)
     on the interval `[s1, s2]`, treating the input coordinate as arc length.
 
     The bend field defines the local curvature vector
@@ -418,7 +418,7 @@ module PlotRuntime
     `nx`, `ny`, `nz`, `bx`, `by`, `bz`, the transported frame `e1x`, `e1y`, `e1z`, `e2x`,
     `e2y`, `e2z`, `Rb`, `theta_b`, `dtwist`, `kx`, `ky`, and `k2`.
     """
-    function sample_fiber_centerline(f::Main.FiberInput, s1::Real, s2::Real; n::Int = 1001)
+    function sample_fiber_centerline(f::Main.Fiber, s1::Real, s2::Real; n::Int = 1001)
         @assert s2 > s1 "Require s2 > s1"
         @assert n >= 2 "Require at least two sample points"
 
@@ -459,22 +459,18 @@ module PlotRuntime
 
         for i in eachindex(ss)
             si = ss[i]
-            R = Float64(f.Rb(si))
-            θ = Float64(f.theta_b(si))
-            τ = Float64(f.dtwist(si))
+            bend = Main.bend_geometry(f, si)
+            R = Float64(bend.Rb)
+            θ = Float64(bend.theta_b)
+            τ = Float64(Main.twist_rate(f, si))
 
             Rb[i] = R
             theta_b[i] = θ
             dtwist[i] = τ
 
-            if isfinite(R) && R != 0.0
-                invR = 1.0 / R
-                c = cos(θ)
-                sθ = sin(θ)
-                kx[i] = invR * c
-                ky[i] = invR * sθ
-                k2[i] = invR^2
-            end
+            kx[i] = bend.kx
+            ky[i] = bend.ky
+            k2[i] = bend.k2
 
             if i < length(ss)
                 ds = ss[i + 1] - ss[i]
@@ -525,7 +521,7 @@ module PlotRuntime
     sample_fiber_input = sample_fiber_centerline
 
     function sample_polarization_trajectory(
-        f::Main.FiberInput,
+        f::Main.Fiber,
         s1::Real,
         s2::Real;
         n::Int = 1001,
@@ -566,11 +562,10 @@ module PlotRuntime
     end
 
     function sample_dgd_trajectory(
-        f::Main.FiberInput,
+        f::Main.Fiber,
         s1::Real,
         s2::Real;
         n::Int = 1001,
-        Kω = s -> zeros(ComplexF64, 2, 2),
         jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
         jump_omegas::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}()
     )
@@ -578,6 +573,7 @@ module PlotRuntime
         dgds = zeros(Float64, n)
 
         K = Main.make_generator(f)
+        Kω = Main.make_generator_omega(f)
         J = Matrix{ComplexF64}(I, 2, 2)
         G = zeros(ComplexF64, 2, 2)
         dgds[1] = Main.output_dgd(J, G)
@@ -592,17 +588,17 @@ module PlotRuntime
 
     """
         write_fiber_input_plot3d(
-            f::Main.FiberInput,
+            f::Main.Fiber,
             s1,
             s2;
             n = 1001,
             output = "fiberinput_3d.html",
-            title = "FiberInput 3D centerline",
+            title = "Fiber 3D centerline",
             input_state = ComplexF64[1.0 + 0.0im, 0.0 + 0.0im],
             jumps = Dict{Float64, Matrix{ComplexF64}}()
         )
 
-    Write an interactive Plotly HTML file showing the sampled `FiberInput` over `s ∈ [s1, s2]`.
+    Write an interactive Plotly HTML file showing the sampled `Fiber` over `s ∈ [s1, s2]`.
 
     The 3D curve is plotted as the reconstructed fiber centerline `(x(s), y(s), zc(s))`.
     Plotly provides mouse-based rotation, zooming, and panning in the generated HTML.
@@ -610,15 +606,14 @@ module PlotRuntime
     Returns the output path.
     """
     function write_fiber_input_plot3d(
-        f::Main.FiberInput,
+        f::Main.Fiber,
         s1::Real,
         s2::Real;
         n::Int = 1001,
         output::AbstractString = "fiberinput_3d.html",
-        title::AbstractString = "FiberInput 3D centerline",
+        title::AbstractString = "Fiber 3D centerline",
         input_state::AbstractVector{ComplexF64} = ComplexF64[1.0 + 0.0im, 0.0 + 0.0im],
         jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
-        Kω = s -> zeros(ComplexF64, 2, 2),
         jump_omegas::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}()
     )
         samples = sample_fiber_centerline(f, s1, s2; n = n)
@@ -635,7 +630,6 @@ module PlotRuntime
             s1,
             s2;
             n = n,
-            Kω = Kω,
             jumps = jumps,
             jump_omegas = jump_omegas
         )

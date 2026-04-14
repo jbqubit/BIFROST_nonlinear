@@ -1,105 +1,26 @@
 using LinearAlgebra
 
 
-"""
-Code Overview: 
-- PiecewiseProfile and FiberInput define the fiber model.
-- make_generator turns that model into the local Jones dynamics (generator).
-- the numerical propagation stack consists of
-    - exp_jones_generator
-    - exp_midpoint_step
-    - phase_insensitive_error
-    - propagate_interval!
-    - propagate_piecewise
-- the DGD sensitivity stack consists of
-    - exp_sensitivity_midpoint_step
-    - sensitivity_phase_insensitive_error
-    - propagate_interval_sensitivity!
-    - propagate_piecewise_sensitivity
-    - output_dgd
+# Code Overview:
+# - fiber-path.jl defines the fiber model, source specification, and breakpoint assembly.
+# - make_generator and make_generator_omega assemble the local Jones dynamics.
+# - the numerical propagation stack consists of
+#     - exp_jones_generator
+#     - exp_midpoint_step
+#     - phase_insensitive_error
+#     - propagate_interval!
+#     - propagate_piecewise
+# - the DGD sensitivity stack consists of
+#     - exp_sensitivity_midpoint_step
+#     - sensitivity_phase_insensitive_error
+#     - propagate_interval_sensitivity!
+#     - propagate_piecewise_sensitivity
+#     - output_dgd
+#
+# path-plot.jl sits on top of that stack; it provides visual diagnostics.
 
-path-plot.jl sits on top of that stack; it provides visual diagnostics 
-
-"""
-
-# ----------------------------
-# Piecewise scalar profile
-# ----------------------------
-
-struct PiecewiseProfile{F}
-    breaks::Vector{Float64}   # [s0, s1, ..., sN]
-    pieces::Vector{F}         # length N-1
-    function PiecewiseProfile(breaks::Vector{Float64}, pieces::Vector{F}) where {F}
-        @assert length(breaks) >= 2
-        @assert length(pieces) == length(breaks) - 1
-        @assert issorted(breaks)
-        new{F}(breaks, pieces)
-    end
-end
-
-function (p::PiecewiseProfile)(s::Real)
-    @assert p.breaks[1] <= s <= p.breaks[end] "s out of bounds"
-    i = searchsortedlast(p.breaks, s)
-    i = min(i, length(p.pieces))   # handles s == last breakpoint
-    return p.pieces[i](s)
-end
-
-# ----------------------------
-# Fiber input
-# ----------------------------
-
-struct FiberInput{FR,FTH,FDTW,FB,FT}
-    Rb::FR                 # s -> bend radius [m]
-    theta_b::FTH          # s -> bend angle [rad]
-    dtwist::FDTW          # s -> d(twist)/ds [rad/m]
-    bend_strength::FB     # k2 -> Δβ_b [1/m]
-    twist_strength::FT    # tau -> Δβ_t [1/m], tau in rad/m
-end
-
+include("fiber-path.jl")
 include("path-plot.jl")
-
-# ----------------------------
-# Generator K(s)
-# ----------------------------
-
-function make_generator(f::FiberInput)
-    return function (s::Real)
-        R = f.Rb(s)
-
-        if isinf(R)
-            kx = 0.0
-            ky = 0.0
-            k2 = 0.0
-        else
-            invR = 1.0 / R
-            c = cos(f.theta_b(s))
-            sn = sin(f.theta_b(s))
-            kx = invR * c
-            ky = invR * sn
-            k2 = kx*kx + ky*ky
-        end
-
-        tau = f.dtwist(s)   # rad/m
-
-        Δβt = f.twist_strength(tau)
-
-        if k2 == 0.0
-            Δβb = 0.0
-            c2φ = 1.0
-            s2φ = 0.0
-        else
-            Δβb = f.bend_strength(k2)
-            # double-angle quantities from curvature vector directly
-            c2φ = (kx*kx - ky*ky) / k2
-            s2φ = (2*kx*ky) / k2
-        end
-
-        return ComplexF64[
-             0.5im*Δβb*c2φ             0.5im*Δβb*s2φ - 0.5*Δβt
-             0.5im*Δβb*s2φ + 0.5*Δβt   -0.5im*Δβb*c2φ
-        ]
-    end
-end
 
 # ----------------------------
 # One exponential-midpoint step
@@ -394,6 +315,14 @@ function propagate_piecewise(
     return J, stats
 end
 
+function propagate_fiber(
+    f::Fiber;
+    jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
+    kwargs...
+)
+    return propagate_piecewise(make_generator(f), fiber_breakpoints(f); jumps = jumps, kwargs...)
+end
+
 """
     propagate_piecewise_sensitivity(K, Kω, breaks; jumps=Dict(), jump_omegas=Dict(), kwargs...)
 
@@ -441,6 +370,22 @@ function propagate_piecewise_sensitivity(
     end
 
     return J, G, stats
+end
+
+function propagate_fiber_sensitivity(
+    f::Fiber;
+    jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
+    jump_omegas::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
+    kwargs...
+)
+    return propagate_piecewise_sensitivity(
+        make_generator(f),
+        make_generator_omega(f),
+        fiber_breakpoints(f);
+        jumps = jumps,
+        jump_omegas = jump_omegas,
+        kwargs...
+    )
 end
 
 function pmd_generator(J::Matrix{ComplexF64}, G::Matrix{ComplexF64}; hermitianize::Bool = true)

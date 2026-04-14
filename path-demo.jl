@@ -7,7 +7,7 @@ path-demo.jl includes path-integral.jl, which includes path-plot.jl.
 run_demo() gets a demo bundle from demofiber1() or demofiber2().
 
 It computes the final Jones matrix with 
-    make_generator -> propagate_piecewise -> 
+    propagate_fiber ->
     propagate_interval! -> exp_midpoint_step -> exp_jones_generator.
 
 It then plans the visualization with write_fiber_input_plot3d() via subroutines:
@@ -65,15 +65,20 @@ function build_piecewise_demo_fiber(
     end
     push_constant_segment!(lead_out, Inf, loop_angles[end], 0.0)
 
-    fiber = FiberInput(
+    bend = BendSource(
         PiecewiseProfile(copy(breaks), copy(pieces_Rb)),
         PiecewiseProfile(copy(breaks), copy(pieces_theta)),
-        PiecewiseProfile(copy(breaks), copy(pieces_dtwist)),
-        k2  -> k2,
-        tau -> tau
+        k2 -> k2;
+        breakpoints = copy(breaks)
     )
+    twist = TwistSource(
+        PiecewiseProfile(copy(breaks), copy(pieces_dtwist)),
+        tau -> tau;
+        breakpoints = copy(breaks)
+    )
+    fiber = Fiber(first(breaks), last(breaks), AbstractBirefringenceSource[bend, twist])
 
-    return (; fiber, breaks, title, input_state, output, n)
+    return (; fiber, title, input_state, output, n)
 end
 
 function demofiber1()
@@ -119,16 +124,13 @@ end
 
 function run_demo(demo = demofiber1(); output::Union{Nothing,AbstractString} = nothing)
     fiber = demo.fiber
-    breaks = demo.breaks
     title = demo.title
     input_state = demo.input_state
     plot_output = isnothing(output) ? demo.output : output
     n = demo.n
 
-    K = make_generator(fiber)
-    J_final, stats = propagate_piecewise(
-        K,
-        copy(breaks);
+    J_final, stats = propagate_fiber(
+        fiber;
         rtol = 1e-10,
         atol = 1e-12,
         h_init = 1e-2
@@ -144,8 +146,8 @@ function run_demo(demo = demofiber1(); output::Union{Nothing,AbstractString} = n
 
     plot_path = write_fiber_input_plot3d(
         fiber,
-        first(breaks),
-        last(breaks);
+        fiber.s_start,
+        fiber.s_end;
         n = n,
         output = plot_output,
         title = title,

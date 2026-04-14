@@ -19,7 +19,7 @@ $$\frac{dJ}{ds}=K(s)\,J,\qquad J(0)=I. \tag{1}$$
 
 The design is
 - The physical inputs describing the fiber must be available as functions so that the fiber is described parametrically (not just on a coarse sampled grid). 
-- Each birefringence mechanism returns a local generator contribution $K_m(s,\lambda)$.
+- Each birefringence mechanism returns a local generator contributions $K_m(s)$.
 - The solver assembles $K(s)=\sum_m K_m(s)$.
 - The propagator advances $J$ adaptively over smooth intervals. 
 - The interval size is selected dynamically to keep error below a specified threshold.
