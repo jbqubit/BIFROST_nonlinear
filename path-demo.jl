@@ -13,11 +13,11 @@ It computes the final Jones matrix with
 It then plans the visualization with write_fiber_input_plot3d() via subroutines:
 - geometry via sample_fiber_centerline()
 - polarization via sample_polarization_trajectory()
+
 It then assembles the main 3D fiber plot consisting of
 - moving polarization-circle cursor overlay
 - Poincare sphere inset
-The output is an HTML file
-
+The output is an HTML file.
 """
 
 

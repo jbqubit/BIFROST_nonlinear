@@ -1,4 +1,11 @@
-These julia files describe a different approach to calculating the end-to-end polarization transfer function (PTF) of an optical fiber link. It's based on a Magnus-type Lie-group integrator which automatically subdivides the calculation to keep errors bounded.
+**path-integral approach to birefringence propagation**
+
+J. Britton, 4/13/2026 
+
+---
+
+These julia files describe a different approach to calculating the end-to-end polarization 
+transfer function (PTF) of an optical fiber link. It's based on a Magnus-type Lie-group integrator which automatically subdivides the calculation to keep errors bounded.
 
 # current approach
 The approach in BIFROST paper calculates
@@ -71,7 +78,7 @@ For a polarization maintaining fiber the differential group delay (DGD) is a mea
 
 $$ G(s, \omega) \equiv  \frac{\partial J(s, \omega)}{\partial \omega}$$
 
-The BIFROST paper’s DGD formulation is Eq (19) (in the code it is `calcDGD()`) 
+The BIFROST paper’s DGD formulation is Eq (19) (BIFROST `calcDGD()`) 
 
 $$\partial_\omega J \approx \frac{J(\omega + \Delta\omega) - J(\omega)}{\Delta\omega}.$$
 
@@ -89,14 +96,7 @@ $$\frac{dG}{ds} = K_\omega J + KG,\quad G(0) = 0. \tag{2}$$
 
 Then form $J^{-1}G$ directly at the end. 
 
-### Implementation in code
-The original code was built around a very specialized solver for one 2x2 matrix ODE.
-Once you add the pair of equations (2) this is now a coupled block system. It requires extending the machinery for $J$ to now include both $J$ and $G$. This is implmented as
-- `exp_sensitivity_midpoint_step()` propagates the coupled ($J$, $G$) system over one midpoint step
-- `propagate_interval_sensitivity!()` adaptive step-doubling over smooth intervals
-- `propagate_piecewise_sensitivity()` adaptive step-doubling over breakpoints
-- `pmd_generator(J, G)` forms -im * J^{-1}G
-- `output_dgd(J, G)` extracts the DGD 
+
 
 
 ## Code overview
@@ -107,6 +107,23 @@ Overview of `path-demo.ml`
 - `exp_midpoint_step(K, z, h, J)` is the actual exponential midpoint integrator step. 
 - `propagate_interval!()` is the adaptive step-size controller on one smooth interval. It takes one full midpoint step and two half steps, compares them with phase_insensitive_error, accepts or rejects the step, and updates $h$ with the cubic-root rule $(\text{tol}/\text{err})^{1/3}$.
 - `propagate_piecewise()` is how the code handles discontinuities. 
+
+### DGD extension
+The original code was built around a very specialized solver for one 2x2 matrix ODE.
+Once you add the pair of equations (2) this is now a coupled block system. It requires extending the machinery for $J$ to now include both $J$ and $G$. This is implmented as
+- `exp_sensitivity_midpoint_step()` propagates the coupled ($J$, $G$) system over one midpoint step
+- `propagate_interval_sensitivity!()` adaptive step-doubling over smooth intervals
+- `propagate_piecewise_sensitivity()` adaptive step-doubling over breakpoints
+- `pmd_generator(J, G)` forms -im * J^{-1}G
+- `output_dgd(J, G)` extracts the DGD 
+
+- [ ] TODO-05 Calculate Kω(s). 
+>In your current code structure, K(s) is built from things like:
+> - bend geometry
+> - twist geometry
+> - bend birefringence strength
+> - twist birefringence strength
+> - So Kω(s) would come from differentiating the frequency-dependent parts of those strength laws with respect to ω.
 
 # Example path-demo.jl
 `path-demo.jl` is just a thin driver on top of that stack. It builds a piecewise fiber, calls make_generator, then calls propagate_piecewise to get the final Jones matrix and per-interval stats. 

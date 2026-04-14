@@ -359,6 +359,47 @@ module PlotRuntime
         return ψ
     end
 
+    function propagate_sensitivity_segment(
+        K,
+        Kω,
+        jumps,
+        jump_omegas,
+        J::Matrix{ComplexF64},
+        G::Matrix{ComplexF64},
+        a::Float64,
+        b::Float64
+    )
+        if b <= a
+            return J, G
+        end
+
+        s = a
+        Jseg = J
+        Gseg = G
+        jump_points = sort([Float64(ζ) for ζ in keys(jumps) if a < ζ <= b])
+
+        for ζ in jump_points
+            h1 = ζ - s
+            if h1 > 0
+                Jseg, Gseg = Main.exp_sensitivity_midpoint_step(K, Kω, s, h1, Jseg, Gseg)
+            end
+            J_pre = Jseg
+            G_pre = Gseg
+            J_jump = jumps[ζ]
+            G_jump = haskey(jump_omegas, ζ) ? jump_omegas[ζ] : zeros(ComplexF64, 2, 2)
+            Jseg = J_jump * J_pre
+            Gseg = G_jump * J_pre + J_jump * G_pre
+            s = ζ
+        end
+
+        h2 = b - s
+        if h2 > 0
+            Jseg, Gseg = Main.exp_sensitivity_midpoint_step(K, Kω, s, h2, Jseg, Gseg)
+        end
+
+        return Jseg, Gseg
+    end
+
     """
         sample_fiber_centerline(f::Main.FiberInput, s1, s2; n = 1001)
 
@@ -524,6 +565,31 @@ module PlotRuntime
         return (; s = ss, state = ψs, s1, s2, s3, linear_angle_rad, linear_radius)
     end
 
+    function sample_dgd_trajectory(
+        f::Main.FiberInput,
+        s1::Real,
+        s2::Real;
+        n::Int = 1001,
+        Kω = s -> zeros(ComplexF64, 2, 2),
+        jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
+        jump_omegas::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}()
+    )
+        ss = collect(range(Float64(s1), Float64(s2), length = n))
+        dgds = zeros(Float64, n)
+
+        K = Main.make_generator(f)
+        J = Matrix{ComplexF64}(I, 2, 2)
+        G = zeros(ComplexF64, 2, 2)
+        dgds[1] = Main.output_dgd(J, G)
+
+        for i in 1:n-1
+            J, G = propagate_sensitivity_segment(K, Kω, jumps, jump_omegas, J, G, ss[i], ss[i + 1])
+            dgds[i + 1] = Main.output_dgd(J, G)
+        end
+
+        return (; s = ss, dgd = dgds)
+    end
+
     """
         write_fiber_input_plot3d(
             f::Main.FiberInput,
@@ -551,7 +617,9 @@ module PlotRuntime
         output::AbstractString = "fiberinput_3d.html",
         title::AbstractString = "FiberInput 3D centerline",
         input_state::AbstractVector{ComplexF64} = ComplexF64[1.0 + 0.0im, 0.0 + 0.0im],
-        jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}()
+        jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
+        Kω = s -> zeros(ComplexF64, 2, 2),
+        jump_omegas::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}()
     )
         samples = sample_fiber_centerline(f, s1, s2; n = n)
         pol = sample_polarization_trajectory(
@@ -561,6 +629,15 @@ module PlotRuntime
             n = n,
             input_state = ComplexF64[input_state[1], input_state[2]],
             jumps = jumps
+        )
+        dgd = sample_dgd_trajectory(
+            f,
+            s1,
+            s2;
+            n = n,
+            Kω = Kω,
+            jumps = jumps,
+            jump_omegas = jump_omegas
         )
         pol_circle = Main.render_pol_circle(samples, samples.s[1], Main.poincare_vector_representation(pol.state[1]))
         sphere_spec = Main.render_poincare_sphere(
@@ -576,6 +653,7 @@ module PlotRuntime
             "Rb=$(samples.Rb[i]) m<br>" *
             "theta_b=$(samples.theta_b[i]) rad<br>" *
             "dtwist=$(samples.dtwist[i]) rad/m<br>" *
+            "DGD=$(dgd.dgd[i]) s<br>" *
             "S1=$(pol.s1[i])<br>" *
             "S2=$(pol.s2[i])<br>" *
             "S3=$(pol.s3[i])"
@@ -669,6 +747,7 @@ module PlotRuntime
             const rb = $(js_array(samples.Rb));
             const theta = $(js_array(samples.theta_b));
             const dtwist = $(js_array(samples.dtwist));
+            const dgd = $(js_array(dgd.dgd));
             const hoverText = $(js_string_array(hover_text));
             const linearAngle = $(js_array(pol.linear_angle_rad));
             const arrowX = new Array(xs.length).fill(0);
@@ -1044,6 +1123,7 @@ module PlotRuntime
             function formatStatus(index) {
               const arrow = arrowVector(index);
               return [
+                "Status at fiber path point s: \n",
                 "s = " + ss[index].toFixed(4) + " m",
                 "x = " + xs[index].toFixed(4) + " m",
                 "y = " + ys[index].toFixed(4) + " m",
@@ -1051,6 +1131,7 @@ module PlotRuntime
                 "Rb = " + (Number.isFinite(rb[index]) ? rb[index].toFixed(4) : "Inf") + " m",
                 "theta_b = " + theta[index].toFixed(4) + " rad",
                 "dtwist = " + dtwist[index].toFixed(4) + " rad/m",
+                "DGD = " + dgd[index].toExponential(6) + " s",
                 "S1 = " + s1[index].toFixed(4),
                 "S2 = " + s2[index].toFixed(4),
                 "S3 = " + s3[index].toFixed(4),
