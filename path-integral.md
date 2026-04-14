@@ -220,6 +220,14 @@ This formulation is numerically better because it avoids angle singularities whe
 
 The same source abstraction also carries the data needed for DGD. In addition to its contribution to $K(s)$, each source also contributes its piece of $K_\omega(s)$. That keeps the PMD/DGD machinery aligned with the ordinary Jones propagation machinery: the fiber assembles both objects from the same list of sources, and the sensitivity propagator uses the same breakpoint structure and the same adaptive error-control strategy.
 
+# Next steps for BIFROST port
+- add intrinsic material properties -- prakriti
+- add real sources of birefringence -- bifrost paper
+- add unit tests from physics papers
+- add fiber loss -- prakriti
+  - the fiber loss ought to rely on fiber-path.jl for geometry specification
+  - the fiber loss calculation functionality needs to be fully isolated from the path-integral.jl techniques which rely on zero-loss assumptions
+
 
 # APPENDICES
 

@@ -5,6 +5,7 @@ It is intended to be self-sufficient and not to rely on any separate design-note
 
 The test entrypoint runs:
 
+- `test/fiber-path.jl`
 - `test/test_path_integral_sources.jl`
 - `test/test_paddle_transfer.jl`
 - `test/test_dgd.jl`
@@ -49,12 +50,243 @@ $$
 
 implemented by `output_dgd(J, G)`.
 
-The main production subroutines exercised by the tests are:
+## `test/fiber-path.jl`
 
-- Source assembly: `BendSource`, `TwistSource`, `Fiber`, `fiber_breakpoints`, `make_generator`, `make_generator_omega`, `generator_contribution`, `generator_omega_contribution`
-- Jones propagation: `exp_jones_generator`, `exp_midpoint_step`, `propagate_interval!`, `propagate_piecewise`, `propagate_fiber`
-- Sensitivity/DGD propagation: `exp_sensitivity_midpoint_step`, `propagate_interval_sensitivity!`, `propagate_piecewise_sensitivity`, `propagate_fiber_sensitivity`, `pmd_generator`, `output_dgd`
-- Diagnostics: `write_fiber_input_plot3d`
+This file is the geometry-first test suite for the fiber path layer. It is discussed first because it validates the centerline construction that sits underneath the visualization and higher-level fiber infrastructure. These tests do not probe Jones propagation or DGD directly. They probe the geometric reconstruction returned by `sample_fiber_centerline`.
+
+The guiding idea is to use one explicit $3$-dimensional rigid-body oracle for both planar and nonplanar bend sequences. A planar test is then just the special case in which the bend azimuth remains fixed and the resulting path stays in a coordinate plane.
+
+### Geometry convention used by the tests
+
+For each bend segment, the test-side oracle uses:
+
+- bend radius $R>0$
+- bend azimuth $\alpha$
+- signed bend sweep $\theta$
+
+The current implementation in `sample_fiber_centerline` interprets the bend azimuth as a lab-frame curvature direction, with signed bend handled by reversing that direction:
+
+$$
+\alpha_{\mathrm{eff}} =
+\begin{cases}
+\alpha, & \theta \ge 0, \\
+\alpha + \pi, & \theta < 0.
+\end{cases}
+$$
+
+and the propagated arc length is
+
+$$
+\Delta s = R\,|\theta|.
+$$
+
+The local curvature vector is therefore
+
+$$
+\kappa = \left(\frac{\cos \alpha_{\mathrm{eff}}}{R},
+\frac{\sin \alpha_{\mathrm{eff}}}{R},
+0\right),
+$$
+
+and the instantaneous rotation axis for the tangent is
+
+$$
+u = \frac{\Omega}{\|\Omega\|}
+=
+\left(-\sin \alpha_{\mathrm{eff}},\,
+\cos \alpha_{\mathrm{eff}},\,
+0\right),
+$$
+
+because the code advances the tangent using
+
+$$
+\Omega = (-\kappa_y,\kappa_x,0).
+$$
+
+For a constant-curvature segment, the exact endpoint update used by the oracle is
+
+$$
+r_{\mathrm{next}} = r + A(R,\theta,u)\,T,
+$$
+
+where $T$ is the incoming tangent and
+
+$$
+A(R,\theta,u)
+=
+R\theta I
++ R(1-\cos\theta)[u]_\times
++ R(\theta-\sin\theta)[u]_\times^2.
+$$
+
+The outgoing tangent is
+
+$$
+T_{\mathrm{next}} = \mathcal{R}(u,\theta)\,T,
+$$
+
+with $\mathcal{R}(u,\theta)$ the Rodrigues rotation about axis $u$ by angle $\theta$.
+
+This is implemented in the test-side subroutines:
+
+- `canonical_bend_segment`
+- `skew_matrix`
+- `rotate_vector_about_axis`
+- `exact_endpoint_and_tangent`
+
+The actual infrastructure under test is built with:
+
+- `build_centerline_test_fiber`
+- `build_straight_test_fiber`
+- `sample_final_centerline_state`
+
+and ultimately exercises:
+
+- `BendSource`
+- `TwistSource`
+- `Fiber`
+- `bend_geometry`
+- `twist_rate`
+- `sample_fiber_centerline`
+
+### Test set `fiber-path centerline geometry`
+
+#### `Straight section`
+
+This is the zero-curvature baseline. The test builds a straight fiber of length $L=2.5$ and checks
+
+$$
+r(L) = (0,0,L),
+\qquad
+T(L) = (0,0,1).
+$$
+
+It also checks that the sampled path remains on the $z$ axis:
+
+$$
+x(s)=0,\qquad y(s)=0.
+$$
+
+Why this matters:
+it catches bad initialization, accidental offsets, and any spurious curvature in the centerline reconstruction.
+
+#### `Explicit endpoint cases`
+
+These are exact benchmark trajectories listed in `EXPLICIT_PATH_CASES`.
+For each case, the test compares:
+
+1. the closed-form endpoint and tangent from `exact_endpoint_and_tangent`
+2. the expected analytic endpoint/tangent hard-coded into the test table
+3. the numerically sampled endpoint and tangent from `sample_fiber_centerline`
+
+The cases include:
+
+- `single_quarter_circle_xz_plane`
+  $$
+  (R,\alpha,\theta)=(1,0,\pi/2)
+  \Rightarrow
+  r=(1,0,1),\quad T=(1,0,0)
+  $$
+- `single_half_circle_xz_plane`
+  $$
+  (R,\alpha,\theta)=(2,0,\pi)
+  \Rightarrow
+  r=(4,0,0),\quad T=(0,0,-1)
+  $$
+- `two_quarters_make_half_circle`
+  two consecutive quarter circles giving the same final geometry as a half circle
+- `three_sixty_degree_bends_make_half_circle`
+  the same half-circle endpoint realized by three $60^\circ$ segments
+- `single_quarter_circle_yz_plane`
+  $$
+  (R,\alpha,\theta)=(1,\pi/2,\pi/2)
+  \Rightarrow
+  r=(0,1,1),\quad T=(0,1,0)
+  $$
+- `single_oblique_quarter_circle`
+  $$
+  (R,\alpha,\theta)=(2,\pi/4,\pi/2)
+  \Rightarrow
+  r=(\sqrt{2},\sqrt{2},2),\quad
+  T=\left(\frac{1}{\sqrt 2},\frac{1}{\sqrt 2},0\right)
+  $$
+- `orthogonal_quarters_lab_frame`
+  a genuinely $3$-dimensional composition under the current lab-frame azimuth convention
+- `orthogonal_quarters_swapped_order`
+  the swapped-order companion to the previous case
+
+Why this matters:
+these are the anchor tests for sign convention, arc-length convention, and the distinction between planar and fully $3$-dimensional curvature sequences.
+
+For the planar cases, the suite also checks
+
+$$
+\max_s |y(s)| \approx 0,
+$$
+
+so the path stays in the expected plane.
+
+#### `Segmentation invariance`
+
+This test compares three discretizations of the same total bend:
+
+$$
+(1,0,\pi/2),
+$$
+
+versus
+
+$$
+(1,0,\pi/4),(1,0,\pi/4),
+$$
+
+versus
+
+$$
+4 \times (1,0,\pi/8).
+$$
+
+All three should have the same endpoint and final tangent:
+
+$$
+r=(1,0,1),\qquad T=(1,0,0).
+$$
+
+Why this matters:
+the geometry layer should treat a sequence of smaller bends as a faithful segmentation of the same smooth circular path, not as a different physical object.
+
+#### `Hard exact oracle case`
+
+This is the less obvious two-segment case
+
+$$
+(1,\pi/4,\pi/3),\qquad (1,-\pi/4,\pi/3),
+$$
+
+for which the test does not rely on visual intuition. It relies on the exact rigid-body oracle and checks that the sampler reproduces both the final endpoint and the final tangent.
+
+Why this matters:
+it probes mixed azimuths in a way that is hard to fake by accidental symmetry.
+
+#### `Order matters in 3D`
+
+This compares
+
+$$
+(1,0,\pi/2),\ (1,\pi/2,\pi/2)
+$$
+
+against
+
+$$
+(1,\pi/2,\pi/2),\ (1,0,\pi/2).
+$$
+
+The test asserts that the two endpoints are substantially different.
+
+Why this matters:
+geometry composition is noncommutative. Changing the order of rotated bend segments should change the final centerline.
 
 ## `test/test_path_integral_sources.jl`
 
