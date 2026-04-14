@@ -538,7 +538,7 @@ module PlotRuntime
         linear_angle_rad = zeros(Float64, n)
         linear_radius = zeros(Float64, n)
 
-        K = Main.make_generator(f)
+        K = Main.generator_K(f)
         ψ = ComplexF64[input_state[1], input_state[2]]
         ψ ./= norm(ψ)
 
@@ -572,8 +572,8 @@ module PlotRuntime
         ss = collect(range(Float64(s1), Float64(s2), length = n))
         dgds = zeros(Float64, n)
 
-        K = Main.make_generator(f)
-        Kω = Main.make_generator_omega(f)
+        K = Main.generator_K(f)
+        Kω = Main.generator_Kω(f)
         J = Matrix{ComplexF64}(I, 2, 2)
         G = zeros(ComplexF64, 2, 2)
         dgds[1] = Main.output_dgd(J, G)
@@ -869,11 +869,7 @@ module PlotRuntime
                 colorscale: "Turbo",
                 cmin: ss[0],
                 cmax: ss[ss.length - 1],
-                colorbar: {
-                  title: "s (m)",
-                  len: 0.55,
-                  y: 0.5
-                }
+                showscale: false
               }
             };
 
@@ -1075,7 +1071,14 @@ module PlotRuntime
               y: [$(sphere_spec.point.y)],
               z: [$(sphere_spec.point.z)],
               hovertemplate: "Poincare state<br>S1=%{x:.4f}<br>S2=%{y:.4f}<br>S3=%{z:.4f}<extra></extra>",
-              marker: { size: 6, color: "#ff7f0e" },
+              marker: {
+                size: 6,
+                color: [ss[0]],
+                colorscale: "Turbo",
+                cmin: ss[0],
+                cmax: ss[ss.length - 1],
+                showscale: false
+              },
               name: "state"
             };
 
@@ -1117,7 +1120,7 @@ module PlotRuntime
             function formatStatus(index) {
               const arrow = arrowVector(index);
               return [
-                "Status at fiber path point s: \n",
+                "Status at fiber path point s: \\\\n",
                 "s = " + ss[index].toFixed(4) + " m",
                 "x = " + xs[index].toFixed(4) + " m",
                 "y = " + ys[index].toFixed(4) + " m",
@@ -1180,7 +1183,8 @@ module PlotRuntime
               Plotly.restyle("inset", {
                 x: [[s1[activeIndex]]],
                 y: [[s2[activeIndex]]],
-                z: [[s3[activeIndex]]]
+                z: [[s3[activeIndex]]],
+                "marker.color": [[ss[activeIndex]]]
               }, [6]);
               statusBox.textContent = formatStatus(activeIndex);
             }

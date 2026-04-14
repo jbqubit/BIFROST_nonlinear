@@ -33,7 +33,7 @@ function build_paddle_test_fiber(paddles)
     for (radius_mm, turns, angle_deg) in paddles
         push!(pieces_Rb, _ -> radius_mm)
         # The proposed unit-test vectors use the opposite sign convention from
-        # the internal bend-axis angle in generator_contribution.
+        # the internal bend-axis angle in generator_K_contribution.
         push!(pieces_theta, _ -> -deg2rad(angle_deg))
         push!(breaks, breaks[end] + 2π * radius_mm * turns)
     end

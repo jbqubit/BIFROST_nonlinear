@@ -326,13 +326,13 @@ $$
 K_\omega(s)=K_{\omega,\mathrm{bend}}(s)+K_{\omega,\mathrm{twist}}(s),
 $$
 
-via the subroutines `make_generator`, `make_generator_omega`, `generator_contribution`, and `generator_omega_contribution`.
+via the subroutines `generator_K`, `generator_Kω`, `generator_K_contribution`, and `generator_Kω_contribution`.
 
 Why this matters:
 the entire fiber architecture assumes linear superposition of source contributions at the generator level.
 
 Subroutines exercised:
-`make_generator`, `make_generator_omega`, `generator_contribution`, `generator_omega_contribution`
+`generator_K`, `generator_Kω`, `generator_K_contribution`, `generator_Kω_contribution`
 
 #### Coverage-gap rejection
 
@@ -893,7 +893,7 @@ and therefore the two propagations should give identical $(J,G)$ and identical D
 This is the most direct test of the fiber-level convenience wrapper for DGD propagation.
 
 Subroutines exercised:
-`BendSource`, `TwistSource`, `Fiber`, `fiber_breakpoints`, `make_generator`, `make_generator_omega`, `propagate_fiber_sensitivity`, `propagate_piecewise_sensitivity`
+`BendSource`, `TwistSource`, `Fiber`, `fiber_breakpoints`, `generator_K`, `generator_Kω`, `propagate_fiber_sensitivity`, `propagate_piecewise_sensitivity`
 
 ## What these tests establish, and what they do not
 

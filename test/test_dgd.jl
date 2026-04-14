@@ -226,8 +226,8 @@ end
     @testset "Automatic breakpoint union matches explicit partition" begin
         J_auto, G_auto, stats_auto = propagate_fiber_sensitivity(fiber; rtol = 1e-11, atol = 1e-13, h_init = 0.05)
         J_explicit, G_explicit, stats_explicit = propagate_piecewise_sensitivity(
-            make_generator(fiber),
-            make_generator_omega(fiber),
+            generator_K(fiber),
+            generator_Kω(fiber),
             explicit_union;
             rtol = 1e-11,
             atol = 1e-13,

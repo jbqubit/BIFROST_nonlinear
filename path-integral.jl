@@ -3,7 +3,7 @@ using LinearAlgebra
 
 # Code Overview:
 # - fiber-path.jl defines the fiber model, source specification, and breakpoint assembly.
-# - make_generator and make_generator_omega assemble the local Jones dynamics.
+# - generator_K and generator_Kω assemble the local Jones dynamics.
 # - the numerical propagation stack consists of
 #     - exp_jones_generator
 #     - exp_midpoint_step
@@ -320,7 +320,7 @@ function propagate_fiber(
     jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
     kwargs...
 )
-    return propagate_piecewise(make_generator(f), fiber_breakpoints(f); jumps = jumps, kwargs...)
+    return propagate_piecewise(generator_K(f), fiber_breakpoints(f); jumps = jumps, kwargs...)
 end
 
 """
@@ -379,8 +379,8 @@ function propagate_fiber_sensitivity(
     kwargs...
 )
     return propagate_piecewise_sensitivity(
-        make_generator(f),
-        make_generator_omega(f),
+        generator_K(f),
+        generator_Kω(f),
         fiber_breakpoints(f);
         jumps = jumps,
         jump_omegas = jump_omegas,

@@ -25,10 +25,10 @@ include("../path-demo.jl")
     @test fiber_breakpoints(fiber) == [0.0, 0.4, 0.6, 1.0]
 
     s = 0.25
-    K_expected = generator_contribution(bend, s) + generator_contribution(twist, s)
-    Kω_expected = generator_omega_contribution(bend, s) + generator_omega_contribution(twist, s)
-    @test make_generator(fiber)(s) ≈ K_expected
-    @test make_generator_omega(fiber)(s) ≈ Kω_expected
+    K_expected = generator_K_contribution(bend, s) + generator_K_contribution(twist, s)
+    Kω_expected = generator_Kω_contribution(bend, s) + generator_Kω_contribution(twist, s)
+    @test generator_K(fiber)(s) ≈ K_expected
+    @test generator_Kω(fiber)(s) ≈ Kω_expected
 
     bad_twist = TwistSource(
         s -> 0.0,
@@ -55,7 +55,7 @@ include("../path-demo.jl")
         breakpoints = [0.0, 1.0]
     )
     zero_fiber = Fiber(0.0, 1.0, AbstractBirefringenceSource[zero_bend, zero_twist])
-    @test make_generator(zero_fiber)(0.5) ≈ zeros(ComplexF64, 2, 2)
+    @test generator_K(zero_fiber)(0.5) ≈ zeros(ComplexF64, 2, 2)
 
     J_zero, G_zero, _ = propagate_fiber_sensitivity(zero_fiber; h_init = 0.1)
     @test output_dgd(J_zero, G_zero) ≈ 0.0
@@ -79,6 +79,26 @@ include("../path-demo.jl")
     @test size(G_demo_sens) == (2, 2)
     @test !isempty(stats_demo_sens)
     @test isfinite(output_dgd(J_demo_sens, G_demo_sens))
+
+    spec = FiberSpec(0.0, 20.0)
+    twist!(spec, 0.0, 5.0; rate = 0.15)
+    bend!(spec, 0.0, 2.0; angle = π / 2, axis = 0.0)
+    bend!(spec, 2.0, 3.0; angle = 0.0, axis = 0.0)
+    twist!(spec, 5.0, 7.0; rate = -0.05)
+    bend!(spec, 3.0, 4.0; angle = π / 4, axis = π / 6)
+    bend!(spec, 4.0, 7.0; angle = 0.0, axis = π / 6)
+    segment_fiber = build(spec)
+    @test length(segment_fiber.sources) == 6
+    @test fiber_breakpoints(segment_fiber) == [0.0, 2.0, 3.0, 4.0, 5.0, 7.0, 20.0]
+    @test twist_rate(segment_fiber, 1.0) ≈ 0.15
+    @test twist_rate(segment_fiber, 3.5) ≈ 0.15
+    @test twist_rate(segment_fiber, 6.0) ≈ -0.05
+    @test twist_rate(segment_fiber, 8.0) ≈ 0.0
+    @test bend_geometry(segment_fiber, 1.0).Rb ≈ 4.0 / π
+    @test bend_geometry(segment_fiber, 2.5).k2 ≈ 0.0
+    @test bend_geometry(segment_fiber, 3.5).Rb ≈ 4.0 / π
+    @test bend_geometry(segment_fiber, 6.0).k2 ≈ 0.0
+    @test size(propagate_fiber(segment_fiber; h_init = 1e-2)[1]) == (2, 2)
 
     plot_path = write_fiber_input_plot3d(
         demo.fiber,

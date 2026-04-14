@@ -137,8 +137,8 @@ The fiber also computes the global breakpoint set automatically from its sources
 
 `path-integral.jl` sits on top of that specification layer and implements the actual propagators.
 
-- `make_generator(f)` assembles the total local generator $K(s)$ from the sources stored in a `Fiber`.
-- `make_generator_omega(f)` assembles the total frequency derivative $K_\omega(s)$ from the same sources.
+- `generator_K(f)` assembles the total local generator $K(s)$ from the sources stored in a `Fiber`.
+- `generator_Kω(f)` assembles the total frequency derivative $K_\omega(s)$ from the same sources.
 - `exp_jones_generator(A)` computes $\exp(A)$ for a $2\times2$ generator using the closed-form Cayley-Hamilton formula.
 - `exp_midpoint_step(K, s, h, J)` is one exponential-midpoint step for the Jones propagator.
 - `propagate_interval!()` is the adaptive controller on one smooth interval. It takes one full step and two half steps, compares them with `phase_insensitive_error`, accepts or rejects the step, and updates $h$ with the cubic-root rule $(\text{tol}/\text{err})^{1/3}$.
@@ -155,7 +155,7 @@ Once you add the pair of equations (2)-(3), this becomes a coupled block system.
 - `pmd_generator(J, G)` forms -im * J^{-1}G
 - `output_dgd(J, G)` extracts the DGD 
 
-At the API level, the important change is that $K_\omega(s)$ is now part of the source abstraction. Each source has a method for its $K(s)$ contribution and a second method for its $K_\omega(s)$ contribution. Right now some source types may legitimately return the zero matrix for $K_\omega$ when their frequency dependence has not yet been modeled, but the interface is there and the DGD propagator always has a well-defined assembled $K_\omega(s)$ to use.
+At the API level, the important change is that $K_\omega(s)$ is now part of the source abstraction. Each source has a method for its $K(s)$ contribution and a second method for its $K_\omega(s)$ contribution. In code, those are `generator_K_contribution` and `generator_Kω_contribution`. Right now some source types may legitimately return the zero matrix for $K_\omega$ when their frequency dependence has not yet been modeled, but the interface is there and the DGD propagator always has a well-defined assembled $K_\omega(s)$ to use.
 
 # Example path-demo.jl
 `path-demo.jl` is just a thin driver on top of that stack. It builds a `Fiber` from a bend source and a twist source, then calls `propagate_fiber()` to get the final Jones matrix and per-interval stats. The demo no longer carries a separate manually maintained `breaks` array through the propagation API; the breakpoints are derived automatically from the fiber's sources.
