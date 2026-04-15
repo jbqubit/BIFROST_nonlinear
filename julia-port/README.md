@@ -5,7 +5,10 @@ J. Britton, 4/13/2026
 ---
 
 These julia files describe a different approach to calculating the end-to-end polarization 
-transfer function (PTF) of an optical fiber link. It's based on a Magnus-type Lie-group integrator which automatically subdivides the calculation to keep errors bounded.
+transfer function (PTF) and differential group delay (DGD) of an optical fiber link. It is a refactoring 
+of `fiber.py` from the published BIFROST paper. The core elements of this new version is that it's in julia
+and it relies on a Magnus-type Lie-group integrator which automatically subdivides the calculation to 
+keep errors due to non-commuting terms bounded (eg birefringence and twist).
 
 # current approach
 The approach in BIFROST paper calculates
@@ -108,11 +111,45 @@ Then form $J^{-1}G$ directly at the end.
 
 
 
-## Code overview
+# Code overview
 
-The code is now split into two conceptual layers.
+The code is now split into several new layers.
 
-### Fiber specification layer
+**Overview of the files**
+- `material-properties.jl` :: intrinsic material properties (makes no mention of fiber)
+- `fiber-cross-section.jl` :: mode a single transverse slice of step-index fiber of infinitesimal length
+- `fiber-path.jl` :: assemble piecewise an optical fiber from extruded fiber cross sections 
+- `path-integra.jl` :: compute the PTF and DGD of a fiber
+- `test/` :: unit tests
+
+**CAUTION**
+- Unit tests do not yet compare the output of `fiber.py` with the julia-port
+- See the header of the unit tests for other notable gaps in test coverage.
+
+## Julia techniques
+There are several programming techniques used in this codebase that are distinct to Julia (especially in contrast with python). 
+
+### multiple dispatch
+In python data and methods are combined in classes. In Julia data lives in structs and instead of many individually named methods, Julia uses a single method name and multiple dispatch. 
+
+Here's an example from material-properties.md. Where the single method call to refractive_index() just returns the index with default call parametrs. But with other arguments it also optionally $d\omega$ which is needed for DGD. Which method is dipatched is determined at compile time. 
+
+```julia
+refractive_index(material::AbstractMaterial, λ_meters::Real, T_kelvin::Real) =
+    refractive_index(ValueOnly(), material, λ_meters, T_kelvin)
+
+refractive_index(::ValueOnly, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)
+
+refractive_index(::ValueOnly, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)
+
+refractive_index(::WithDerivative, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)
+
+refractive_index(::WithDerivative, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)
+```
+
+- plus others... for `material::GeO2` and `material::SiO2`
+
+## Fiber specification layer
 
 `fiber-path.jl` defines how a fiber is described before any propagation happens.
 
@@ -229,20 +266,7 @@ The same source abstraction also carries the data needed for DGD. In addition to
   - the fiber loss calculation functionality needs to be fully isolated from the path-integral.jl techniques which rely on zero-loss assumptions
 
 
-# Julia techniques
-There are several programming techniques used in this codebase that are distinct to Julia (especially in contrast with python). 
 
-## multiple dispatch
-In python data and methods are combined in classes. In Julia data lives in structs and instead of many individually named methods, Julia uses a single method name and multiple dispatch. 
-
-Here's an example from material-properties.md. Where the single method call refractive_index() supports a) optionally returning $d\omega$ and b) different material types. Which is selected is entirely automatic (determined at compile-time).
-- `refractive_index(material::AbstractMaterial, λ_meters::Real, T_kelvin::Real) =
-    refractive_index(ValueOnly(), material, λ_meters, T_kelvin)`
-  - `refractive_index(::ValueOnly, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)`
-  - `refractive_index(::ValueOnly, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)`
-- `refractive_index(::WithDerivative, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)`
-- `refractive_index(::WithDerivative, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)`
-- plus others... for `material::GeO2` and `material::SiO2`
 
 
 

@@ -7,7 +7,7 @@ Authoring layer:
 - `FiberSpec`, `BendSegment`, and `TwistSegment` provide a readable way to
   build a fiber segment by segment on absolute `s`-intervals.
 - `bend!`, `twist!`, and `build` compile that authored description into the
-  lower-level runtime representation used by the solver.
+  lower-level runtime representation used by the solver in path-integral.jl.
 
 Runtime/source layer:
 - `AbstractBirefringenceSource` and concrete subtypes such as `BendSource` and
@@ -18,10 +18,10 @@ Runtime/source layer:
   (2) What matrix does that produce in `K(s)`?
   (3) What matrix does that produce in `Kω(s)`?
 
-Supporting functionality defined here:
+Supporting functionality includes:
 - coverage validation and breakpoint handling
 - `Fiber` assembly from low-level sources or from `FiberSpec`
-- source-level and fiber-level `K(s)` / `Kω(s)` assembly
+- source-level and fiber-level `K(s)` and `Kω(s)` assembly
 - bend/twist diagnostic helpers used by plotting
 """
 
