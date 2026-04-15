@@ -1,5 +1,7 @@
 include("fiber-path.jl")
 include("material-properties.jl")
+include("fiber-cross-section.jl")
 include("test_paddle_transfer.jl")
 include("test_path_integral_sources.jl")
 include("test_dgd.jl")
+include("test_fiber_cross_section.jl")
