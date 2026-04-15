@@ -1,4 +1,6 @@
-include("path-integral.jl")
+if !isdefined(Main, :propagate_fiber)
+    include("path-integral.jl")
+end
 
 
 """

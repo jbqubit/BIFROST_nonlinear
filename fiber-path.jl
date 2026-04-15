@@ -91,6 +91,10 @@ end
 abstract type AbstractBirefringenceSource end
 # this syntax: declares abstract type, no instances can be created of it
 
+struct SourceResponseCallback{F}
+    f::F
+end
+
 function coverage_segments_from_breaks(breaks::Vector{Float64})
     return [(breaks[i], breaks[i + 1]) for i in 1:length(breaks)-1]
 end
@@ -99,11 +103,10 @@ function normalize_breakpoints(breakpoints::Vector{Float64})
     return sort(unique(copy(breakpoints)))
 end
 
-struct BendSource{FR,FTH,FB,FBW} <: AbstractBirefringenceSource
+struct BendSource{FR,FTH,FRESP} <: AbstractBirefringenceSource
     Rb::FR
     theta_b::FTH
-    bend_strength::FB
-    bend_strength_omega::FBW
+    response::FRESP
     coverage::Vector{Tuple{Float64, Float64}}
     breakpoints::Vector{Float64}
 end
@@ -111,19 +114,37 @@ end
 function BendSource(
     Rb,
     theta_b,
-    bend_strength,
-    bend_strength_omega = k2 -> 0.0;
+    response::SourceResponseCallback;
     coverage::Union{Nothing, Vector{Tuple{Float64, Float64}}} = nothing,
     breakpoints::Vector{Float64} = Float64[]
 )
     cov = isnothing(coverage) ? coverage_segments_from_breaks(breakpoints) : copy(coverage)
-    return BendSource{typeof(Rb), typeof(theta_b), typeof(bend_strength), typeof(bend_strength_omega)}(
+    return BendSource{typeof(Rb), typeof(theta_b), typeof(response.f)}(
         Rb,
         theta_b,
-        bend_strength,
-        bend_strength_omega,
+        response.f,
         cov,
         normalize_breakpoints(breakpoints)
+    )
+end
+
+pair_response_callback(strength_K::Function, strength_Kω::Function) =
+    SourceResponseCallback((mode, x) -> (; Δβ = strength_K(x), dω = strength_Kω(x)))
+
+function BendSource(
+    Rb,
+    theta_b,
+    bend_strength::Function,
+    bend_strength_omega::Function = k2 -> 0.0;
+    coverage::Union{Nothing, Vector{Tuple{Float64, Float64}}} = nothing,
+    breakpoints::Vector{Float64} = Float64[]
+)
+    return BendSource(
+        Rb,
+        theta_b,
+        pair_response_callback(bend_strength, bend_strength_omega);
+        coverage = coverage,
+        breakpoints = breakpoints
     )
 end
 
@@ -141,28 +162,40 @@ function bend_components(src::BendSource, s::Real)
     return (kx = kx, ky = ky, k2 = kx * kx + ky * ky)
 end
 
-struct TwistSource{FDTW,FT,FTW} <: AbstractBirefringenceSource
+struct TwistSource{FDTW,FRESP} <: AbstractBirefringenceSource
     dtwist::FDTW
-    twist_strength::FT
-    twist_strength_omega::FTW
+    response::FRESP
     coverage::Vector{Tuple{Float64, Float64}}
     breakpoints::Vector{Float64}
 end
 
 function TwistSource(
     dtwist,
-    twist_strength,
-    twist_strength_omega = tau -> 0.0;
+    response::SourceResponseCallback;
     coverage::Union{Nothing, Vector{Tuple{Float64, Float64}}} = nothing,
     breakpoints::Vector{Float64} = Float64[]
 )
     cov = isnothing(coverage) ? coverage_segments_from_breaks(breakpoints) : copy(coverage)
-    return TwistSource{typeof(dtwist), typeof(twist_strength), typeof(twist_strength_omega)}(
+    return TwistSource{typeof(dtwist), typeof(response.f)}(
         dtwist,
-        twist_strength,
-        twist_strength_omega,
+        response.f,
         cov,
         normalize_breakpoints(breakpoints)
+    )
+end
+
+function TwistSource(
+    dtwist,
+    twist_strength::Function,
+    twist_strength_omega::Function = tau -> 0.0;
+    coverage::Union{Nothing, Vector{Tuple{Float64, Float64}}} = nothing,
+    breakpoints::Vector{Float64} = Float64[]
+)
+    return TwistSource(
+        dtwist,
+        pair_response_callback(twist_strength, twist_strength_omega);
+        coverage = coverage,
+        breakpoints = breakpoints
     )
 end
 
@@ -491,7 +524,7 @@ function generator_K_contribution(src::BendSource, s::Real)
         return zero_generator()
     end
 
-    Δβb = src.bend_strength(curv.k2)
+    Δβb = src.response(:value, curv.k2).Δβ
     c2φ = (curv.kx * curv.kx - curv.ky * curv.ky) / curv.k2
     s2φ = (2 * curv.kx * curv.ky) / curv.k2
     return ComplexF64[
@@ -506,7 +539,7 @@ function generator_Kω_contribution(src::BendSource, s::Real)
         return zero_generator()
     end
 
-    Δβbω = src.bend_strength_omega(curv.k2)
+    Δβbω = src.response(:spectral, curv.k2).dω
     c2φ = (curv.kx * curv.kx - curv.ky * curv.ky) / curv.k2
     s2φ = (2 * curv.kx * curv.ky) / curv.k2
     return ComplexF64[
@@ -517,7 +550,7 @@ end
 
 function generator_K_contribution(src::TwistSource, s::Real)
     tau = src.dtwist(s)
-    Δβt = src.twist_strength(tau)
+    Δβt = src.response(:value, tau).Δβ
     return ComplexF64[
          0.0 + 0.0im   -0.5 * Δβt
          0.5 * Δβt      0.0 + 0.0im
@@ -526,7 +559,7 @@ end
 
 function generator_Kω_contribution(src::TwistSource, s::Real)
     tau = src.dtwist(s)
-    Δβtω = src.twist_strength_omega(tau)
+    Δβtω = src.response(:spectral, tau).dω
     return ComplexF64[
          0.0 + 0.0im   -0.5 * Δβtω
          0.5 * Δβtω     0.0 + 0.0im

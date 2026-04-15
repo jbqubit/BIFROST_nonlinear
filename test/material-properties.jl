@@ -92,6 +92,13 @@ function unsupported_message(f)
     end
 end
 
+reference_dλ_dω(λ_meters) = -(λ_meters^2) / (2π * MATERIAL_LIGHT_SPEED_M_PER_S)
+
+function finite_difference_dω(f, λ_meters; dλ = 1e-12)
+    df_dλ = (f(λ_meters + dλ) - f(λ_meters - dλ)) / (2dλ)
+    return df_dλ * reference_dλ_dω(λ_meters)
+end
+
 @testset "Helper laws and constructors" begin
     poly = TemperaturePolynomial((1.0, 2.0, 3.0, 4.0, 5.0))
     @test poly(2.0) == 129.0
@@ -281,4 +288,24 @@ end
     @test_throws ArgumentError nonlinear_refractive_index(silica, 1550e-9, 0.0)
     @test_throws ArgumentError nonlinear_refractive_index(germania, 0.0, 297.15)
     @test_throws ArgumentError nonlinear_refractive_index(ge_glass, 1700.001e-9, 297.15)
+end
+
+@testset "Spectral responses" begin
+    λ = 1550e-9
+    T = 297.15
+
+    materials = (
+        SiO2(),
+        GeO2(),
+        GermaniaSilicaGlass(0.036),
+        FluorinatedSilicaGlass(0.01)
+    )
+
+    for material in materials
+        scalar = refractive_index(material, λ, T)
+        resp = refractive_index(WithDerivative(), material, λ, T)
+        @test resp isa SpectralResponse
+        @test resp.value ≈ scalar atol = 1e-14 rtol = 1e-14
+        @test resp.dω ≈ finite_difference_dω(λp -> refractive_index(material, λp, T), λ) atol = 1e-18 rtol = 1e-6
+    end
 end

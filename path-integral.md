@@ -229,6 +229,23 @@ The same source abstraction also carries the data needed for DGD. In addition to
   - the fiber loss calculation functionality needs to be fully isolated from the path-integral.jl techniques which rely on zero-loss assumptions
 
 
+# Julia techniques
+There are several programming techniques used in this codebase that are distinct to Julia (especially in contrast with python). 
+
+## multiple dispatch
+In python data and methods are combined in classes. In Julia data lives in structs and instead of many individually named methods, Julia uses a single method name and multiple dispatch. 
+
+Here's an example from material-properties.md. Where the single method call refractive_index() supports a) optionally returning $d\omega$ and b) different material types. Which is selected is entirely automatic (determined at compile-time).
+- `refractive_index(material::AbstractMaterial, λ_meters::Real, T_kelvin::Real) =
+    refractive_index(ValueOnly(), material, λ_meters, T_kelvin)`
+  - `refractive_index(::ValueOnly, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)`
+  - `refractive_index(::ValueOnly, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)`
+- `refractive_index(::WithDerivative, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)`
+- `refractive_index(::WithDerivative, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)`
+- plus others... for `material::GeO2` and `material::SiO2`
+
+
+
 # APPENDICES
 
 ## A1 Cayley–Hamilton

@@ -2,13 +2,17 @@
 Local optical properties of an ideal step-index fiber cross section.
 
 This file intentionally models only quantities that are meaningful for a single
-transverse slice of fiber of infinitesimal length. It excludes any property that depends on fiber
-length, path through space, accumulated phase, or concatenation of segments.
+transverse slice of fiber of infinitesimal length. It excludes any property
+that depends on fiber length, path through space, accumulated phase, or
+concatenation of segments.
 
 The baseline object is a circular step-index fiber cross section described by
 core/cladding materials and diameters. Perturbations such as core ellipticity,
 bending, axial tension, and twist are handled by separate functions with
 explicit arguments rather than stored on the type.
+
+NOTE: All the dω derivatives computed in this file are computed by ChatGPT-5.4 and have
+not been checked by a human.
 
 Example
 -------
@@ -40,13 +44,42 @@ const LP11_CUTOFF_V = 2.405
 const MARCUSE_V_MIN = 1.2
 const MARCUSE_V_MAX = 2.4
 
-struct FiberCrossSection
+struct FiberCrossSection{T<:Real}
     manufacturer::Union{Nothing, String}
     model_number::Union{Nothing, String}
     core_material::STEP_INDEX_GLASS
     cladding_material::STEP_INDEX_GLASS
-    core_diameter_m::Float64
-    cladding_diameter_m::Float64
+    core_diameter_m::T
+    cladding_diameter_m::T
+end
+
+struct CrossSectionState{T}
+    λ::T
+    ω::T
+    dλ_dω::T
+    core_radius::T
+    cladding_radius::T
+    k0::T
+    dk0_dω::T
+    n_core::T
+    dn_core_dω::T
+    n_clad::T
+    dn_clad_dω::T
+    na::T
+    dna_dω::T
+    V::T
+    dV_dω::T
+    waveguide_factor::T
+    dwaveguide_factor_dω::T
+    modal_prefactor::T
+    dmodal_prefactor_dω::T
+    β::T
+    dβ_dω::T
+end
+
+struct BirefringenceResponse{T}
+    Δβ::T
+    dω::T
 end
 
 function FiberCrossSection(
@@ -63,7 +96,8 @@ function FiberCrossSection(
         "core diameter must be smaller than cladding diameter"
     ))
 
-    return FiberCrossSection(
+    T = promote_type(typeof(core_diameter), typeof(cladding_diameter))
+    return FiberCrossSection{T}(
         isnothing(manufacturer) ? nothing : String(manufacturer),
         isnothing(model_number) ? nothing : String(model_number),
         core_material,
@@ -74,35 +108,35 @@ function FiberCrossSection(
 end
 
 function validate_positive_length(value::Real, name::AbstractString)
-    x = Float64(value)
-    if !(isfinite(x) && x > 0.0)
+    x = float(value)
+    if !(isfinite(x) && x > zero(x))
         throw(ArgumentError("$(name) must be a finite positive value in meters"))
     end
     return x
 end
 
 function validate_nonnegative(value::Real, name::AbstractString)
-    x = Float64(value)
-    if !(isfinite(x) && x >= 0.0)
+    x = float(value)
+    if !(isfinite(x) && x >= zero(x))
         throw(ArgumentError("$(name) must be a finite nonnegative value"))
     end
     return x
 end
 
 function validate_positive_finite(value::Real, name::AbstractString)
-    x = Float64(value)
-    if !(isfinite(x) && x > 0.0)
+    x = float(value)
+    if !(isfinite(x) && x > zero(x))
         throw(ArgumentError("$(name) must be a finite positive value"))
     end
     return x
 end
 
 function validate_bend_radius(bend_radius_m::Real)
-    R = Float64(bend_radius_m)
-    if isinf(R) && R > 0.0
+    R = float(bend_radius_m)
+    if isinf(R) && R > zero(R)
         return R
     end
-    if !(isfinite(R) && R > 0.0)
+    if !(isfinite(R) && R > zero(R))
         throw(ArgumentError(
             "bend_radius_m must be a finite positive value in meters or Inf"
         ))
@@ -111,8 +145,8 @@ function validate_bend_radius(bend_radius_m::Real)
 end
 
 function validate_axis_ratio(axis_ratio::Real)
-    ε = Float64(axis_ratio)
-    if !(isfinite(ε) && ε > 0.0)
+    ε = float(axis_ratio)
+    if !(isfinite(ε) && ε > zero(ε))
         throw(ArgumentError("axis_ratio must be a finite positive value"))
     end
     return ε
@@ -121,50 +155,207 @@ end
 core_radius(fiber::FiberCrossSection) = fiber.core_diameter_m / 2
 cladding_radius(fiber::FiberCrossSection) = fiber.cladding_diameter_m / 2
 
-function core_refractive_index(fiber::FiberCrossSection, λ_m::Real, T_K::Real)
-    return refractive_index(fiber.core_material, λ_m, T_K)
+function core_refractive_index(style::SpectralStyle, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    return refractive_index(style, fiber.core_material, λ_m, T_K)
 end
 
-function cladding_refractive_index(fiber::FiberCrossSection, λ_m::Real, T_K::Real)
-    return refractive_index(fiber.cladding_material, λ_m, T_K)
+core_refractive_index(fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    core_refractive_index(ValueOnly(), fiber, λ_m, T_K)
+
+function cladding_refractive_index(style::SpectralStyle, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    return refractive_index(style, fiber.cladding_material, λ_m, T_K)
 end
 
-function guided_refractive_indices(fiber::FiberCrossSection, λ_m::Real, T_K::Real)
-    n_core = core_refractive_index(fiber, λ_m, T_K)
-    n_clad = cladding_refractive_index(fiber, λ_m, T_K)
+cladding_refractive_index(fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    cladding_refractive_index(ValueOnly(), fiber, λ_m, T_K)
+
+function waveguide_factor(V)
+    α = one(V) + sqrt(one(V) + one(V))
+    t = (4 + V^4)^(one(V) / 4)
+    return α * V / (one(V) + t)
+end
+
+function waveguide_factor_prime(V)
+    α = one(V) + sqrt(one(V) + one(V))
+    t = (4 + V^4)^(one(V) / 4)
+    dt_dV = V^3 / (4 + V^4)^(3 * one(V) / 4)
+    den = one(V) + t
+    return α * (den - V * dt_dV) / den^2
+end
+
+function modal_prefactor(V)
+    α = one(V) + sqrt(one(V) + one(V))
+    den = one(V) + (4 + V^4)^(one(V) / 4)
+    return one(V) - α^2 / den^2
+end
+
+function modal_prefactor_prime(V)
+    α = one(V) + sqrt(one(V) + one(V))
+    t = (4 + V^4)^(one(V) / 4)
+    dt_dV = V^3 / (4 + V^4)^(3 * one(V) / 4)
+    den = one(V) + t
+    return 2 * α^2 * dt_dV / den^3
+end
+
+"""
+    cross_section_state()
+Cross-section state for a fiber at a given wavelength and temperature, including
+both values and derivatives of relevant properties. This is an internal type
+used to avoid redundant calculations across multiple functions that depend on the
+same intermediate quantities.
+"""
+function cross_section_state(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    λ = validate_model_wavelength(λ_m)
+    n_core = core_refractive_index(fiber, λ, T_K)
+    n_clad = cladding_refractive_index(fiber, λ, T_K)
     n_core > n_clad || throw(ArgumentError(
         "guided-mode calculations require n_core > n_cladding; got " *
         "n_core=$(n_core), n_cladding=$(n_clad)"
     ))
-    return n_core, n_clad
+
+    r_core = core_radius(fiber)
+    r_clad = cladding_radius(fiber)
+    k0 = 2π / λ
+    ω = k0 * SPEED_OF_LIGHT_M_PER_S
+    dλ_dω = -(λ^2) / (2π * SPEED_OF_LIGHT_M_PER_S)
+    dk0_dω = one(λ) / SPEED_OF_LIGHT_M_PER_S
+    na = sqrt(n_core^2 - n_clad^2)
+    V = r_core * k0 * na
+    g = waveguide_factor(V)
+    q = modal_prefactor(V)
+    β = sqrt((n_core^2) * k0^2 - g^2 / r_core^2)
+    z = zero(β)
+
+    return CrossSectionState(
+        λ, ω, dλ_dω,
+        r_core, r_clad,
+        k0, dk0_dω,
+        n_core, z,
+        n_clad, z,
+        na, z,
+        V, z,
+        g, z,
+        q, z,
+        β, z
+    )
 end
 
-function relative_index_difference(fiber::FiberCrossSection, λ_m::Real, T_K::Real)
-    n_core, n_clad = guided_refractive_indices(fiber, λ_m, T_K)
+function cross_section_state(::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    λ = validate_model_wavelength(λ_m)
+    n_core_resp = core_refractive_index(WithDerivative(), fiber, λ, T_K)
+    n_clad_resp = cladding_refractive_index(WithDerivative(), fiber, λ, T_K)
+    n_core = n_core_resp.value
+    n_clad = n_clad_resp.value
+    n_core > n_clad || throw(ArgumentError(
+        "guided-mode calculations require n_core > n_cladding; got " *
+        "n_core=$(n_core), n_cladding=$(n_clad)"
+    ))
+
+    r_core = core_radius(fiber)
+    r_clad = cladding_radius(fiber)
+    k0 = 2π / λ
+    ω = k0 * SPEED_OF_LIGHT_M_PER_S
+    dλ_dω = -(λ^2) / (2π * SPEED_OF_LIGHT_M_PER_S)
+    dk0_dω = one(λ) / SPEED_OF_LIGHT_M_PER_S
+    na = sqrt(n_core^2 - n_clad^2)
+    dna_dω = (n_core * n_core_resp.dω - n_clad * n_clad_resp.dω) / na
+    V = r_core * k0 * na
+    dV_dω = r_core * (dk0_dω * na + k0 * dna_dω)
+    g = waveguide_factor(V)
+    dg_dω = waveguide_factor_prime(V) * dV_dω
+    q = modal_prefactor(V)
+    dq_dω = modal_prefactor_prime(V) * dV_dω
+    β = sqrt((n_core^2) * k0^2 - g^2 / r_core^2)
+    dβ_inner_dω = 2 * n_core * n_core_resp.dω * k0^2 +
+                  2 * n_core^2 * k0 * dk0_dω -
+                  2 * g * dg_dω / r_core^2
+    dβ_dω = dβ_inner_dω / (2 * β)
+
+    return CrossSectionState(
+        λ, ω, dλ_dω,
+        r_core, r_clad,
+        k0, dk0_dω,
+        n_core, n_core_resp.dω,
+        n_clad, n_clad_resp.dω,
+        na, dna_dω,
+        V, dV_dω,
+        g, dg_dω,
+        q, dq_dω,
+        β, dβ_dω
+    )
+end
+
+function guided_refractive_indices(style::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    state = cross_section_state(style, fiber, λ_m, T_K)
+    return state.n_core, state.n_clad
+end
+
+function guided_refractive_indices(style::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    state = cross_section_state(style, fiber, λ_m, T_K)
+    return (
+        SpectralResponse(state.n_core, state.dn_core_dω),
+        SpectralResponse(state.n_clad, state.dn_clad_dω)
+    )
+end
+
+guided_refractive_indices(fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    guided_refractive_indices(ValueOnly(), fiber, λ_m, T_K)
+
+function relative_index_difference(style::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    n_core, n_clad = guided_refractive_indices(style, fiber, λ_m, T_K)
     return (n_core - n_clad) / n_clad
 end
 
-function numerical_aperture(fiber::FiberCrossSection, λ_m::Real, T_K::Real)
-    n_core, n_clad = guided_refractive_indices(fiber, λ_m, T_K)
-    return sqrt(n_core^2 - n_clad^2)
+relative_index_difference(fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    relative_index_difference(ValueOnly(), fiber, λ_m, T_K)
+
+numerical_aperture(style::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    cross_section_state(style, fiber, λ_m, T_K).na
+
+function numerical_aperture(style::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    state = cross_section_state(style, fiber, λ_m, T_K)
+    return SpectralResponse(state.na, state.dna_dω)
 end
 
-function normalized_frequency(fiber::FiberCrossSection, λ_m::Real, T_K::Real)
-    n_core, n_clad = guided_refractive_indices(fiber, λ_m, T_K)
-    return core_radius(fiber) * (2π / Float64(λ_m)) * sqrt(n_core^2 - n_clad^2)
+numerical_aperture(fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    numerical_aperture(ValueOnly(), fiber, λ_m, T_K)
+
+normalized_frequency(style::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    cross_section_state(style, fiber, λ_m, T_K).V
+
+function normalized_frequency(style::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    state = cross_section_state(style, fiber, λ_m, T_K)
+    return SpectralResponse(state.V, state.dV_dω)
 end
 
-function propagation_constant(fiber::FiberCrossSection, λ_m::Real, T_K::Real)
-    n_core, n_clad = guided_refractive_indices(fiber, λ_m, T_K)
-    r_core = core_radius(fiber)
-    v = normalized_frequency(fiber, λ_m, T_K)
-    k0 = 2π / Float64(λ_m)
-    waveguide_term = ((1 + sqrt(2)) * v) / (1 + (4 + v^4)^(1 / 4))
-    return sqrt((n_core^2) * k0^2 - (waveguide_term^2) / r_core^2)
+normalized_frequency(fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    normalized_frequency(ValueOnly(), fiber, λ_m, T_K)
+
+propagation_constant(style::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    cross_section_state(style, fiber, λ_m, T_K).β
+
+function propagation_constant(style::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    state = cross_section_state(style, fiber, λ_m, T_K)
+    return SpectralResponse(state.β, state.dβ_dω)
+end
+
+propagation_constant(fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    propagation_constant(ValueOnly(), fiber, λ_m, T_K)
+
+function effective_mode_index(style::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    state = cross_section_state(style, fiber, λ_m, T_K)
+    return state.β / state.k0
+end
+
+function effective_mode_index(style::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real)
+    state = cross_section_state(style, fiber, λ_m, T_K)
+    value = state.β / state.k0
+    dω = (state.dβ_dω * state.k0 - state.β * state.dk0_dω) / state.k0^2
+    return SpectralResponse(value, dω)
 end
 
 effective_mode_index(fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
-    propagation_constant(fiber, λ_m, T_K) / (2π / Float64(λ_m))
+    effective_mode_index(ValueOnly(), fiber, λ_m, T_K)
 
 function effective_group_index(
     fiber::FiberCrossSection,
@@ -172,7 +363,7 @@ function effective_group_index(
     T_K::Real;
     dλ::Real = 0.1e-9
 )
-    λ = Float64(λ_m)
+    λ = validate_model_wavelength(λ_m)
     step = validate_positive_finite(dλ, "dλ")
     n_center = effective_mode_index(fiber, λ, T_K)
     n_minus = effective_mode_index(fiber, λ - step, T_K)
@@ -197,12 +388,12 @@ function chromatic_dispersion_parameter(
     T_K::Real;
     dλ::Real = 0.1e-9
 )
-    λ = Float64(λ_m)
+    λ = validate_model_wavelength(λ_m)
     step = validate_positive_finite(dλ, "dλ")
     n_center = effective_mode_index(fiber, λ, T_K)
     n_minus = effective_mode_index(fiber, λ - step, T_K)
     n_plus = effective_mode_index(fiber, λ + step, T_K)
-    return -λ / SPEED_OF_LIGHT_M_PER_S * (n_plus - 2n_center + n_minus) / step^2 * 1e6
+    return -λ / SPEED_OF_LIGHT_M_PER_S * (n_plus - 2 * n_center + n_minus) / step^2 * 1e6
 end
 
 function group_velocity_dispersion_parameter(
@@ -212,26 +403,22 @@ function group_velocity_dispersion_parameter(
     dλ::Real = 0.1e-9
 )
     D_SI = chromatic_dispersion_parameter(fiber, λ_m, T_K; dλ = dλ) * 1e-6
-    return -(Float64(λ_m)^2 / (2π * SPEED_OF_LIGHT_M_PER_S)) * D_SI
+    λ = validate_model_wavelength(λ_m)
+    return -(λ^2 / (2π * SPEED_OF_LIGHT_M_PER_S)) * D_SI
 end
 
-function core_nonlinear_refractive_index(
-    fiber::FiberCrossSection,
-    λ_m::Real,
-    T_K::Real
-)
-    return nonlinear_refractive_index(fiber.core_material, λ_m, T_K)
-end
+core_nonlinear_refractive_index(fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    nonlinear_refractive_index(fiber.core_material, λ_m, T_K)
 
 function nonlinear_coefficient(fiber::FiberCrossSection, λ_m::Real, T_K::Real)
     n2 = core_nonlinear_refractive_index(fiber, λ_m, T_K)
     Aeff = effective_mode_area(fiber, λ_m, T_K)
-    return (2π / Float64(λ_m)) * n2 / Aeff
+    λ = validate_model_wavelength(λ_m)
+    return (2π / λ) * n2 / Aeff
 end
 
-function is_single_mode(fiber::FiberCrossSection, λ_m::Real, T_K::Real)
-    return normalized_frequency(fiber, λ_m, T_K) < LP11_CUTOFF_V
-end
+is_single_mode(fiber::FiberCrossSection, λ_m::Real, T_K::Real) =
+    normalized_frequency(fiber, λ_m, T_K) < LP11_CUTOFF_V
 
 function cutoff_wavelength(
     fiber::FiberCrossSection,
@@ -281,116 +468,260 @@ end
 
 function eccentricity_squared(axis_ratio::Real; signed::Bool = false)
     ε = validate_axis_ratio(axis_ratio)
-    if ε >= 1.0
-        return 1 - inv(ε)^2
+    if ε >= one(ε)
+        return one(ε) - inv(ε)^2
     end
-    value = 1 - ε^2
+    value = one(ε) - ε^2
     return signed ? -value : value
 end
 
-function core_noncircularity_birefringence(
-    fiber::FiberCrossSection,
-    λ_m::Real,
-    T_K::Real;
-    axis_ratio::Real
-)
-    validate_axis_ratio(axis_ratio) == 1.0 && return 0.0
-    n_core, n_clad = guided_refractive_indices(fiber, λ_m, T_K)
-    v = normalized_frequency(fiber, λ_m, T_K)
-    e2 = eccentricity_squared(axis_ratio; signed = true)
-    return (e2 * (1 - n_clad^2 / n_core^2)^(3 / 2)) / core_radius(fiber) *
-           (4 / v^3) * log(v)^3 / (1 + log(v))
+core_noncircularity_dω(style::SpectralStyle, fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real) =
+    core_noncircularity_dω(style, cross_section_state(style, fiber, λ_m, T_K); axis_ratio = axis_ratio)
+
+function core_noncircularity_dω(::SpectralStyle, state::CrossSectionState; axis_ratio::Real)
+    ε = validate_axis_ratio(axis_ratio)
+    ε == one(ε) && return BirefringenceResponse(zero(state.β), zero(state.β))
+    χ = one(state.n_core) - state.n_clad^2 / state.n_core^2
+    dχ_dω = -2 * state.n_clad * state.dn_clad_dω / state.n_core^2 +
+            2 * state.n_clad^2 * state.dn_core_dω / state.n_core^3
+    h = 4 * log(state.V)^3 / (state.V^3 * (one(state.V) + log(state.V)))
+    h_prime = h / state.V * (3 / log(state.V) - 3 - inv(one(state.V) + log(state.V)))
+    prefactor = eccentricity_squared(ε; signed = true) / state.core_radius
+    Δβ = prefactor * χ^(3 / 2) * h
+    dω = prefactor * ((3 / 2) * sqrt(χ) * dχ_dω * h + χ^(3 / 2) * h_prime * state.dV_dω)
+    return BirefringenceResponse(Δβ, dω)
 end
 
-function asymmetric_thermal_stress_birefringence(
+function asymmetric_thermal_stress_dω(
+    ::SpectralStyle,
     fiber::FiberCrossSection,
     λ_m::Real,
-    T_K::Real;
+    T_K::Real,
+    state::CrossSectionState;
     axis_ratio::Real
 )
     ε = validate_axis_ratio(axis_ratio)
-    ε == 1.0 && return 0.0
-    n_core, _ = guided_refractive_indices(fiber, λ_m, T_K)
-    β = propagation_constant(fiber, λ_m, T_K)
-    v = normalized_frequency(fiber, λ_m, T_K)
+    ε == one(ε) && return BirefringenceResponse(zero(state.β), zero(state.β))
     p11, p12 = photoelastic_constants(fiber.core_material, T_K)
     α_core = cte(fiber.core_material, T_K)
     α_clad = cte(fiber.cladding_material, T_K)
     T_soft = softening_temperature(fiber.core_material, T_K)
     ν = poisson_ratio(fiber.core_material, T_K)
-    k0 = 2π / Float64(λ_m)
-    prefactor = k0 * (1 - core_radius(fiber)^2 * (n_core^2 * k0^2 - β^2) / v^2)
-    stress_factor = 0.5 * n_core^3 * (p11 - p12) * (α_clad - α_core) *
-                    abs(T_soft - Float64(T_K)) / (1 - ν^2)
-    return prefactor * stress_factor * ((ε - 1) / (ε + 1))
+    const_factor = 0.5 * (p11 - p12) * (α_clad - α_core) * abs(T_soft - T_K) / (1 - ν^2) * ((ε - 1) / (ε + 1))
+    Δβ = state.k0 * state.modal_prefactor * state.n_core^3 * const_factor
+    dω = const_factor * (
+        state.dk0_dω * state.modal_prefactor * state.n_core^3 +
+        state.k0 * state.dmodal_prefactor_dω * state.n_core^3 +
+        state.k0 * state.modal_prefactor * 3 * state.n_core^2 * state.dn_core_dω
+    )
+    return BirefringenceResponse(Δβ, dω)
 end
 
-function bending_birefringence(
+asymmetric_thermal_stress_dω(style::SpectralStyle, fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real) =
+    asymmetric_thermal_stress_dω(style, fiber, λ_m, T_K, cross_section_state(style, fiber, λ_m, T_K); axis_ratio = axis_ratio)
+
+bending_dω(style::SpectralStyle, fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real) =
+    bending_dω(style, fiber, T_K, cross_section_state(style, fiber, λ_m, T_K); bend_radius_m = bend_radius_m)
+
+function bending_dω(
+    ::SpectralStyle,
     fiber::FiberCrossSection,
-    λ_m::Real,
-    T_K::Real;
+    T_K::Real,
+    state::CrossSectionState;
     bend_radius_m::Real
 )
     R = validate_bend_radius(bend_radius_m)
-    isinf(R) && return 0.0
-    n_core, _ = guided_refractive_indices(fiber, λ_m, T_K)
+    isinf(R) && return BirefringenceResponse(zero(state.β), zero(state.β))
     p11, p12 = photoelastic_constants(fiber.core_material, T_K)
     ν = poisson_ratio(fiber.core_material, T_K)
-    r = cladding_radius(fiber)
-    k0 = 2π / Float64(λ_m)
-    return k0 * (n_core^3 / 2) * (p11 - p12) * (1 + ν) * 0.5 * (r^2 / R^2)
+    geom = 0.5 * (state.cladding_radius^2 / R^2)
+    const_factor = (p11 - p12) * (1 + ν) * geom / 2
+    Δβ = state.k0 * state.n_core^3 * const_factor
+    dω = const_factor * (state.dk0_dω * state.n_core^3 + state.k0 * 3 * state.n_core^2 * state.dn_core_dω)
+    return BirefringenceResponse(Δβ, dω)
 end
 
-function axial_tension_birefringence(
+axial_tension_dω(style::SpectralStyle, fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real, axial_tension_N::Real) =
+    axial_tension_dω(style, fiber, T_K, cross_section_state(style, fiber, λ_m, T_K); bend_radius_m = bend_radius_m, axial_tension_N = axial_tension_N)
+
+function axial_tension_dω(
+    ::SpectralStyle,
     fiber::FiberCrossSection,
-    λ_m::Real,
-    T_K::Real;
+    T_K::Real,
+    state::CrossSectionState;
     bend_radius_m::Real,
     axial_tension_N::Real
 )
     R = validate_bend_radius(bend_radius_m)
     tf = validate_nonnegative(axial_tension_N, "axial_tension_N")
-    (isinf(R) || tf == 0.0) && return 0.0
+    (isinf(R) || tf == zero(tf)) && return BirefringenceResponse(zero(state.β), zero(state.β))
 
-    n_core, _ = guided_refractive_indices(fiber, λ_m, T_K)
     p11, p12 = photoelastic_constants(fiber.core_material, T_K)
     ν = poisson_ratio(fiber.core_material, T_K)
     E = youngs_modulus(fiber.core_material, T_K)
-    r = cladding_radius(fiber)
-    k0 = 2π / Float64(λ_m)
-    tension_term = ((2 - 3ν) / (1 - ν)) * (r / R) * (tf / (π * r^2 * E))
-    return k0 * (n_core^3 / 2) * (p11 - p12) * (1 + ν) * tension_term
+    geom = ((2 - 3 * ν) / (1 - ν)) * (state.cladding_radius / R) * (tf / (π * state.cladding_radius^2 * E))
+    const_factor = (p11 - p12) * (1 + ν) * geom / 2
+    Δβ = state.k0 * state.n_core^3 * const_factor
+    dω = const_factor * (state.dk0_dω * state.n_core^3 + state.k0 * 3 * state.n_core^2 * state.dn_core_dω)
+    return BirefringenceResponse(Δβ, dω)
 end
 
-function total_bending_birefringence(
+function total_bending_dω(
+    style::SpectralStyle,
     fiber::FiberCrossSection,
     λ_m::Real,
     T_K::Real;
     bend_radius_m::Real,
     axial_tension_N::Real = 0.0
 )
-    return bending_birefringence(fiber, λ_m, T_K; bend_radius_m = bend_radius_m) +
-           axial_tension_birefringence(
-               fiber,
-               λ_m,
-               T_K;
-               bend_radius_m = bend_radius_m,
-               axial_tension_N = axial_tension_N
-           )
+    bend = bending_dω(style, fiber, λ_m, T_K; bend_radius_m = bend_radius_m)
+    tension = axial_tension_dω(
+        style,
+        fiber,
+        λ_m,
+        T_K;
+        bend_radius_m = bend_radius_m,
+        axial_tension_N = axial_tension_N
+    )
+    return BirefringenceResponse(bend.Δβ + tension.Δβ, bend.dω + tension.dω)
 end
 
-function twisting_birefringence(
+twisting_dω(style::SpectralStyle, fiber::FiberCrossSection, λ_m::Real, T_K::Real; twist_rate_rad_per_m::Real) =
+    twisting_dω(style, fiber, T_K, cross_section_state(style, fiber, λ_m, T_K); twist_rate_rad_per_m = twist_rate_rad_per_m)
+
+function twisting_dω(
+    ::SpectralStyle,
+    fiber::FiberCrossSection,
+    T_K::Real,
+    state::CrossSectionState;
+    twist_rate_rad_per_m::Real
+)
+    tr = float(twist_rate_rad_per_m)
+    isfinite(tr) || throw(ArgumentError("twist_rate_rad_per_m must be finite"))
+    tr == zero(tr) && return BirefringenceResponse(zero(state.β), zero(state.β))
+    p11, p12 = photoelastic_constants(fiber.core_material, T_K)
+    coeff = (p11 - p12) / 2
+    Δβ = (one(state.n_core) + coeff * state.n_core^2) * tr
+    dω = 2 * coeff * state.n_core * state.dn_core_dω * tr
+    return BirefringenceResponse(Δβ, dω)
+end
+
+function total_birefringence_dω(
+    style::SpectralStyle,
     fiber::FiberCrossSection,
     λ_m::Real,
     T_K::Real;
-    twist_rate_rad_per_m::Real
+    axis_ratio::Real = 1.0,
+    bend_radius_m::Real = Inf,
+    axial_tension_N::Real = 0.0,
+    twist_rate_rad_per_m::Real = 0.0
 )
-    tr = Float64(twist_rate_rad_per_m)
-    isfinite(tr) || throw(ArgumentError("twist_rate_rad_per_m must be finite"))
-    tr == 0.0 && return 0.0
-    n_core, _ = guided_refractive_indices(fiber, λ_m, T_K)
-    p11, p12 = photoelastic_constants(fiber.core_material, T_K)
-    return (1 + (n_core^2 / 2) * (p11 - p12)) * tr
+    b_cnc = core_noncircularity_dω(style, fiber, λ_m, T_K; axis_ratio = axis_ratio)
+    b_ats = asymmetric_thermal_stress_dω(style, fiber, λ_m, T_K; axis_ratio = axis_ratio)
+    b_bend = total_bending_dω(
+        style,
+        fiber,
+        λ_m,
+        T_K;
+        bend_radius_m = bend_radius_m,
+        axial_tension_N = axial_tension_N
+    )
+    b_twist = twisting_dω(style, fiber, λ_m, T_K; twist_rate_rad_per_m = twist_rate_rad_per_m)
+    return BirefringenceResponse(
+        b_cnc.Δβ + b_ats.Δβ + b_bend.Δβ + b_twist.Δβ,
+        b_cnc.dω + b_ats.dω + b_bend.dω + b_twist.dω
+    )
 end
 
+core_noncircularity_birefringence(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real) =
+    core_noncircularity_dω(ValueOnly(), fiber, λ_m, T_K; axis_ratio = axis_ratio).Δβ
 
+core_noncircularity_birefringence(::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real) =
+    core_noncircularity_dω(WithDerivative(), fiber, λ_m, T_K; axis_ratio = axis_ratio)
+
+core_noncircularity_birefringence(fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real) =
+    core_noncircularity_birefringence(ValueOnly(), fiber, λ_m, T_K; axis_ratio = axis_ratio)
+
+asymmetric_thermal_stress_birefringence(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real) =
+    asymmetric_thermal_stress_dω(ValueOnly(), fiber, λ_m, T_K; axis_ratio = axis_ratio).Δβ
+
+asymmetric_thermal_stress_birefringence(::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real) =
+    asymmetric_thermal_stress_dω(WithDerivative(), fiber, λ_m, T_K; axis_ratio = axis_ratio)
+
+asymmetric_thermal_stress_birefringence(fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real) =
+    asymmetric_thermal_stress_birefringence(ValueOnly(), fiber, λ_m, T_K; axis_ratio = axis_ratio)
+
+bending_birefringence(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real) =
+    bending_dω(ValueOnly(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m).Δβ
+
+bending_birefringence(::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real) =
+    bending_dω(WithDerivative(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m)
+
+bending_birefringence(fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real) =
+    bending_birefringence(ValueOnly(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m)
+
+axial_tension_birefringence(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real, axial_tension_N::Real) =
+    axial_tension_dω(ValueOnly(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m, axial_tension_N = axial_tension_N).Δβ
+
+axial_tension_birefringence(::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real, axial_tension_N::Real) =
+    axial_tension_dω(WithDerivative(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m, axial_tension_N = axial_tension_N)
+
+axial_tension_birefringence(fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real, axial_tension_N::Real) =
+    axial_tension_birefringence(ValueOnly(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m, axial_tension_N = axial_tension_N)
+
+total_bending_birefringence(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real, axial_tension_N::Real = 0.0) =
+    total_bending_dω(ValueOnly(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m, axial_tension_N = axial_tension_N).Δβ
+
+total_bending_birefringence(::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real, axial_tension_N::Real = 0.0) =
+    total_bending_dω(WithDerivative(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m, axial_tension_N = axial_tension_N)
+
+total_bending_birefringence(fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real, axial_tension_N::Real = 0.0) =
+    total_bending_birefringence(ValueOnly(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m, axial_tension_N = axial_tension_N)
+
+twisting_birefringence(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real; twist_rate_rad_per_m::Real) =
+    twisting_dω(ValueOnly(), fiber, λ_m, T_K; twist_rate_rad_per_m = twist_rate_rad_per_m).Δβ
+
+twisting_birefringence(::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real; twist_rate_rad_per_m::Real) =
+    twisting_dω(WithDerivative(), fiber, λ_m, T_K; twist_rate_rad_per_m = twist_rate_rad_per_m)
+
+twisting_birefringence(fiber::FiberCrossSection, λ_m::Real, T_K::Real; twist_rate_rad_per_m::Real) =
+    twisting_birefringence(ValueOnly(), fiber, λ_m, T_K; twist_rate_rad_per_m = twist_rate_rad_per_m)
+
+function total_birefringence(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real = 1.0, bend_radius_m::Real = Inf, axial_tension_N::Real = 0.0, twist_rate_rad_per_m::Real = 0.0)
+    return total_birefringence_dω(
+        ValueOnly(),
+        fiber,
+        λ_m,
+        T_K;
+        axis_ratio = axis_ratio,
+        bend_radius_m = bend_radius_m,
+        axial_tension_N = axial_tension_N,
+        twist_rate_rad_per_m = twist_rate_rad_per_m
+    ).Δβ
+end
+
+function total_birefringence(::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real = 1.0, bend_radius_m::Real = Inf, axial_tension_N::Real = 0.0, twist_rate_rad_per_m::Real = 0.0)
+    return total_birefringence_dω(
+        WithDerivative(),
+        fiber,
+        λ_m,
+        T_K;
+        axis_ratio = axis_ratio,
+        bend_radius_m = bend_radius_m,
+        axial_tension_N = axial_tension_N,
+        twist_rate_rad_per_m = twist_rate_rad_per_m
+    )
+end
+
+function total_birefringence(fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real = 1.0, bend_radius_m::Real = Inf, axial_tension_N::Real = 0.0, twist_rate_rad_per_m::Real = 0.0)
+    return total_birefringence(
+        ValueOnly(),
+        fiber,
+        λ_m,
+        T_K;
+        axis_ratio = axis_ratio,
+        bend_radius_m = bend_radius_m,
+        axial_tension_N = axial_tension_N,
+        twist_rate_rad_per_m = twist_rate_rad_per_m
+    )
+end

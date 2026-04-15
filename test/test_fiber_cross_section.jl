@@ -129,6 +129,13 @@ function reference_twisting_birefringence(fiber, λ_m, T_K; twist_rate_rad_per_m
     return (1 + (n_core^2 / 2) * (p11 - p12)) * twist_rate_rad_per_m
 end
 
+reference_dλ_dω(λ_meters) = -(λ_meters^2) / (2π * TEST_C)
+
+function finite_difference_dω(f, λ_meters; dλ = 1e-12)
+    df_dλ = (f(λ_meters + dλ) - f(λ_meters - dλ)) / (2dλ)
+    return df_dλ * reference_dλ_dω(λ_meters)
+end
+
 const SMF_LIKE_FIBER = FiberCrossSection(
     GermaniaSilicaGlass(0.036),
     GermaniaSilicaGlass(0.0),
@@ -175,6 +182,38 @@ end
     @test normalized_frequency(fiber, λ_cutoff, T) ≈ TEST_V_CUTOFF atol = 1e-6
     @test !is_single_mode(fiber, λ_cutoff - 1e-9, T)
     @test is_single_mode(fiber, λ_cutoff + 1e-9, T)
+end
+
+@testset "FiberCrossSection spectral responses" begin
+    fiber = SMF_LIKE_FIBER
+    λ = 1550e-9
+    T = 297.15
+
+    n_resp = guided_refractive_indices(WithDerivative(), fiber, λ, T)
+    @test n_resp[1] isa SpectralResponse
+    @test n_resp[2] isa SpectralResponse
+    @test n_resp[1].value ≈ core_refractive_index(fiber, λ, T) atol = 1e-14
+    @test n_resp[2].value ≈ cladding_refractive_index(fiber, λ, T) atol = 1e-14
+
+    V_resp = normalized_frequency(WithDerivative(), fiber, λ, T)
+    β_resp = propagation_constant(WithDerivative(), fiber, λ, T)
+    neff_resp = effective_mode_index(WithDerivative(), fiber, λ, T)
+    @test V_resp.value ≈ normalized_frequency(fiber, λ, T) atol = 1e-14
+    @test β_resp.value ≈ propagation_constant(fiber, λ, T) atol = 1e-14
+    @test neff_resp.value ≈ effective_mode_index(fiber, λ, T) atol = 1e-14
+    @test V_resp.dω ≈ finite_difference_dω(λp -> normalized_frequency(fiber, λp, T), λ) atol = 1e-16 rtol = 1e-6
+    @test β_resp.dω ≈ finite_difference_dω(λp -> propagation_constant(fiber, λp, T), λ) atol = 1e-12 rtol = 1e-6
+    @test neff_resp.dω ≈ finite_difference_dω(λp -> effective_mode_index(fiber, λp, T), λ) atol = 1e-16 rtol = 1e-6
+
+    bend_resp = bending_birefringence(WithDerivative(), fiber, λ, T; bend_radius_m = 0.03)
+    twist_resp = twisting_birefringence(WithDerivative(), fiber, λ, T; twist_rate_rad_per_m = 0.7)
+    cnc_resp = core_noncircularity_birefringence(WithDerivative(), fiber, λ, T; axis_ratio = 1.01)
+    @test bend_resp.Δβ ≈ bending_birefringence(fiber, λ, T; bend_radius_m = 0.03) atol = 1e-14
+    @test twist_resp.Δβ ≈ twisting_birefringence(fiber, λ, T; twist_rate_rad_per_m = 0.7) atol = 1e-14
+    @test cnc_resp.Δβ ≈ core_noncircularity_birefringence(fiber, λ, T; axis_ratio = 1.01) atol = 1e-14
+    @test bend_resp.dω ≈ finite_difference_dω(λp -> bending_birefringence(fiber, λp, T; bend_radius_m = 0.03), λ) atol = 1e-18 rtol = 1e-6
+    @test twist_resp.dω ≈ finite_difference_dω(λp -> twisting_birefringence(fiber, λp, T; twist_rate_rad_per_m = 0.7), λ) atol = 1e-18 rtol = 1e-6
+    @test cnc_resp.dω ≈ finite_difference_dω(λp -> core_noncircularity_birefringence(fiber, λp, T; axis_ratio = 1.01), λ) atol = 1e-12 rtol = 1e-6
 end
 
 @testset "FiberCrossSection perturbation formulas and invariants" begin

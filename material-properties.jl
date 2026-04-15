@@ -17,6 +17,17 @@ cte_value = cte(glass, T)
 abstract type AbstractMaterial end
 abstract type AbstractTemperatureDependentSellmeier <: AbstractMaterial end
 abstract type AbstractBinarySilicaGlass <: AbstractMaterial end
+abstract type SpectralStyle end
+
+struct ValueOnly <: SpectralStyle end
+struct WithDerivative <: SpectralStyle end
+
+struct SpectralResponse{T}
+    value::T
+    dω::T
+end
+
+const MATERIAL_LIGHT_SPEED_M_PER_S = 299_792_458.0
 
 struct TemperaturePolynomial
     coeffs::NTuple{5, Float64}
@@ -27,9 +38,9 @@ function TemperaturePolynomial(coeffs::NTuple{5, <:Real})
 end
 
 function (poly::TemperaturePolynomial)(T_kelvin::Real)
-    T = Float64(T_kelvin)
-    value = 0.0
-    power = 1.0
+    T = float(T_kelvin)
+    value = zero(T)
+    power = one(T)
     for coeff in poly.coeffs
         value += coeff * power
         power *= T
@@ -155,7 +166,7 @@ sellmeier_terms(material::SiO2) = material.terms
 reference_sellmeier_terms(material::GeO2) = material.reference_terms
 
 function temperature_kelvin(T_kelvin::Real)
-    T = Float64(T_kelvin)
+    T = float(T_kelvin)
     if !(isfinite(T) && T > 0.0)
         throw(ArgumentError("temperature must be a finite positive value in kelvin"))
     end
@@ -169,10 +180,7 @@ const MIN_VALID_WAVELENGTH_M = 1300e-9
 const MAX_VALID_WAVELENGTH_M = 1700e-9
 
 function wavelength_microns(λ_meters::Real)
-    λ = Float64(λ_meters)
-    if !(isfinite(λ) && λ > 0.0)
-        throw(ArgumentError("wavelength must be a finite positive value in meters"))
-    end
+    λ = validate_model_wavelength(λ_meters)
     return λ * 1e6
 end
 
@@ -196,7 +204,7 @@ function validate_model_temperature(T_kelvin::Real)
 end
 
 function validate_model_wavelength(λ_meters::Real)
-    λ = Float64(λ_meters)
+    λ = float(λ_meters)
     if !(isfinite(λ) && λ > 0.0)
         throw(ArgumentError("wavelength must be a finite positive value in meters"))
     end
@@ -236,11 +244,28 @@ end
 function sellmeier_index_from_coefficients(coeffs, λ_meters::Real)
     λ_m = validate_model_wavelength(λ_meters)
     λ_um = wavelength_microns(λ_m)
-    total = 1.0
+    total = one(λ_um)
     for (B, C) in coeffs
         total += B * λ_um^2 / (λ_um^2 - C^2)
     end
     return sqrt(total)
+end
+
+function sellmeier_index_from_coefficients_dω(coeffs, λ_meters::Real)
+    λ_m = validate_model_wavelength(λ_meters)
+    λ_um = wavelength_microns(λ_m)
+    total = one(λ_um)
+    dtotal_dλm = zero(λ_um)
+    for (B, C) in coeffs
+        denom = λ_um^2 - C^2
+        total += B * λ_um^2 / denom
+        dterm_dλum = -2 * B * λ_um * C^2 / denom^2
+        dtotal_dλm += dterm_dλum * 1e6
+    end
+    n = sqrt(total)
+    dn_dλ = dtotal_dλm / (2 * n)
+    dλ_dω = -(λ_m^2) / (2π * MATERIAL_LIGHT_SPEED_M_PER_S)
+    return SpectralResponse(n, dn_dλ * dλ_dω)
 end
 
 function thermo_optic_index_shift(material::GeO2, T_kelvin::Real)
@@ -258,23 +283,56 @@ function reference_refractive_index(material::GeO2, λ_meters::Real, T_kelvin::R
     return n_ref + thermo_optic_index_shift(material, T)
 end
 
-function refractive_index(material::SiO2, λ_meters::Real, T_kelvin::Real)
+function reference_refractive_index(::WithDerivative, material::GeO2, λ_meters::Real, T_kelvin::Real)
+    T = validate_model_temperature(T_kelvin)
+    base_coeffs = map(term -> evaluate(term, T), reference_sellmeier_terms(material))
+    base = sellmeier_index_from_coefficients_dω(base_coeffs, λ_meters)
+    return SpectralResponse(base.value + thermo_optic_index_shift(material, T), base.dω)
+end
+
+function refractive_index(::ValueOnly, material::SiO2, λ_meters::Real, T_kelvin::Real)
     coeffs = sellmeier_coefficients(material, T_kelvin)
     return sellmeier_index_from_coefficients(coeffs, λ_meters)
 end
 
-refractive_index(material::GeO2, λ_meters::Real, T_kelvin::Real) = reference_refractive_index(material, λ_meters, T_kelvin)
+function refractive_index(::WithDerivative, material::SiO2, λ_meters::Real, T_kelvin::Real)
+    coeffs = sellmeier_coefficients(material, T_kelvin)
+    return sellmeier_index_from_coefficients_dω(coeffs, λ_meters)
+end
 
-function refractive_index(glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)
-    n_silica = refractive_index(PURE_SILICA, λ_meters, T_kelvin)
-    n_germania = refractive_index(PURE_GERMANIA, λ_meters, T_kelvin)
+refractive_index(style::ValueOnly, material::GeO2, λ_meters::Real, T_kelvin::Real) =
+    reference_refractive_index(material, λ_meters, T_kelvin)
+
+refractive_index(style::WithDerivative, material::GeO2, λ_meters::Real, T_kelvin::Real) =
+    reference_refractive_index(style, material, λ_meters, T_kelvin)
+
+function refractive_index(::ValueOnly, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)
+    n_silica = refractive_index(ValueOnly(), PURE_SILICA, λ_meters, T_kelvin)
+    n_germania = refractive_index(ValueOnly(), PURE_GERMANIA, λ_meters, T_kelvin)
     return interpolate_scalar(n_silica, n_germania, glass.x_ge)
 end
 
-function refractive_index(glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)
+function refractive_index(::WithDerivative, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)
+    n_silica = refractive_index(WithDerivative(), PURE_SILICA, λ_meters, T_kelvin)
+    n_germania = refractive_index(WithDerivative(), PURE_GERMANIA, λ_meters, T_kelvin)
+    return SpectralResponse(
+        interpolate_scalar(n_silica.value, n_germania.value, glass.x_ge),
+        interpolate_scalar(n_silica.dω, n_germania.dω, glass.x_ge)
+    )
+end
+
+function refractive_index(::ValueOnly, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)
     coeffs = fluorine_corrected_sellmeier_coefficients(glass, T_kelvin)
     return sellmeier_index_from_coefficients(coeffs, λ_meters)
 end
+
+function refractive_index(::WithDerivative, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)
+    coeffs = fluorine_corrected_sellmeier_coefficients(glass, T_kelvin)
+    return sellmeier_index_from_coefficients_dω(coeffs, λ_meters)
+end
+
+refractive_index(material::AbstractMaterial, λ_meters::Real, T_kelvin::Real) =
+    refractive_index(ValueOnly(), material, λ_meters, T_kelvin)
 
 cte(::SiO2, ::Real) = SILICA_CTE
 cte(::GeO2, ::Real) = GERMANIA_CTE
