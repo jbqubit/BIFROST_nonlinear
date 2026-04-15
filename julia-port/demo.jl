@@ -2,6 +2,14 @@ if !isdefined(Main, :propagate_fiber)
     include("path-integral.jl")
 end
 
+const DEMO_FIBER_CROSS_SECTION = FiberCrossSection(
+    GermaniaSilicaGlass(0.036),
+    GermaniaSilicaGlass(0.0),
+    8.2e-6,
+    125e-6;
+    manufacturer = "Corning",
+    model_number = "SMF-like demo"
+)
 
 """
     demofiber1()
@@ -20,7 +28,7 @@ function demofiber1()
     loop_angles = [0.0, π / 2, 0.0]
 
     total_length = lead_in + sum(2π .* loop_radii .* loop_turns) + 2 * spacer + lead_out
-    spec = FiberSpec(0.0, total_length)
+    spec = FiberSpec(0.0, total_length; cross_section = DEMO_FIBER_CROSS_SECTION)
 
     s = 0.0
     bend!(spec, s, s + lead_in; angle = 0.0, axis = loop_angles[1])
@@ -77,7 +85,7 @@ function demofiber2()
     loop_angles = [0.0, π / 3, 2π / 3, π / 6]
 
     total_length = lead_in + sum(2π .* loop_radii .* loop_turns) + 3 * spacer + lead_out
-    spec = FiberSpec(0.0, total_length)
+    spec = FiberSpec(0.0, total_length; cross_section = DEMO_FIBER_CROSS_SECTION)
 
     s = 0.0
     bend!(spec, s, s + lead_in; angle = 0.0, axis = loop_angles[1])

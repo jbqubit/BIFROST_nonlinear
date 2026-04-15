@@ -80,7 +80,7 @@ include("../demo.jl")
     @test !isempty(stats_demo_sens)
     @test isfinite(output_dgd(J_demo_sens, G_demo_sens))
 
-    spec = FiberSpec(0.0, 20.0)
+    spec = FiberSpec(0.0, 20.0; cross_section = DEMO_FIBER_CROSS_SECTION)
     twist!(spec, 0.0, 5.0; rate = 0.15)
     bend!(spec, 0.0, 2.0; angle = π / 2, axis = 0.0)
     bend!(spec, 2.0, 3.0; angle = 0.0, axis = 0.0)

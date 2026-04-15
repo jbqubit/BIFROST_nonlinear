@@ -6,6 +6,8 @@ This file has two layers.
 Authoring layer:
 - `FiberSpec`, `BendSegment`, and `TwistSegment` provide a readable way to
   build a fiber segment by segment on absolute `s`-intervals.
+- `FiberSpec` also holds a `FiberCrossSection` (step-index core/cladding model)
+  so the authored path is tied to a specific transverse fiber type.
 - `bend!`, `twist!`, and `build` compile that authored description into the
   lower-level runtime representation used by the solver in path-integral.jl.
 
@@ -25,12 +27,25 @@ Supporting functionality includes:
 - bend/twist diagnostic helpers used by plotting
 """
 
+if !isdefined(Main, :FiberCrossSection)
+    include("fiber-cross-section.jl")
+end
+
 # ----------------------------
 # Example Use
 # ----------------------------
 
 """
-spec = FiberSpec(0.0, 20.0)
+xs = FiberCrossSection(
+    GermaniaSilicaGlass(0.036),
+    GermaniaSilicaGlass(0.0),
+    8.2e-6,
+    125e-6;
+    manufacturer = "Corning",
+    model_number = "SMF-like"
+)
+
+spec = FiberSpec(0.0, 20.0; cross_section = xs)
 
 twist!(spec, 0.0, 5.0; rate = X15)
 
@@ -344,6 +359,7 @@ function TwistSegment(
 end
 
 mutable struct FiberSpec
+    cross_section::FiberCrossSection
     s_start::Float64
     s_end::Float64
     bend_segments::Vector{BendSegment}
@@ -357,12 +373,14 @@ end
 function FiberSpec(
     s_start::Real,
     s_end::Real;
+    cross_section::FiberCrossSection,
     default_bend_strength_K::Function = default_bend_strength_K,
     default_bend_strength_Kω::Function = default_bend_strength_Kω,
     default_twist_strength_K::Function = default_twist_strength_K,
     default_twist_strength_Kω::Function = default_twist_strength_Kω
 )
     return FiberSpec(
+        cross_section,
         Float64(s_start),
         Float64(s_end),
         BendSegment[],
