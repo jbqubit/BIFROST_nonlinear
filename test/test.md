@@ -5,7 +5,7 @@ It is intended to be self-sufficient and not to rely on any separate design-note
 
 The test entrypoint runs:
 
-- `test/fiber-path.jl`
+- `test/test_fiber_path.jl`
 - `test/test_path_integral_sources.jl`
 - `test/test_paddle_transfer.jl`
 - `test/test_dgd.jl`
@@ -50,7 +50,7 @@ $$
 
 implemented by `output_dgd(J, G)`.
 
-## `test/fiber-path.jl`
+## `test/test_fiber_path.jl`
 
 This file is the geometry-first test suite for the fiber path layer. It is discussed first because it validates the centerline construction that sits underneath the visualization and higher-level fiber infrastructure. These tests do not probe Jones propagation or DGD directly. They probe the geometric reconstruction returned by `sample_fiber_centerline`.
 
