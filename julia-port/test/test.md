@@ -1,14 +1,14 @@
 # Julia Unit-Test Guide
 
-This note explains the physical and numerical logic behind the Julia test suite in [`test/runtests.jl`](/Users/britton/shared/github/jbqubit/BIFROST_nonlinear/test/runtests.jl:1). It is written for a reader who wants to understand what each test means physically, what identity it is checking, and which Julia subroutines are being exercised.
+This note explains the physical and numerical logic behind the Julia test suite in [`runtests.jl`](runtests.jl). It is written for a reader who wants to understand what each test means physically, what identity it is checking, and which Julia subroutines are being exercised.
 It is intended to be self-sufficient and not to rely on any separate design-note file remaining in the repository.
 
 The test entrypoint runs:
 
-- `test/test_fiber_path.jl`
-- `test/test_path_integral_sources.jl`
-- `test/test_paddle_transfer.jl`
-- `test/test_dgd.jl`
+- `test_fiber_path.jl`
+- `test_path_integral_sources.jl`
+- `test_paddle_transfer.jl`
+- `test_dgd.jl`
 
 ## Governing equations
 
@@ -50,7 +50,7 @@ $$
 
 implemented by `output_dgd(J, G)`.
 
-## `test/test_fiber_path.jl`
+## `test_fiber_path.jl`
 
 This file is the geometry-first test suite for the fiber path layer. It is discussed first because it validates the centerline construction that sits underneath the visualization and higher-level fiber infrastructure. These tests do not probe Jones propagation or DGD directly. They probe the geometric reconstruction returned by `sample_fiber_centerline`.
 
@@ -288,7 +288,7 @@ The test asserts that the two endpoints are substantially different.
 Why this matters:
 geometry composition is noncommutative. Changing the order of rotated bend segments should change the final centerline.
 
-## `test/test_path_integral_sources.jl`
+## `test_path_integral_sources.jl`
 
 This file checks the basic source-based fiber abstraction and a few calibration points for the propagator.
 
@@ -427,7 +427,7 @@ This is not a sharp analytic test. It is a full-stack smoke test for the user-fa
 Subroutines exercised:
 `demofiber1`, `propagate_fiber`, `propagate_fiber_sensitivity`, `write_fiber_input_plot3d`
 
-## `test/test_paddle_transfer.jl`
+## `test_paddle_transfer.jl`
 
 This file tests the polarization-transfer-function part of the code using fiber paddles interpreted as ideal retarders.
 
@@ -560,7 +560,7 @@ The `5P-*` cases are long-composition regression tests:
 
 These are useful because small sign or ordering defects can accumulate and only become obvious in longer sequences.
 
-## `test/test_dgd.jl`
+## `test_dgd.jl`
 
 This file tests the DGD channel directly. It is the most analytic part of the suite.
 
