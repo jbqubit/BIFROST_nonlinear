@@ -194,8 +194,8 @@ Once you add the pair of equations (2)-(3), this becomes a coupled block system.
 
 At the API level, the important change is that $K_\omega(s)$ is now part of the source abstraction. Each source has a method for its $K(s)$ contribution and a second method for its $K_\omega(s)$ contribution. In code, those are `generator_K_contribution` and `generator_Kω_contribution`. Right now some source types may legitimately return the zero matrix for $K_\omega$ when their frequency dependence has not yet been modeled, but the interface is there and the DGD propagator always has a well-defined assembled $K_\omega(s)$ to use.
 
-# Example path-demo.jl
-`path-demo.jl` is just a thin driver on top of that stack. It builds a `Fiber` from a bend source and a twist source, then calls `propagate_fiber()` to get the final Jones matrix and per-interval stats. The demo no longer carries a separate manually maintained `breaks` array through the propagation API; the breakpoints are derived automatically from the fiber's sources.
+# Example demo.jl
+`demo.jl` is just a thin driver on top of that stack. It builds a `Fiber` from a bend source and a twist source, then calls `propagate_fiber()` to get the final Jones matrix and per-interval stats. The demo no longer carries a separate manually maintained `breaks` array through the propagation API; the breakpoints are derived automatically from the fiber's sources.
 
 
 ## Simplified physics encoded in the generator K(s)

@@ -17,10 +17,10 @@ using LinearAlgebra
 #     - propagate_piecewise_sensitivity
 #     - output_dgd
 #
-# path-plot.jl sits on top of that stack; it provides visual diagnostics.
+# fiber-path-plot.jl sits on top of that stack; it provides visual diagnostics.
 
 include("fiber-path.jl")
-include("path-plot.jl")
+include("fiber-path-plot.jl")
 
 # ----------------------------
 # One exponential-midpoint step

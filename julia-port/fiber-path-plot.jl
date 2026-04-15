@@ -235,7 +235,7 @@ end
 
 Build a renderable specification for a Poincare sphere with a graphical state vector.
 
-`rep` should be the output of [`poincare_vector_representation`](path-plot.jl).
+`rep` should be the output of [`poincare_vector_representation`](fiber-path-plot.jl).
 The returned named tuple contains the sphere surface, guide circles, the vector, the point,
 and any optional trail data, ready to be consumed by the HTML/Plotly renderer.
 """

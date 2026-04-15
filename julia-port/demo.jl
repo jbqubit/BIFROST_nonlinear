@@ -55,7 +55,7 @@ function demofiber1()
         fiber = build(spec),
         title = "Fiber polarization control paddles",
         input_state = ComplexF64[0.0 + 0.0im, 1.0 + 0.0im],
-        output = "fiberinput_paddles_3d.html",
+        output = "fiber-path-plot.html",
         n = 4001
     )
 end
@@ -121,7 +121,7 @@ function demofiber2()
         fiber = build(spec),
         title = "Four-loop twisted fiber controller",
         input_state = ComplexF64[inv(sqrt(2)) + 0.0im, 0.0 + inv(sqrt(2)) * im],
-        output = "fiberinput_fourloop_3d.html",
+        output = "fiber-path-plot.html",
         n = 4001
     )
 end

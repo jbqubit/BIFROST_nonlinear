@@ -1,7 +1,7 @@
 using Test
 using LinearAlgebra
 
-include("../path-demo.jl")
+include("../demo.jl")
 
 @testset "Fiber source API" begin
     bend = BendSource(
