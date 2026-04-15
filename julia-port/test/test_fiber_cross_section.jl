@@ -247,23 +247,6 @@ end
           -core_noncircularity_birefringence(fiber, λ, T; axis_ratio = ε) rtol = 1e-12
     @test asymmetric_thermal_stress_birefringence(fiber, λ, T; axis_ratio = inv(ε)) ≈
           -asymmetric_thermal_stress_birefringence(fiber, λ, T; axis_ratio = ε) rtol = 1e-12
-
-    @test total_bending_birefringence(fiber, λ, T; bend_radius_m = R, axial_tension_N = tf) ≈
-          bending_birefringence(fiber, λ, T; bend_radius_m = R) +
-          axial_tension_birefringence(fiber, λ, T; bend_radius_m = R, axial_tension_N = tf) atol = 1e-12
-    @test total_birefringence(
-              fiber,
-              λ,
-              T;
-              axis_ratio = ε,
-              bend_radius_m = R,
-              axial_tension_N = tf,
-              twist_rate_rad_per_m = tr
-          ) ≈
-          core_noncircularity_birefringence(fiber, λ, T; axis_ratio = ε) +
-          asymmetric_thermal_stress_birefringence(fiber, λ, T; axis_ratio = ε) +
-          total_bending_birefringence(fiber, λ, T; bend_radius_m = R, axial_tension_N = tf) +
-          twisting_birefringence(fiber, λ, T; twist_rate_rad_per_m = tr) atol = 1e-12
 end
 
 @testset "FiberCrossSection guided and fluorinated edge cases" begin
@@ -286,7 +269,17 @@ end
     )
 
     @test isfinite(normalized_frequency(fluorinated_cladding, λ, T))
-    @test total_birefringence(fluorinated_cladding, λ, T) == 0.0
+    @test core_noncircularity_birefringence(fluorinated_cladding, λ, T; axis_ratio = 1.0) +
+          asymmetric_thermal_stress_birefringence(fluorinated_cladding, λ, T; axis_ratio = 1.0) +
+          bending_birefringence(fluorinated_cladding, λ, T; bend_radius_m = Inf) +
+          axial_tension_birefringence(
+              fluorinated_cladding,
+              λ,
+              T;
+              bend_radius_m = Inf,
+              axial_tension_N = 0.0
+          ) +
+          twisting_birefringence(fluorinated_cladding, λ, T; twist_rate_rad_per_m = 0.0) == 0.0
     @test_throws ArgumentError asymmetric_thermal_stress_birefringence(
         fluorinated_cladding,
         λ,

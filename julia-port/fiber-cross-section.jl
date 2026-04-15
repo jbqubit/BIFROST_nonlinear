@@ -31,7 +31,8 @@ T = 297.15
 v = normalized_frequency(fiber, λ, T)
 β = propagation_constant(fiber, λ, T)
 Aeff = effective_mode_area(fiber, λ, T)
-Δβ_bend = total_bending_birefringence(fiber, λ, T; bend_radius_m = 0.03, axial_tension_N = 0.5)
+Δβ_bend = bending_birefringence(fiber, λ, T; bend_radius_m = 0.03) +
+    axial_tension_birefringence(fiber, λ, T; bend_radius_m = 0.03, axial_tension_N = 0.5)
 """
 
 if !isdefined(Main, :GermaniaSilicaGlass)
@@ -576,33 +577,6 @@ function twisting_dω(
     return BirefringenceResponse(Δβ, dω)
 end
 
-function total_birefringence_dω(
-    style::SpectralStyle,
-    fiber::FiberCrossSection,
-    λ_m::Real,
-    T_K::Real;
-    axis_ratio::Real = 1.0,
-    bend_radius_m::Real = Inf,
-    axial_tension_N::Real = 0.0,
-    twist_rate_rad_per_m::Real = 0.0
-)
-    b_cnc = core_noncircularity_dω(style, fiber, λ_m, T_K; axis_ratio = axis_ratio)
-    b_ats = asymmetric_thermal_stress_dω(style, fiber, λ_m, T_K; axis_ratio = axis_ratio)
-    b_bend = total_bending_dω(
-        style,
-        fiber,
-        λ_m,
-        T_K;
-        bend_radius_m = bend_radius_m,
-        axial_tension_N = axial_tension_N
-    )
-    b_twist = twisting_dω(style, fiber, λ_m, T_K; twist_rate_rad_per_m = twist_rate_rad_per_m)
-    return BirefringenceResponse(
-        b_cnc.Δβ + b_ats.Δβ + b_bend.Δβ + b_twist.Δβ,
-        b_cnc.dω + b_ats.dω + b_bend.dω + b_twist.dω
-    )
-end
-
 core_noncircularity_birefringence(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real) =
     core_noncircularity_dω(ValueOnly(), fiber, λ_m, T_K; axis_ratio = axis_ratio).Δβ
 
@@ -639,15 +613,6 @@ axial_tension_birefringence(::WithDerivative, fiber::FiberCrossSection, λ_m::Re
 axial_tension_birefringence(fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real, axial_tension_N::Real) =
     axial_tension_birefringence(ValueOnly(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m, axial_tension_N = axial_tension_N)
 
-total_bending_birefringence(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real, axial_tension_N::Real = 0.0) =
-    total_bending_dω(ValueOnly(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m, axial_tension_N = axial_tension_N).Δβ
-
-total_bending_birefringence(::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real, axial_tension_N::Real = 0.0) =
-    total_bending_dω(WithDerivative(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m, axial_tension_N = axial_tension_N)
-
-total_bending_birefringence(fiber::FiberCrossSection, λ_m::Real, T_K::Real; bend_radius_m::Real, axial_tension_N::Real = 0.0) =
-    total_bending_birefringence(ValueOnly(), fiber, λ_m, T_K; bend_radius_m = bend_radius_m, axial_tension_N = axial_tension_N)
-
 twisting_birefringence(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real; twist_rate_rad_per_m::Real) =
     twisting_dω(ValueOnly(), fiber, λ_m, T_K; twist_rate_rad_per_m = twist_rate_rad_per_m).Δβ
 
@@ -656,42 +621,3 @@ twisting_birefringence(::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T
 
 twisting_birefringence(fiber::FiberCrossSection, λ_m::Real, T_K::Real; twist_rate_rad_per_m::Real) =
     twisting_birefringence(ValueOnly(), fiber, λ_m, T_K; twist_rate_rad_per_m = twist_rate_rad_per_m)
-
-function total_birefringence(::ValueOnly, fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real = 1.0, bend_radius_m::Real = Inf, axial_tension_N::Real = 0.0, twist_rate_rad_per_m::Real = 0.0)
-    return total_birefringence_dω(
-        ValueOnly(),
-        fiber,
-        λ_m,
-        T_K;
-        axis_ratio = axis_ratio,
-        bend_radius_m = bend_radius_m,
-        axial_tension_N = axial_tension_N,
-        twist_rate_rad_per_m = twist_rate_rad_per_m
-    ).Δβ
-end
-
-function total_birefringence(::WithDerivative, fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real = 1.0, bend_radius_m::Real = Inf, axial_tension_N::Real = 0.0, twist_rate_rad_per_m::Real = 0.0)
-    return total_birefringence_dω(
-        WithDerivative(),
-        fiber,
-        λ_m,
-        T_K;
-        axis_ratio = axis_ratio,
-        bend_radius_m = bend_radius_m,
-        axial_tension_N = axial_tension_N,
-        twist_rate_rad_per_m = twist_rate_rad_per_m
-    )
-end
-
-function total_birefringence(fiber::FiberCrossSection, λ_m::Real, T_K::Real; axis_ratio::Real = 1.0, bend_radius_m::Real = Inf, axial_tension_N::Real = 0.0, twist_rate_rad_per_m::Real = 0.0)
-    return total_birefringence(
-        ValueOnly(),
-        fiber,
-        λ_m,
-        T_K;
-        axis_ratio = axis_ratio,
-        bend_radius_m = bend_radius_m,
-        axial_tension_N = axial_tension_N,
-        twist_rate_rad_per_m = twist_rate_rad_per_m
-    )
-end
