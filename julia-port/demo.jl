@@ -10,6 +10,8 @@ const DEMO_FIBER_CROSS_SECTION = FiberCrossSection(
     manufacturer = "Corning",
     model_number = "SMF-like demo"
 )
+const DEMO_λ_M = 1550e-9
+const DEMO_T_K = 297.15
 
 """
     demofiber1()
@@ -28,36 +30,36 @@ function demofiber1()
     loop_angles = [0.0, π / 2, 0.0]
 
     total_length = lead_in + sum(2π .* loop_radii .* loop_turns) + 2 * spacer + lead_out
-    spec = FiberSpec(0.0, total_length; cross_section = DEMO_FIBER_CROSS_SECTION)
+    spec = FiberSpec(0.0, total_length; cross_section = DEMO_FIBER_CROSS_SECTION, λ_m = DEMO_λ_M)
 
     s = 0.0
-    bend!(spec, s, s + lead_in; angle = 0.0, axis = loop_angles[1])
+    bend!(spec, s, s + lead_in; angle = 0.0, axis = loop_angles[1], T_K = DEMO_T_K)
     s += lead_in
 
     loop1_angle = 2π * loop_turns[1]
     loop1_length = loop_radii[1] * loop1_angle
-    bend!(spec, s, s + loop1_length; angle = loop1_angle, axis = loop_angles[1])
+    bend!(spec, s, s + loop1_length; angle = loop1_angle, axis = loop_angles[1], T_K = DEMO_T_K)
     s += loop1_length
 
-    bend!(spec, s, s + spacer; angle = 0.0, axis = loop_angles[1])
-    twist!(spec, s, s + spacer; rate = (loop_angles[2] - loop_angles[1]) / spacer)
+    bend!(spec, s, s + spacer; angle = 0.0, axis = loop_angles[1], T_K = DEMO_T_K)
+    twist!(spec, s, s + spacer; rate = (loop_angles[2] - loop_angles[1]) / spacer, T_K = DEMO_T_K)
     s += spacer
 
     loop2_angle = 2π * loop_turns[2]
     loop2_length = loop_radii[2] * loop2_angle
-    bend!(spec, s, s + loop2_length; angle = loop2_angle, axis = loop_angles[2])
+    bend!(spec, s, s + loop2_length; angle = loop2_angle, axis = loop_angles[2], T_K = DEMO_T_K)
     s += loop2_length
 
-    bend!(spec, s, s + spacer; angle = 0.0, axis = loop_angles[2])
-    twist!(spec, s, s + spacer; rate = (loop_angles[3] - loop_angles[2]) / spacer)
+    bend!(spec, s, s + spacer; angle = 0.0, axis = loop_angles[2], T_K = DEMO_T_K)
+    twist!(spec, s, s + spacer; rate = (loop_angles[3] - loop_angles[2]) / spacer, T_K = DEMO_T_K)
     s += spacer
 
     loop3_angle = 2π * loop_turns[3]
     loop3_length = loop_radii[3] * loop3_angle
-    bend!(spec, s, s + loop3_length; angle = loop3_angle, axis = loop_angles[3])
+    bend!(spec, s, s + loop3_length; angle = loop3_angle, axis = loop_angles[3], T_K = DEMO_T_K)
     s += loop3_length
 
-    bend!(spec, s, s + lead_out; angle = 0.0, axis = loop_angles[3])
+    bend!(spec, s, s + lead_out; angle = 0.0, axis = loop_angles[3], T_K = DEMO_T_K)
 
     return (
         fiber = build(spec),
@@ -85,45 +87,45 @@ function demofiber2()
     loop_angles = [0.0, π / 3, 2π / 3, π / 6]
 
     total_length = lead_in + sum(2π .* loop_radii .* loop_turns) + 3 * spacer + lead_out
-    spec = FiberSpec(0.0, total_length; cross_section = DEMO_FIBER_CROSS_SECTION)
+    spec = FiberSpec(0.0, total_length; cross_section = DEMO_FIBER_CROSS_SECTION, λ_m = DEMO_λ_M)
 
     s = 0.0
-    bend!(spec, s, s + lead_in; angle = 0.0, axis = loop_angles[1])
+    bend!(spec, s, s + lead_in; angle = 0.0, axis = loop_angles[1], T_K = DEMO_T_K)
     s += lead_in
 
     loop1_angle = 2π * loop_turns[1]
     loop1_length = loop_radii[1] * loop1_angle
-    bend!(spec, s, s + loop1_length; angle = loop1_angle, axis = loop_angles[1])
+    bend!(spec, s, s + loop1_length; angle = loop1_angle, axis = loop_angles[1], T_K = DEMO_T_K)
     s += loop1_length
 
-    bend!(spec, s, s + spacer; angle = 0.0, axis = loop_angles[1])
-    twist!(spec, s, s + spacer; rate = (loop_angles[2] - loop_angles[1]) / spacer)
+    bend!(spec, s, s + spacer; angle = 0.0, axis = loop_angles[1], T_K = DEMO_T_K)
+    twist!(spec, s, s + spacer; rate = (loop_angles[2] - loop_angles[1]) / spacer, T_K = DEMO_T_K)
     s += spacer
 
     loop2_angle = 2π * loop_turns[2]
     loop2_length = loop_radii[2] * loop2_angle
-    bend!(spec, s, s + loop2_length; angle = loop2_angle, axis = loop_angles[2])
+    bend!(spec, s, s + loop2_length; angle = loop2_angle, axis = loop_angles[2], T_K = DEMO_T_K)
     s += loop2_length
 
-    bend!(spec, s, s + spacer; angle = 0.0, axis = loop_angles[2])
-    twist!(spec, s, s + spacer; rate = (loop_angles[3] - loop_angles[2]) / spacer)
+    bend!(spec, s, s + spacer; angle = 0.0, axis = loop_angles[2], T_K = DEMO_T_K)
+    twist!(spec, s, s + spacer; rate = (loop_angles[3] - loop_angles[2]) / spacer, T_K = DEMO_T_K)
     s += spacer
 
     loop3_angle = 2π * loop_turns[3]
     loop3_length = loop_radii[3] * loop3_angle
-    bend!(spec, s, s + loop3_length; angle = loop3_angle, axis = loop_angles[3])
+    bend!(spec, s, s + loop3_length; angle = loop3_angle, axis = loop_angles[3], T_K = DEMO_T_K)
     s += loop3_length
 
-    bend!(spec, s, s + spacer; angle = 0.0, axis = loop_angles[3])
-    twist!(spec, s, s + spacer; rate = (loop_angles[4] - loop_angles[3]) / spacer)
+    bend!(spec, s, s + spacer; angle = 0.0, axis = loop_angles[3], T_K = DEMO_T_K)
+    twist!(spec, s, s + spacer; rate = (loop_angles[4] - loop_angles[3]) / spacer, T_K = DEMO_T_K)
     s += spacer
 
     loop4_angle = 2π * loop_turns[4]
     loop4_length = loop_radii[4] * loop4_angle
-    bend!(spec, s, s + loop4_length; angle = loop4_angle, axis = loop_angles[4])
+    bend!(spec, s, s + loop4_length; angle = loop4_angle, axis = loop_angles[4], T_K = DEMO_T_K)
     s += loop4_length
 
-    bend!(spec, s, s + lead_out; angle = 0.0, axis = loop_angles[4])
+    bend!(spec, s, s + lead_out; angle = 0.0, axis = loop_angles[4], T_K = DEMO_T_K)
 
     return (
         fiber = build(spec),
