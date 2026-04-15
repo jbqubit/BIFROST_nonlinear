@@ -539,26 +539,6 @@ function axial_tension_dω(
     return BirefringenceResponse(Δβ, dω)
 end
 
-function total_bending_dω(
-    style::SpectralStyle,
-    fiber::FiberCrossSection,
-    λ_m::Real,
-    T_K::Real;
-    bend_radius_m::Real,
-    axial_tension_N::Real = 0.0
-)
-    bend = bending_dω(style, fiber, λ_m, T_K; bend_radius_m = bend_radius_m)
-    tension = axial_tension_dω(
-        style,
-        fiber,
-        λ_m,
-        T_K;
-        bend_radius_m = bend_radius_m,
-        axial_tension_N = axial_tension_N
-    )
-    return BirefringenceResponse(bend.Δβ + tension.Δβ, bend.dω + tension.dω)
-end
-
 function twisting_dω(
     style::SpectralStyle,
     fiber::FiberCrossSection,
