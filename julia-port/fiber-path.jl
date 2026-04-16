@@ -47,33 +47,18 @@ xs = FiberCrossSection(
 
 spec = FiberSpec(0.0, 20.0; cross_section = xs, λ_m = 1550e-9)
 
-twist!(spec, 0.0, 5.0; rate = X15, T_K = 297.15)
+# Scalar arguments still work
+twist!(spec, 0.0, 5.0; T_K = 297.15, rate = 0.15)
+bend!(spec, 0.0, 2.0; T_K = 297.15, angle = π / 2, axis = 0.0)
 
-bend!(spec, 0.0, 2.0;
-    angle = π / 2,
-    axis = 0.0,
-    T_K = 297.15
-)
+# Function-valued profiles are evaluated continuously at runtime
+T_profile(s) = 296.0 + 0.15 * s
+twist_rate_profile(s) = 0.1 * cos(s / 6)
+bend_angle_profile(s) = (π / 4) * (0.8 + 0.2 * sin(s / 3))
+bend_axis_profile(s) = π / 8 + 0.1 * cos(s / 5)
 
-bend!(spec, 2.0, 3.0;
-    angle = 0.0,
-    axis = 0.0,
-    T_K = 297.15
-)
-
-twist!(spec, 5.0, 7.0; rate = X57, T_K = 297.15)
-
-bend!(spec, 3.0, 4.0;
-    angle = π / 4,
-    axis = π / 6,
-    T_K = 297.15
-)
-
-bend!(spec, 4.0, 7.0;
-    angle = 0.0,
-    axis = π / 6,
-    T_K = 297.15
-)
+twist!(spec, 5.0, 12.0; T_K = T_profile, rate = twist_rate_profile)
+bend!(spec, 12.0, 20.0; T_K = T_profile, angle = bend_angle_profile, axis = bend_axis_profile)
 
 fiber = build(spec)
 """
@@ -122,10 +107,13 @@ function normalize_breakpoints(breakpoints::Vector{Float64})
     return sort(unique(copy(breakpoints)))
 end
 
-struct BendSource{FR,FTH,FRESP} <: AbstractBirefringenceSource
+struct BendSource{FR,FTH,FTK,FRESP} <: AbstractBirefringenceSource
     Rb::FR
     theta_b::FTH
+    T_K::FTK
     response::FRESP
+    cross_section::Union{Nothing, FiberCrossSection}
+    λ_m::Float64
     coverage::Vector{Tuple{Float64, Float64}}
     breakpoints::Vector{Float64}
 end
@@ -134,14 +122,20 @@ function BendSource(
     Rb,
     theta_b,
     response::SourceResponseCallback;
+    T_K = _ -> 297.15,
+    cross_section::Union{Nothing, FiberCrossSection} = nothing,
+    λ_m::Real = NaN,
     coverage::Union{Nothing, Vector{Tuple{Float64, Float64}}} = nothing,
     breakpoints::Vector{Float64} = Float64[]
 )
     cov = isnothing(coverage) ? coverage_segments_from_breaks(breakpoints) : copy(coverage)
-    return BendSource{typeof(Rb), typeof(theta_b), typeof(response.f)}(
+    return BendSource{typeof(Rb), typeof(theta_b), typeof(T_K), typeof(response.f)}(
         Rb,
         theta_b,
+        T_K,
         response.f,
+        cross_section,
+        Float64(λ_m),
         cov,
         normalize_breakpoints(breakpoints)
     )
@@ -155,6 +149,9 @@ function BendSource(
     theta_b,
     bend_strength::Function,
     bend_strength_omega::Function = k2 -> 0.0;
+    T_K = _ -> 297.15,
+    cross_section::Union{Nothing, FiberCrossSection} = nothing,
+    λ_m::Real = NaN,
     coverage::Union{Nothing, Vector{Tuple{Float64, Float64}}} = nothing,
     breakpoints::Vector{Float64} = Float64[]
 )
@@ -162,6 +159,9 @@ function BendSource(
         Rb,
         theta_b,
         pair_response_callback(bend_strength, bend_strength_omega);
+        T_K = T_K,
+        cross_section = cross_section,
+        λ_m = λ_m,
         coverage = coverage,
         breakpoints = breakpoints
     )
@@ -181,9 +181,12 @@ function bend_components(src::BendSource, s::Real)
     return (kx = kx, ky = ky, k2 = kx * kx + ky * ky)
 end
 
-struct TwistSource{FDTW,FRESP} <: AbstractBirefringenceSource
+struct TwistSource{FDTW,FTK,FRESP} <: AbstractBirefringenceSource
     dtwist::FDTW
+    T_K::FTK
     response::FRESP
+    cross_section::Union{Nothing, FiberCrossSection}
+    λ_m::Float64
     coverage::Vector{Tuple{Float64, Float64}}
     breakpoints::Vector{Float64}
 end
@@ -191,13 +194,19 @@ end
 function TwistSource(
     dtwist,
     response::SourceResponseCallback;
+    T_K = _ -> 297.15,
+    cross_section::Union{Nothing, FiberCrossSection} = nothing,
+    λ_m::Real = NaN,
     coverage::Union{Nothing, Vector{Tuple{Float64, Float64}}} = nothing,
     breakpoints::Vector{Float64} = Float64[]
 )
     cov = isnothing(coverage) ? coverage_segments_from_breaks(breakpoints) : copy(coverage)
-    return TwistSource{typeof(dtwist), typeof(response.f)}(
+    return TwistSource{typeof(dtwist), typeof(T_K), typeof(response.f)}(
         dtwist,
+        T_K,
         response.f,
+        cross_section,
+        Float64(λ_m),
         cov,
         normalize_breakpoints(breakpoints)
     )
@@ -207,12 +216,18 @@ function TwistSource(
     dtwist,
     twist_strength::Function,
     twist_strength_omega::Function = tau -> 0.0;
+    T_K = _ -> 297.15,
+    cross_section::Union{Nothing, FiberCrossSection} = nothing,
+    λ_m::Real = NaN,
     coverage::Union{Nothing, Vector{Tuple{Float64, Float64}}} = nothing,
     breakpoints::Vector{Float64} = Float64[]
 )
     return TwistSource(
         dtwist,
         pair_response_callback(twist_strength, twist_strength_omega);
+        T_K = T_K,
+        cross_section = cross_section,
+        λ_m = λ_m,
         coverage = coverage,
         breakpoints = breakpoints
     )
@@ -308,95 +323,50 @@ end
 
 const DEFAULT_ZERO_SOURCE_T_K = 297.15
 
-function bend_strength_callbacks(
-    cross_section::FiberCrossSection,
-    λ_m::Float64,
-    T_K::Float64
-)
-    strength_K = function (k2)
-        k2f = Float64(k2)
-        if !(isfinite(k2f) && k2f > 0.0)
-            return 0.0
-        end
-        R = inv(sqrt(k2f))
-        return bending_birefringence(cross_section, λ_m, T_K; bend_radius_m = R)
-    end
-
-    strength_Kω = function (k2)
-        k2f = Float64(k2)
-        if !(isfinite(k2f) && k2f > 0.0)
-            return 0.0
-        end
-        R = inv(sqrt(k2f))
-        return bending_birefringence(WithDerivative(), cross_section, λ_m, T_K; bend_radius_m = R).dω
-    end
-    return strength_K, strength_Kω
-end
-
-function twist_strength_callbacks(
-    cross_section::FiberCrossSection,
-    λ_m::Float64,
-    T_K::Float64
-)
-    strength_K = tau -> twisting_birefringence(cross_section, λ_m, T_K; twist_rate_rad_per_m = tau)
-    strength_Kω = tau -> twisting_birefringence(WithDerivative(), cross_section, λ_m, T_K; twist_rate_rad_per_m = tau).dω
-    return strength_K, strength_Kω
-end
+as_constant_profile(x::Real) = (_ -> Float64(x))
 
 struct BendSegment
     s_start::Float64
     s_end::Float64
-    T_K::Float64
-    angle::Float64
-    axis::Float64
-    strength_K::Function
-    strength_Kω::Function
+    T_K::Function
+    angle::Function
+    axis::Function
 end
 
 function BendSegment(
     s_start::Real,
     s_end::Real;
-    T_K::Real,
-    angle::Real,
-    axis::Real,
-    strength_K::Function,
-    strength_Kω::Function
+    T_K::Function,
+    angle::Function,
+    axis::Function
 )
     return BendSegment(
         Float64(s_start),
         Float64(s_end),
-        Float64(T_K),
-        Float64(angle),
-        Float64(axis),
-        strength_K,
-        strength_Kω
+        T_K,
+        angle,
+        axis
     )
 end
 
 struct TwistSegment
     s_start::Float64
     s_end::Float64
-    T_K::Float64
-    rate::Float64
-    strength_K::Function
-    strength_Kω::Function
+    T_K::Function
+    rate::Function
 end
 
 function TwistSegment(
     s_start::Real,
     s_end::Real;
-    T_K::Real,
-    rate::Real,
-    strength_K::Function,
-    strength_Kω::Function
+    T_K::Function,
+    rate::Function
 )
     return TwistSegment(
         Float64(s_start),
         Float64(s_end),
-        Float64(T_K),
-        Float64(rate),
-        strength_K,
-        strength_Kω
+        T_K,
+        rate
     )
 end
 
@@ -429,12 +399,14 @@ function bend!(
     spec::FiberSpec,
     s_start::Real,
     s_end::Real;
-    T_K::Real,
-    angle::Real,
-    axis::Real
+    T_K,
+    angle,
+    axis
 )
-    sk, skω = bend_strength_callbacks(spec.cross_section, spec.λ_m, Float64(T_K))
-    push!(spec.bend_segments, BendSegment(s_start, s_end; T_K = T_K, angle = angle, axis = axis, strength_K = sk, strength_Kω = skω))
+    T_profile = T_K isa Function ? T_K : as_constant_profile(T_K)
+    angle_profile = angle isa Function ? angle : as_constant_profile(angle)
+    axis_profile = axis isa Function ? axis : as_constant_profile(axis)
+    push!(spec.bend_segments, BendSegment(s_start, s_end; T_K = T_profile, angle = angle_profile, axis = axis_profile))
     return spec
 end
 
@@ -442,11 +414,12 @@ function twist!(
     spec::FiberSpec,
     s_start::Real,
     s_end::Real;
-    T_K::Real,
-    rate::Real
+    T_K,
+    rate
 )
-    sk, skω = twist_strength_callbacks(spec.cross_section, spec.λ_m, Float64(T_K))
-    push!(spec.twist_segments, TwistSegment(s_start, s_end; T_K = T_K, rate = rate, strength_K = sk, strength_Kω = skω))
+    T_profile = T_K isa Function ? T_K : as_constant_profile(T_K)
+    rate_profile = rate isa Function ? rate : as_constant_profile(rate)
+    push!(spec.twist_segments, TwistSegment(s_start, s_end; T_K = T_profile, rate = rate_profile))
     return spec
 end
 
@@ -486,49 +459,47 @@ end
 
 function compile_bend_source(spec::FiberSpec, seg::BendSegment)
     breaks = segment_profile_breaks(spec.s_start, spec.s_end, seg.s_start, seg.s_end)
-    angle = seg.angle
-    axis = angle >= 0.0 ? seg.axis : seg.axis + π
-    active_radius = iszero(angle) ? Inf : (seg.s_end - seg.s_start) / abs(angle)
-    pieces_Rb = Function[]
-    pieces_theta = Function[]
-
-    for i in 1:length(breaks)-1
-        mid = 0.5 * (breaks[i] + breaks[i + 1])
-        if seg.s_start <= mid <= seg.s_end
-            push!(pieces_Rb, _ -> active_radius)
-            push!(pieces_theta, _ -> axis)
-        else
-            push!(pieces_Rb, _ -> Inf)
-            push!(pieces_theta, _ -> axis)
+    Rb_profile = function (s)
+        if seg.s_start <= s <= seg.s_end
+            angle = Float64(seg.angle(s))
+            return iszero(angle) ? Inf : (seg.s_end - seg.s_start) / abs(angle)
         end
+        return Inf
+    end
+    theta_profile = function (s)
+        angle = Float64(seg.angle(s))
+        axis = Float64(seg.axis(s))
+        return angle >= 0.0 ? axis : axis + π
     end
 
     return BendSource(
-        PiecewiseProfile(copy(breaks), copy(pieces_Rb)),
-        PiecewiseProfile(copy(breaks), copy(pieces_theta)),
-        seg.strength_K,
-        seg.strength_Kω;
+        Rb_profile,
+        theta_profile,
+        _ -> 0.0,
+        _ -> 0.0;
+        T_K = seg.T_K,
+        cross_section = spec.cross_section,
+        λ_m = spec.λ_m,
         breakpoints = copy(breaks)
     )
 end
 
 function compile_twist_source(spec::FiberSpec, seg::TwistSegment)
     breaks = segment_profile_breaks(spec.s_start, spec.s_end, seg.s_start, seg.s_end)
-    pieces_dtwist = Function[]
-
-    for i in 1:length(breaks)-1
-        mid = 0.5 * (breaks[i] + breaks[i + 1])
-        if seg.s_start <= mid <= seg.s_end
-            push!(pieces_dtwist, _ -> seg.rate)
-        else
-            push!(pieces_dtwist, _ -> 0.0)
+    dtwist_profile = function (s)
+        if seg.s_start <= s <= seg.s_end
+            return Float64(seg.rate(s))
         end
+        return 0.0
     end
 
     return TwistSource(
-        PiecewiseProfile(copy(breaks), copy(pieces_dtwist)),
-        seg.strength_K,
-        seg.strength_Kω;
+        dtwist_profile,
+        _ -> 0.0,
+        _ -> 0.0;
+        T_K = seg.T_K,
+        cross_section = spec.cross_section,
+        λ_m = spec.λ_m,
         breakpoints = copy(breaks)
     )
 end
@@ -541,14 +512,16 @@ function build(spec::FiberSpec)
 
     sources = AbstractBirefringenceSource[]
     if isempty(bends) && isempty(twists)
-        sk, skω = bend_strength_callbacks(spec.cross_section, spec.λ_m, DEFAULT_ZERO_SOURCE_T_K)
         push!(
             sources,
             BendSource(
                 _ -> Inf,
                 _ -> 0.0,
-                sk,
-                skω;
+                _ -> 0.0,
+                _ -> 0.0;
+                T_K = _ -> DEFAULT_ZERO_SOURCE_T_K,
+                cross_section = spec.cross_section,
+                λ_m = spec.λ_m,
                 coverage = [(spec.s_start, spec.s_end)],
                 breakpoints = [spec.s_start, spec.s_end]
             )
@@ -577,7 +550,13 @@ function generator_K_contribution(src::BendSource, s::Real)
         return zero_generator()
     end
 
-    Δβb = src.response(:value, curv.k2).Δβ
+    Δβb = if isnothing(src.cross_section)
+        src.response(:value, curv.k2).Δβ
+    else
+        T = Float64(src.T_K(s))
+        R = inv(sqrt(curv.k2))
+        bending_birefringence(src.cross_section, src.λ_m, T; bend_radius_m = R)
+    end
     c2φ = (curv.kx * curv.kx - curv.ky * curv.ky) / curv.k2
     s2φ = (2 * curv.kx * curv.ky) / curv.k2
     return ComplexF64[
@@ -592,7 +571,13 @@ function generator_Kω_contribution(src::BendSource, s::Real)
         return zero_generator()
     end
 
-    Δβbω = src.response(:spectral, curv.k2).dω
+    Δβbω = if isnothing(src.cross_section)
+        src.response(:spectral, curv.k2).dω
+    else
+        T = Float64(src.T_K(s))
+        R = inv(sqrt(curv.k2))
+        bending_birefringence(WithDerivative(), src.cross_section, src.λ_m, T; bend_radius_m = R).dω
+    end
     c2φ = (curv.kx * curv.kx - curv.ky * curv.ky) / curv.k2
     s2φ = (2 * curv.kx * curv.ky) / curv.k2
     return ComplexF64[
@@ -603,7 +588,12 @@ end
 
 function generator_K_contribution(src::TwistSource, s::Real)
     tau = src.dtwist(s)
-    Δβt = src.response(:value, tau).Δβ
+    Δβt = if isnothing(src.cross_section)
+        src.response(:value, tau).Δβ
+    else
+        T = Float64(src.T_K(s))
+        twisting_birefringence(src.cross_section, src.λ_m, T; twist_rate_rad_per_m = tau)
+    end
     return ComplexF64[
          0.0 + 0.0im   -0.5 * Δβt
          0.5 * Δβt      0.0 + 0.0im
@@ -612,7 +602,12 @@ end
 
 function generator_Kω_contribution(src::TwistSource, s::Real)
     tau = src.dtwist(s)
-    Δβtω = src.response(:spectral, tau).dω
+    Δβtω = if isnothing(src.cross_section)
+        src.response(:spectral, tau).dω
+    else
+        T = Float64(src.T_K(s))
+        twisting_birefringence(WithDerivative(), src.cross_section, src.λ_m, T; twist_rate_rad_per_m = tau).dω
+    end
     return ComplexF64[
          0.0 + 0.0im   -0.5 * Δβtω
          0.5 * Δβtω     0.0 + 0.0im

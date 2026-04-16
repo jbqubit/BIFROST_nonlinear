@@ -100,6 +100,22 @@ include("../demo.jl")
     @test bend_geometry(segment_fiber, 6.0).k2 ≈ 0.0
     @test size(propagate_fiber(segment_fiber; h_init = 1e-2)[1]) == (2, 2)
 
+    function_tk(s) = 295.0 + 0.2 * s
+    function_rate(s) = 0.05 * cos(s / 3)
+    function_angle(s) = (π / 3) * (0.8 + 0.2 * sin(s / 4))
+    function_axis(s) = π / 6 + 0.1 * cos(s / 5)
+
+    spec_fn = FiberSpec(0.0, 10.0; cross_section = DEMO_FIBER_CROSS_SECTION, λ_m = DEMO_λ_M)
+    twist!(spec_fn, 0.0, 10.0; T_K = function_tk, rate = function_rate)
+    bend!(spec_fn, 0.0, 10.0; T_K = function_tk, angle = function_angle, axis = function_axis)
+    fn_fiber = build(spec_fn)
+    @test isfinite(twist_rate(fn_fiber, 1.0))
+    @test isfinite(twist_rate(fn_fiber, 8.0))
+    @test twist_rate(fn_fiber, 1.0) != twist_rate(fn_fiber, 8.0)
+    @test isfinite(bend_geometry(fn_fiber, 2.0).k2)
+    @test isfinite(bend_geometry(fn_fiber, 7.0).k2)
+    @test size(propagate_fiber(fn_fiber; h_init = 1e-2)[1]) == (2, 2)
+
     plot_path = write_fiber_input_plot3d(
         demo.fiber,
         demo.fiber.s_start,
