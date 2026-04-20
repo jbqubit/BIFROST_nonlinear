@@ -1,9 +1,12 @@
 # BIFROST Architecture
 
-This document describes the high-level architecture of the repository, with emphasis on the Julia port used for modernized polarization-transfer and DGD simulation. 
+This document describes the high-level architecture of the repository, 
+with emphasis on the Julia port used for modernized polarization-transfer and 
+DGD simulation. 
 
 # structure
-This is the project file structure. This is a high level schematic. Do not update it to reflect the location of all files. 
+This is the project file structure. This is a high level schematic. Do not 
+update it to reflect the location of all files. 
 
 ```text
 .
@@ -25,16 +28,11 @@ This is the project file structure. This is a high level schematic. Do not updat
 │   ├── fiber-cross-section.jl       [10]
 │   ├── fiber-path.jl                [11]
 │   ├── path-integral.jl             [12]
+|   ├── path-geometry.jl
 │   ├── fiber-path-plot.jl           [13]
 │   ├── demo.jl                      [14]
 │   └── test                         [15]
-│       ├── runtests.jl
-│       ├── test_fiber_path.jl
-│       ├── test_material_properties.jl
-│       ├── test_fiber_cross_section.jl
-│       ├── test_paddle_transfer.jl
-│       ├── test_dgd.jl
-│       └── test_path_integral.jl
+│    
 └── *.py / *.jl supporting scripts
 ```
 
@@ -51,20 +49,25 @@ This is the project file structure. This is a high level schematic. Do not updat
 - [12] Adaptive propagation engine and DGD sensitivity solver.
 - [13] 3D geometry and visualization output pipeline.
 - [14] End-to-end runnable examples over composed fibers.
-- [15] Julia test harness and physics-oriented unit coverage.
+- [15] Julia tests.
 - [16] User guide for the julia port (for humans and agents).
-- [17] 
+- [17] TODO list for humans.
+
+Certain files must have no cross-dependencies.
+- path-geometry.jl
+- path-integral.jl
+- material-properties.jl
 
 ## Getting Started
 If you are a new agent working with this repository read the following.
 - AGENT.md
 - README.md is to be treated as user onboarding and system-level design.
 
-Do not read the following unless motivated by a workflow.
-- All the files marked [xL] as these are legacy files for the python. 
-
-Comment
-- The files marked [xL] are authoritative as regards physics. 
+Also
+- Do not read files marked [*L] unless motivated by a workflow as these are 
+legacy files for an old python version. 
+- The files marked [xL] are authoritative as regards physics and must never
+be modified. 
 
 ## Architectural Intent
 
@@ -76,9 +79,13 @@ solving** into distinct modules.
 
 ## Layered Design
 
+0. **Geometry layer**  (`path-geometry.jl`, `path-geometry-plot.jl`)
+    - `path-geometry.jl`  describes the shape of a 3D curve and its associated differential 
+    geometry.
+    - `path-geometry-plot.jl` supports visualization of path geometry in 3D.
+
 1. **Material layer** (`material-properties.jl`)
    - Encodes intrinsic optical material properties and optional spectral derivatives.
-   - No dependency on fiber-path assembly.
 
 2. **Cross-section layer** (`fiber-cross-section.jl`)
    - Encodes transverse step-index fiber geometry and local birefringence response laws.
@@ -87,7 +94,6 @@ solving** into distinct modules.
 3. **Fiber specification layer** (`fiber-path.jl`)
    - This layer considers 3D extrusions of the fiber cross-section specified in the 
      previous layer.
-   - Defines `FiberSpec`, `BendSegment`, `TwistSegment`, and compiled source types (`BendSource`, `TwistSource`).
    - Enforces coverage and breakpoint validity over fiber domain.
    - Assembles fiber-level `K(s)` and `Kω(s)` through source contribution composition.
 
@@ -101,6 +107,7 @@ solving** into distinct modules.
    - Demonstrates typical composition + propagation workflow.
 
 ## Runtime Flow
+
 0. See demo.jl as an example of how to setup a simluation. 
 1. Build a `FiberSpec` with domain, cross-section, and wavelength.
 2. Author bend/twist segments (`bend!`, `twist!`) with scalar or function-valued profiles.

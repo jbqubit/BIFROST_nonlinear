@@ -9,4 +9,6 @@
 
 ## Project Guidance
 
-See `AGENT.md` for project-specific guidance including test taxonomy, key invariants, and what requires user authorization. `AGENT.md` is the authoritative shared spec for all agents on this project.
+See `AGENT.md` for project-specific guidance including test taxonomy, 
+key invariants, and what requires user authorization. `AGENT.md` is the 
+authoritative shared spec for all agents on this project.

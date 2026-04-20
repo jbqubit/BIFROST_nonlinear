@@ -4,22 +4,17 @@
 
 Start here, then read ARCHITECTURE.md and README.md.
 - **Active code**: `julia-port/` — Julia refactor, all new work goes here.
-- **Legacy code**: `fibers.py` and `*.py` files — authoritative for physics, do not modify.
-- **Do not start TODO items** without explicit user authorization.
 
 ## Running Tests
-
-From a Julia REPL rooted at the repo:
-```julia
-include("julia-port/test/runtests.jl")
-```
 
 From the shell:
 ```bash
 julia julia-port/test/runtests.jl
 ```
 
-The test orchestrator is `julia-port/test/runtests.jl`. All test files live under `julia-port/test/`. The test for the path-integral solver (`test_path_integral.jl`) is a known work in progress.
+The test orchestrator is `julia-port/test/runtests.jl`. All test files live 
+under `julia-port/test/`. The test for the path-integral solver 
+(`test_path_integral.jl`) is a known work in progress.
 
 ## Test Taxonomy
 
@@ -101,3 +96,6 @@ The model is valid for:
 - Wavelength: 1–2 μm
 
 Mechanisms currently **not modeled**: cladding noncircularity, non-concentric core, external stress, electric/magnetic fields, polarization-dependent loss, nonlinear scattering.
+
+# Best practices 
+- When citing literature only use sources that you can verify in a library catalogue or database. 
