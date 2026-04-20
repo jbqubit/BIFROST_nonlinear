@@ -1,12 +1,12 @@
 # BIFROST Architecture
 
-This document describes the high-level architecture of the repository, 
-with emphasis on the Julia port used for modernized polarization-transfer and 
-DGD simulation. 
+This document describes the high-level architecture of the repository, with emphasis on
+the Julia port used for modernized polarization-transfer and DGD simulation.
 
 # structure
-This is the project file structure. This is a high level schematic. Do not 
-update it to reflect the location of all files. 
+
+This is the project file structure. This is a high level schematic. Do not update it to
+reflect the location of all files.
 
 ```text
 .
@@ -54,73 +54,90 @@ update it to reflect the location of all files.
 - [17] TODO list for humans.
 
 Certain files must have no cross-dependencies.
+
 - path-geometry.jl
 - path-integral.jl
 - material-properties.jl
 
 ## Getting Started
+
 If you are a new agent working with this repository read the following.
+
 - AGENT.md
 - README.md is to be treated as user onboarding and system-level design.
 
 Also
-- Do not read files marked [*L] unless motivated by a workflow as these are 
-legacy files for an old python version. 
-- The files marked [xL] are authoritative as regards physics and must never
-be modified. 
+
+- Do not read files marked [*L] unless motivated by a workflow as these are legacy files
+  for an old python version.
+- The files marked [xL] are authoritative as regards physics and must never be modified.
 
 ## Architectural Intent
 
 - Separate **physics modeling**, **material & artifact specifications** and **numerical
-solving** into distinct modules.
-- Keep propagation methods stable under non-commuting generator terms through Lie-group style exponential stepping.
-- Support continuous/function-valued fiber definitions instead of only fixed pre-sliced segment grids.
-- Make extensibility explicit: new birefringence mechanisms plug in as typed sources with shared contracts.
+  solving** into distinct modules.
+- Keep propagation methods stable under non-commuting generator terms through Lie-group
+  style exponential stepping.
+- Support continuous/function-valued fiber definitions instead of only fixed pre-sliced
+  segment grids.
+- Make extensibility explicit: new birefringence mechanisms plug in as typed sources with
+  shared contracts.
 
 ## Layered Design
 
 0. **Geometry layer**  (`path-geometry.jl`, `path-geometry-plot.jl`)
-    - `path-geometry.jl`  describes the shape of a 3D curve and its associated differential 
-    geometry.
+
+    - `path-geometry.jl`  describes the shape of a 3D curve and its associated
+      differential geometry.
     - `path-geometry-plot.jl` supports visualization of path geometry in 3D.
 
 1. **Material layer** (`material-properties.jl`)
+
    - Encodes intrinsic optical material properties and optional spectral derivatives.
 
 2. **Cross-section layer** (`fiber-cross-section.jl`)
+
    - Encodes transverse step-index fiber geometry and local birefringence response laws.
    - Bridges material properties into physically meaningful local response coefficients.
 
 3. **Fiber specification layer** (`fiber-path.jl`)
-   - This layer considers 3D extrusions of the fiber cross-section specified in the 
+
+   - This layer considers 3D extrusions of the fiber cross-section specified in the
      previous layer.
    - Enforces coverage and breakpoint validity over fiber domain.
    - Assembles fiber-level `K(s)` and `Kω(s)` through source contribution composition.
 
 4. **Propagation layer** (`path-integral.jl`)
+
    - Solves `dJ/ds = K(s)J` with adaptive step-doubling exponential midpoint integration.
    - Solves coupled sensitivity system for `G = ∂ωJ` and derives DGD from `J` and `G`.
-   - Uses breakpoint-aware interval decomposition to avoid integrating across discontinuities.
+   - Uses breakpoint-aware interval decomposition to avoid integrating across
+     discontinuities.
 
 5. **Presentation layer** (`fiber-path-plot.jl`, `demo.jl`)
+
    - Generates visual diagnostics and runnable examples.
    - Demonstrates typical composition + propagation workflow.
 
 ## Runtime Flow
 
-0. See demo.jl as an example of how to setup a simluation. 
+0. See demo.jl as an example of how to setup a simluation.
 1. Build a `FiberSpec` with domain, cross-section, and wavelength.
 2. Author bend/twist segments (`bend!`, `twist!`) with scalar or function-valued profiles.
 3. Compile to a `Fiber` (source objects + coverage + breakpoints).
-4. Propagate with `propagate_fiber` for Jones output or `propagate_fiber_sensitivity` for DGD.
+4. Propagate with `propagate_fiber` for Jones output or `propagate_fiber_sensitivity` for
+   DGD.
 5. Post-process outputs for diagnostics, plots, and regression checks.
 
 ## Contracts and Invariants
 
-- Each source must cover the full fiber domain; uncovered intervals are validation failures.
+- Each source must cover the full fiber domain; uncovered intervals are validation
+  failures.
 - Breakpoints are normalized and globally merged before piecewise propagation.
-- Numerical tolerances (`rtol`, `atol`, step controls) are explicit API inputs, not hidden globals.
-- Global phase-insensitive error metrics are used in adaptive acceptance checks for physically meaningful convergence behavior.
+- Numerical tolerances (`rtol`, `atol`, step controls) are explicit API inputs, not hidden
+  globals.
+- Global phase-insensitive error metrics are used in adaptive acceptance checks for
+  physically meaningful convergence behavior.
 
 ## Testing Strategy
 
@@ -130,22 +147,28 @@ solving** into distinct modules.
   - material/cross-section calculations,
   - propagation behavior and DGD computation,
   - paddle-like path construction.
-- Current status note: the committed test harness references `test_path_integral_sources.jl`, while ongoing work is transitioning toward `test_path_integral.jl`. Keep test wiring aligned as files evolve.
+- Current status note: the committed test harness references
+  `test_path_integral_sources.jl`, while ongoing work is transitioning toward
+  `test_path_integral.jl`. Keep test wiring aligned as files evolve.
 
 ## Extension Guidance
 
-- Add new birefringence mechanisms by introducing a new `AbstractBirefringenceSource` subtype plus:
+- Add new birefringence mechanisms by introducing a new `AbstractBirefringenceSource`
+  subtype plus:
   - `generator_K_contribution`,
   - `generator_Kω_contribution`,
   - coverage and breakpoint declarations.
 - Keep source logic pure and local; avoid coupling source behavior to solver internals.
-- Prefer adding validation tests for new source invariants before tuning solver parameters.
-- Preserve separation between lossless Jones propagation assumptions and any future loss/attenuation model.
+- Prefer adding validation tests for new source invariants before tuning solver
+  parameters.
+- Preserve separation between lossless Jones propagation assumptions and any future
+  loss/attenuation model.
 
 ## Operational Best Practices
 
 - Keep architecture docs schematic; avoid drifting into exhaustive file inventory.
-- When implementing a new feature hold off on updating docs, tests and interfaces 
-  until things have settled. 
-- When a feature looks to be settled ask the user if it is time to update docs, tests, and interfaces when changing source contracts or solver semantics.
+- When implementing a new feature hold off on updating docs, tests and interfaces until
+  things have settled.
+- When a feature looks to be settled ask the user if it is time to update docs, tests, and
+  interfaces when changing source contracts or solver semantics.
 - Favor deterministic demos and tests so numerical regressions are quickly detectable.
