@@ -2,7 +2,9 @@ using Test
 using LinearAlgebra
 
 if !isdefined(Main, :sample_fiber_centerline)
+    include("../fiber-path.jl")
     include("../path-integral.jl")
+    include("../fiber-path-plot.jl")
 end
 
 const CENTERLINE_ATOL = 5e-8

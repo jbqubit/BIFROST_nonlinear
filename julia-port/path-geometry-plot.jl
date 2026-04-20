@@ -17,7 +17,7 @@ Plotly CDN. It does not load or reference other `julia-port/` sources.
     PathGeometry.straight!(spec; length = 0.2)
     PathGeometry.bend!(spec; radius = 0.4, angle = π / 2)
     path = PathGeometry.build(spec)
-    write_path_geometry_plot3d(path, path.s_start, path.s_end; title = "Demo", output = "path.html")
+    write_path_geometry_plot3d(path, path.s_start, path.s_end; title = "Demo", fidelity = 1.0, output = "path.html")
 """
 
 using LinearAlgebra
@@ -39,65 +39,29 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    sample_path_for_plot(path::PathGeometry.Path, s1, s2; n = 801)
+    _expand(ps::PathGeometry.PathSample) → NamedTuple
 
-Dense samples of position, Frenet frame, curvature, and torsions on `[s1, s2]`,
-for plotting and for embedding in generated HTML.
+Unpack a `PathSample` into the flat named arrays expected by the HTML template.
 """
-function sample_path_for_plot(path::PathGeometry.Path, s1::Real, s2::Real; n::Int = 801)
-    @assert s2 > s1 "sample_path_for_plot: require s2 > s1"
-    @assert n >= 2 "sample_path_for_plot: need at least two sample points"
-
-    ss = collect(range(Float64(s1), Float64(s2); length = n))
-    x = zeros(Float64, n)
-    y = zeros(Float64, n)
-    z = zeros(Float64, n)
-    tx = zeros(Float64, n)
-    ty = zeros(Float64, n)
-    tz = zeros(Float64, n)
-    nx = zeros(Float64, n)
-    ny = zeros(Float64, n)
-    nz = zeros(Float64, n)
-    bx = zeros(Float64, n)
-    by = zeros(Float64, n)
-    bz = zeros(Float64, n)
-    kappa = zeros(Float64, n)
-    tau_geom = zeros(Float64, n)
-    tau_mat = zeros(Float64, n)
-
-    for i in eachindex(ss)
-        fr = PathGeometry.frame(path, ss[i])
-        p = fr.position
-        x[i], y[i], z[i] = p[1], p[2], p[3]
-        T = fr.tangent
-        N = fr.normal
-        B = fr.binormal
-        tx[i], ty[i], tz[i] = T[1], T[2], T[3]
-        nx[i], ny[i], nz[i] = N[1], N[2], N[3]
-        bx[i], by[i], bz[i] = B[1], B[2], B[3]
-        kappa[i] = fr.curvature
-        tau_geom[i] = fr.geometric_torsion
-        tau_mat[i] = fr.material_twist
-    end
-
-    return (;
-        s = ss,
-        x,
-        y,
-        z,
-        tx,
-        ty,
-        tz,
-        nx,
-        ny,
-        nz,
-        bx,
-        by,
-        bz,
-        kappa,
-        tau_geom,
-        tau_mat
-    )
+function _expand(ps::PathGeometry.PathSample)
+    n = ps.n
+    s        = [smpl.s                    for smpl in ps.samples]
+    x        = [smpl.position[1]          for smpl in ps.samples]
+    y        = [smpl.position[2]          for smpl in ps.samples]
+    z        = [smpl.position[3]          for smpl in ps.samples]
+    tx       = [smpl.tangent[1]           for smpl in ps.samples]
+    ty       = [smpl.tangent[2]           for smpl in ps.samples]
+    tz       = [smpl.tangent[3]           for smpl in ps.samples]
+    nx       = [smpl.normal[1]            for smpl in ps.samples]
+    ny       = [smpl.normal[2]            for smpl in ps.samples]
+    nz       = [smpl.normal[3]            for smpl in ps.samples]
+    bx       = [smpl.binormal[1]          for smpl in ps.samples]
+    by       = [smpl.binormal[2]          for smpl in ps.samples]
+    bz       = [smpl.binormal[3]          for smpl in ps.samples]
+    kappa    = [smpl.curvature            for smpl in ps.samples]
+    tau_geom = [smpl.geometric_torsion    for smpl in ps.samples]
+    tau_mat  = [smpl.material_twist       for smpl in ps.samples]
+    return (; s, x, y, z, tx, ty, tz, nx, ny, nz, bx, by, bz, kappa, tau_geom, tau_mat)
 end
 
 # ---------------------------------------------------------------------------
@@ -125,7 +89,7 @@ function _js_string_array(xs::AbstractVector{<:AbstractString})
 end
 
 """
-    write_path_geometry_plot3d(path::PathGeometry.Path, s1, s2; n, output, title, plane_extent_frac, axis_extent_frac, twist_n_quad)
+    write_path_geometry_plot3d(path::PathGeometry.Path, s1, s2; fidelity, output, title, plane_extent_frac, axis_extent_frac, twist_n_quad)
 
 Write a standalone Plotly HTML file. Horizontal mouse position (without a mouse button pressed)
 scrubs the arc-length parameter; the transverse plane and frame axes update accordingly.
@@ -154,19 +118,20 @@ function write_path_geometry_plot3d(
     path::PathGeometry.Path,
     s1::Real,
     s2::Real;
-    n::Int = 801,
+    fidelity::Float64 = 3.0,
     output::AbstractString = "path_geometry_3d.html",
     title::AbstractString = "Path geometry",
     plane_extent_frac::Float64 = 0.08,
     axis_extent_frac::Float64 = 0.06,
     twist_n_quad::Int = 128,
 )
-    samples = sample_path_for_plot(path, s1, s2; n = n)
+    path_sample = PathGeometry.sample_path(path, s1, s2; fidelity = fidelity)
+    samples = _expand(path_sample)
     xs = samples.x
     ys = samples.y
     zs = samples.z
 
-    bb = PathGeometry.bounding_box(path; n = max(n, 512))
+    bb = PathGeometry.bounding_box(path; n = max(path_sample.n, 512))
     lo = Vector{Float64}(bb.lo)
     hi = Vector{Float64}(bb.hi)
     lo = min.(lo, [minimum(xs), minimum(ys), minimum(zs)])

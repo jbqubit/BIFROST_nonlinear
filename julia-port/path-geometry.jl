@@ -963,6 +963,190 @@ end
 # Sampling
 # -----------------------------------------------------------------------
 
+"""
+    Sample
+
+One evaluated point on a `Path`: arc-length coordinate `s` plus all Frenet frame quantities.
+
+Fields: `s`, `position`, `tangent`, `normal`, `binormal`, `curvature`,
+`geometric_torsion`, `material_twist`.
+"""
+struct Sample
+    s                 :: Float64
+    position          :: Vector{Float64}
+    tangent           :: Vector{Float64}
+    normal            :: Vector{Float64}
+    binormal          :: Vector{Float64}
+    curvature         :: Float64
+    geometric_torsion :: Float64
+    material_twist    :: Float64
+end
+
+"""
+    PathSample
+
+Dense samples of a `Path` over `[s_start, s_end]`.
+
+Fields:
+- `samples :: Vector{Sample}` — one entry per arc-length station.
+- `s_start`, `s_end` — the arc-length interval that was sampled.
+- `n` — number of sample points.
+"""
+struct PathSample
+    samples :: Vector{Sample}
+    s_start :: Float64
+    s_end   :: Float64
+    n       :: Int
+end
+
+"""
+    _segment_total_angle(seg) → Float64
+
+Total angle (rad) swept by the tangent vector along `seg`. This is the geometric
+quantity that governs how many sample points a segment needs.
+
+- `BendSegment`:     the literal swept arc angle.
+- `CatenarySegment`: `arctan(L_eff / a_eff)`, the angle from the vertical entry
+  tangent to the exit tangent.
+- `HelixSegment`:    `turns · 2π` — each full turn is 2π of tangent rotation.
+- `StraightSegment` and connectors: 0 (no tangent rotation).
+"""
+function _segment_total_angle(seg::BendSegment)
+    return abs(seg.angle)
+end
+
+function _segment_total_angle(seg::CatenarySegment)
+    L_eff = arc_length(seg)
+    a_eff = seg.a * seg.shrinkage
+    return atan(L_eff / a_eff)
+end
+
+function _segment_total_angle(seg::HelixSegment)
+    return seg.turns * 2π
+end
+
+_segment_total_angle(::AbstractPathSegment) = 0.0
+
+"""
+    _segment_point_budget(ps, path, s_lo, s_hi, fidelity) → Int
+
+Adaptive point budget for the portion of `PlacedSegment` `ps` that falls within
+`[s_lo, s_hi]`.
+
+Geometric rule (applied to the clipped fraction of the segment):
+  `ceil(fidelity · total_angle / (2π) · 32)`, minimum 2.
+
+Twist rule: compute `|∫ τ_mat ds|` over the same interval using
+`total_material_twist` at `n_quad = 32`, then apply the same formula with
+that integrated angle.
+
+The point budget is the maximum of the two rules.
+"""
+function _segment_point_budget(
+    ps::PlacedSegment,
+    path::Path,
+    s_lo::Float64,
+    s_hi::Float64,
+    fidelity::Float64,
+)
+    seg = ps.segment
+    seg_s_start = ps.s_offset_eff
+    seg_s_end   = ps.s_offset_eff + arc_length(seg)
+
+    # Clipped interval for this segment
+    a = max(s_lo, seg_s_start)
+    b = min(s_hi, seg_s_end)
+    b <= a && return 2
+
+    # Fraction of the segment that is sampled
+    seg_len = seg_s_end - seg_s_start
+    frac = seg_len > 0.0 ? (b - a) / seg_len : 1.0
+
+    # Geometric budget
+    geom_angle  = _segment_total_angle(seg) * frac
+    geom_budget = max(2, ceil(Int, fidelity * geom_angle / (2π) * 32))
+
+    # Twist budget: exact integral of material twist rate over [a, b]
+    twist_angle  = abs(total_material_twist(path; s_start = a, s_end = b, n_quad = 32))
+    twist_budget = max(2, ceil(Int, fidelity * twist_angle / (2π) * 32))
+
+    return max(geom_budget, twist_budget)
+end
+
+"""
+    sample_path(path, s1, s2; fidelity = 1.0) → PathSample
+
+Sample `path` over `[s1, s2]` with an adaptive point distribution driven by `fidelity`.
+
+Points are allocated per segment using the heuristic:
+
+    n_seg = max(geometric_budget, twist_budget)
+
+where each budget is `ceil(fidelity · Δφ / (2π) · 32)` (minimum 2), with:
+
+- **geometric**: `Δφ` = total tangent-rotation angle of the segment (bend angle,
+  catenary turning angle, or `turns·2π` for a helix; 0 for straight segments).
+- **twist**: `|∫ τ_mat ds|` over the segment's portion of `[s1, s2]`, computed
+  via exact quadrature.
+
+`fidelity = 1.0` gives ~32 points per full 2π of rotation or twist. Straight
+segments with no twist get 2 points (endpoints only). Junction points between
+segments are always included and shared (no duplicates).
+"""
+function sample_path(path::Path, s1::Real, s2::Real; fidelity::Float64 = 1.0)
+    @assert s2 > s1    "sample_path: require s2 > s1"
+    @assert fidelity > 0.0 "sample_path: fidelity must be positive"
+
+    s_lo = Float64(s1)
+    s_hi = Float64(s2)
+
+    # Collect arc-length stations segment by segment, sharing junction points.
+    all_s = Float64[]
+    for ps in path.placed_segments
+        seg_s_start = ps.s_offset_eff
+        seg_s_end   = ps.s_offset_eff + arc_length(ps.segment)
+
+        a = max(s_lo, seg_s_start)
+        b = min(s_hi, seg_s_end)
+        b <= a && continue
+
+        n_seg = _segment_point_budget(ps, path, s_lo, s_hi, fidelity)
+        seg_ss = collect(range(a, b; length = n_seg))
+
+        if isempty(all_s)
+            append!(all_s, seg_ss)
+        else
+            # Drop the first point if it duplicates the last accumulated point.
+            start_idx = (seg_ss[1] ≈ all_s[end]) ? 2 : 1
+            append!(all_s, @view seg_ss[start_idx:end])
+        end
+    end
+
+    # Guarantee at least the two endpoints even for degenerate paths.
+    if isempty(all_s)
+        all_s = [s_lo, s_hi]
+    elseif length(all_s) == 1
+        push!(all_s, s_hi)
+    end
+
+    n = length(all_s)
+    samples = Vector{Sample}(undef, n)
+    for i in eachindex(all_s)
+        fr = frame(path, all_s[i])
+        samples[i] = Sample(
+            all_s[i],
+            fr.position,
+            fr.tangent,
+            fr.normal,
+            fr.binormal,
+            fr.curvature,
+            fr.geometric_torsion,
+            fr.material_twist,
+        )
+    end
+    return PathSample(samples, s_lo, s_hi, n)
+end
+
 function sample(path::Path, s_values)
     return [frame(path, s) for s in s_values]
 end

@@ -182,11 +182,11 @@ const DEMO_T_K = 297.15
 Demonstrate the analytic 3D path layer in [`path-geometry.jl`](path-geometry.jl) (via the
 `PathGeometry` module in [`path-geometry-plot.jl`](path-geometry-plot.jl)): a short centerline
 with circular bends, a catenary segment, and a material twist overlay on a straight spacer.
-Writes an interactive Plotly HTML file with [`write_path_geometry_plot3d`](path-geometry-plot.jl).
+Writes an interactive Plotly HTML file.
 """
 function demo_fiber_path(;
     output::AbstractString = joinpath(@__DIR__, "..", "output", "path-geometry-demo.html"),
-    n::Int = 801,
+    fidelity::Float64 = 1.0,
     title::AbstractString = "Fiber path geometry: bends, catenary, twist",
 )
     PG = PathGeometry
@@ -210,7 +210,7 @@ function demo_fiber_path(;
         path,
         path.s_start,
         path.s_end;
-        n = n,
+        fidelity = fidelity,
         output = output,
         title = title,
     )
@@ -229,7 +229,7 @@ Writes an interactive Plotly HTML file via `write_path_geometry_plot3d`.
 """
 function demo_fiber_path_helix(;
     output::AbstractString = joinpath(@__DIR__, "..", "output", "path-geometry-helix-demo.html"),
-    n::Int = 401,
+    fidelity::Float64 = 1.0,
     title::AbstractString = "HelixSegment: three axis angles",
 )
     PG = PathGeometry
@@ -250,7 +250,7 @@ function demo_fiber_path_helix(;
         out = "$(base)_$(angle_label)$(ext)"
         write_path_geometry_plot3d(
             path, path.s_start, path.s_end;
-            n = n,
+            fidelity = fidelity,
             output = out,
             title = "$(title) — axis_angle=$(["0", "π/3", "2π/3"][i])",
         )
