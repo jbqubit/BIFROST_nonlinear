@@ -417,6 +417,19 @@ end
     @test total_material_twist(path) ≈ τ * 1.0 atol = 1e-10
 end
 
+@testset "TwistOverlay — total_material_twist partial interval" begin
+    # T-PHYSICS: for constant τ, integral over half the path equals half the full-path
+    # quadrature (same rule as total_material_twist on each subinterval).
+    τ = 2π * 3.0 / 2.0
+    spec = PathSpec()
+    straight!(spec; length = 2.0)
+    twist!(spec; s_start = 0.0, length = 2.0, rate = τ)
+    path = build(spec)
+    full = total_material_twist(path)
+    @test total_material_twist(path; s_start = 0.0, s_end = 1.0) ≈ full / 2 atol = 1e-10
+    @test total_material_twist(path; s_start = 1.0, s_end = 0.0) ≈ full / 2 atol = 1e-10
+end
+
 # -----------------------------------------------------------------------
 # Path measures
 # -----------------------------------------------------------------------

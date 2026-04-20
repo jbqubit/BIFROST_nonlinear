@@ -56,7 +56,8 @@ changes as τ(s) = 2π·N·α(s) / ∫α ds over the overlay interval.
     bounding_box(path)
     total_turning_angle(path)
     total_torsion(path)
-    total_material_twist(path)
+    total_material_twist(path; s_start, s_end, n_quad)
+    total_frame_rotation(path; s_start, s_end, n_quad)
     writhe(path)
     sample(path, s_values)
     sample_uniform(path; n)
@@ -294,23 +295,23 @@ end
 """
     HelixSegment(radius, pitch, turns, axis_angle; shrinkage)
 
-A helix wound around a cylinder whose axis lies in the transverse plane at
-`axis_angle` from the local N-axis.  `radius` is the helix radius (m),
-`pitch` is the axial advance per turn (m), `turns` is the number of turns.
+A helix whose entry tangent is ẑ (the incoming sliding-frame tangent), ensuring
+continuity with the prior segment.  `axis_angle` (rad) selects which transverse
+direction n̂ = cos(axis_angle)·x̂ + sin(axis_angle)·ŷ the helix curves toward.
 
-The fiber starts tangent along the local z-axis.  Because the helix tangent
-is not generally along z in the natural parametrization, the segment applies
-an internal coordinate rotation so the entry tangent is always aligned with
-the incoming sliding frame.
+The helix axis â = (h·ẑ + R·n̂) / ℓ' is tilted from the transverse plane by
+arctan(h/R) toward ẑ, where h = pitch/(2π) and ℓ' = √(R²+h²).  This tilt is
+the geometric consequence of demanding tangent(0) = ẑ: a zero-pitch helix
+reduces to a circular arc (BendSegment) in the n̂ direction.
 
-    κ = R / (R² + (pitch/2π)²)
-    τ_geom = (pitch/2π) / (R² + (pitch/2π)²)
-    arc_length = turns · 2π · √(R² + (pitch/2π)²) · shrinkage
+    κ(s) = R / (R² + h²)          (constant)
+    τ_geom(s) = h / (R² + h²)     (constant)
+    arc_length = turns · 2π · √(R² + h²) · shrinkage
 
-TODO: implement position_local, tangent_local, normal_local, binormal_local,
-      end_frame_local.  The implementation requires choosing a consistent
-      initial phase so that tangent(0) = ẑ in local coords.  See README.md
-      for the relevant coordinate rotation derivation.
+Local-frame basis vectors:
+    n̂  = [cos(axis_angle), sin(axis_angle), 0]     (toward helix axis)
+    r̂₀ = [-sin(axis_angle), cos(axis_angle), 0]    (outward radial at s=0)
+    ê_φ = (R·ẑ - h·n̂) / ℓ'                        (tangential at s=0, ⊥ axis)
 """
 struct HelixSegment <: AbstractPathSegment
     radius::Float64
@@ -351,18 +352,52 @@ function geometric_torsion(seg::HelixSegment, ::Real)
     return h / (R^2 + h^2)
 end
 
-position_local(::HelixSegment, ::Real) =
-    error("HelixSegment: position_local not yet implemented")
-tangent_local(::HelixSegment, ::Real) =
-    error("HelixSegment: tangent_local not yet implemented")
-normal_local(::HelixSegment, ::Real) =
-    error("HelixSegment: normal_local not yet implemented")
-binormal_local(::HelixSegment, ::Real) =
-    error("HelixSegment: binormal_local not yet implemented")
-end_position_local(::HelixSegment) =
-    error("HelixSegment: end_position_local not yet implemented")
-end_frame_local(::HelixSegment) =
-    error("HelixSegment: end_frame_local not yet implemented")
+function _helix_basis(seg::HelixSegment)
+    R  = seg.radius * seg.shrinkage
+    h  = _helix_h(seg) * seg.shrinkage
+    φ_a = seg.axis_angle
+    ℓ′  = sqrt(R^2 + h^2)
+    n̂   = [cos(φ_a), sin(φ_a), 0.0]
+    â   = (h .* [0.0, 0.0, 1.0] .+ R .* n̂) ./ ℓ′
+    r̂₀  = [-sin(φ_a), cos(φ_a), 0.0]   # ẑ × n̂
+    ê_φ = (R .* [0.0, 0.0, 1.0] .- h .* n̂) ./ ℓ′  # â × r̂₀, tangential at s=0
+    return R, h, ℓ′, â, r̂₀, ê_φ
+end
+
+function position_local(seg::HelixSegment, s::Real)
+    R, h, ℓ′, â, r̂₀, ê_φ = _helix_basis(seg)
+    φ = s / ℓ′
+    return h .* â .* φ .+ R .* (cos(φ) - 1) .* r̂₀ .+ R .* sin(φ) .* ê_φ
+end
+
+function tangent_local(seg::HelixSegment, s::Real)
+    R, h, ℓ′, â, r̂₀, ê_φ = _helix_basis(seg)
+    φ = s / ℓ′
+    return (h .* â .- R .* sin(φ) .* r̂₀ .+ R .* cos(φ) .* ê_φ) ./ ℓ′
+end
+
+function normal_local(seg::HelixSegment, s::Real)
+    _, _, ℓ′, _, r̂₀, ê_φ = _helix_basis(seg)
+    φ = s / ℓ′
+    return -(cos(φ) .* r̂₀ .+ sin(φ) .* ê_φ)
+end
+
+function binormal_local(seg::HelixSegment, s::Real)
+    R, h, ℓ′, â, r̂₀, ê_φ = _helix_basis(seg)
+    φ = s / ℓ′
+    # B = T × N; expanding in {â, r̂₀, ê_φ} orthonormal frame:
+    # B = (R·â + h·sin φ·r̂₀ - h·cos φ·ê_φ) / ℓ′
+    return (R .* â .+ h .* sin(φ) .* r̂₀ .- h .* cos(φ) .* ê_φ) ./ ℓ′
+end
+
+function end_position_local(seg::HelixSegment)
+    return position_local(seg, arc_length(seg))
+end
+
+function end_frame_local(seg::HelixSegment)
+    s = arc_length(seg)
+    return (tangent_local(seg, s), normal_local(seg, s), binormal_local(seg, s))
+end
 
 # -----------------------------------------------------------------------
 # JumpBy and JumpTo  (stubs)
@@ -660,6 +695,11 @@ function geometric_torsion(path::Path, s::Real)
     return geometric_torsion(ps.segment, s_local)
 end
 
+"""
+    material_twist
+
+Material twist rate at effective arc-length `s`.
+"""
 function material_twist(path::Path, s::Real)
     sf = Float64(s)
     τ = 0.0
@@ -771,16 +811,119 @@ function total_torsion(path::Path)
     return total
 end
 
-function total_material_twist(path::Path; n_quad::Int = 128)
+"""
+    total_material_twist(path; s_start=path.s_start, s_end=path.s_end, n_quad=128) → Float64
+
+Integrated material twist ``∫ τ_{\\mathrm{mat}}(s) \\, ds`` over effective arc length from
+`s_start` to `s_end` (defaults: full path). Require `s_start ≤ s_end`; if `s_start > s_end`,
+an `ArgumentError` is thrown (no reordering). If `s_start == s_end`, returns `0.0`. Both
+endpoints must lie in `[path.s_start, path.s_end]`. Quadrature matches the previous rule on
+each overlap of `[s_start, s_end]` with resolved twist overlays.
+"""
+function total_material_twist(
+    path::Path;
+    s_start::Real = path.s_start,
+    s_end::Real = path.s_end,
+    n_quad::Int = 128,
+)
+    s_lo = Float64(s_start)
+    s_hi = Float64(s_end)
+    if s_lo > s_hi
+        throw(ArgumentError(
+            "total_material_twist: require s_start ≤ s_end; got s_start=$(s_start), s_end=$(s_end)",
+        ))
+    end
+    ps0 = path.s_start
+    ps1 = path.s_end
+    if !(ps0 <= s_lo <= ps1) || !(ps0 <= s_hi <= ps1)
+        throw(ArgumentError(
+            "total_material_twist: require path.s_start ≤ s ≤ path.s_end for both endpoints; " *
+            "got [$(s_lo), $(s_hi)] m vs path domain [$(ps0), $(ps1)] m",
+        ))
+    end
+    s_hi <= s_lo && return 0.0
+
     total = 0.0
     for ov in path.resolved_overlays
         for r in ov.rates
-            ss = range(r.s_eff_start, r.s_eff_end; length = n_quad + 1)
-            h  = (r.s_eff_end - r.s_eff_start) / n_quad
+            a = max(r.s_eff_start, s_lo)
+            b = min(r.s_eff_end, s_hi)
+            b <= a && continue
+            ss = range(a, b; length = n_quad + 1)
+            h = (b - a) / n_quad
             total += h * sum(r.rate(s) for s in ss)
         end
     end
     return total
+end
+
+"""
+    total_frame_rotation(path; s_start=path.s_start, s_end=path.s_end, n_quad=128) → Float64
+
+Total rotation of the polarization reference frame over effective arc length from `s_start`
+to `s_end`, integrating both contributions:
+
+    dψ/ds = τ_geom(s) + Ω_material(s)
+
+where `τ_geom` is the geometric torsion of the centerline (nonzero for helices; zero for
+straight segments and circular bends) and `Ω_material` is the applied material twist rate
+from `TwistOverlay`s.  Returns the integral in radians.
+
+See `path-geometry.md` for a discussion of how this differs from `total_torsion` and
+`total_material_twist` individually.
+"""
+function total_frame_rotation(
+    path::Path;
+    s_start::Real = path.s_start,
+    s_end::Real   = path.s_end,
+    n_quad::Int   = 128,
+)
+    s_lo = Float64(s_start)
+    s_hi = Float64(s_end)
+    if s_lo > s_hi
+        throw(ArgumentError(
+            "total_frame_rotation: require s_start ≤ s_end; got s_start=$(s_start), s_end=$(s_end)",
+        ))
+    end
+    ps0 = path.s_start
+    ps1 = path.s_end
+    if !(ps0 <= s_lo <= ps1) || !(ps0 <= s_hi <= ps1)
+        throw(ArgumentError(
+            "total_frame_rotation: require path.s_start ≤ s ≤ path.s_end for both endpoints; " *
+            "got [$(s_lo), $(s_hi)] m vs path domain [$(ps0), $(ps1)] m",
+        ))
+    end
+    s_hi <= s_lo && return 0.0
+
+    # Geometric torsion: integrate segment-by-segment over the requested window.
+    τ_total = 0.0
+    s_seg_start = ps0
+    for ps in path.placed_segments
+        seg = ps.segment
+        s_seg_end = s_seg_start + arc_length(seg)
+        a = max(s_seg_start, s_lo)
+        b = min(s_seg_end,   s_hi)
+        if b > a
+            # Convert global s to local s within the segment.
+            a_loc = a - s_seg_start
+            b_loc = b - s_seg_start
+            if seg isa StraightSegment || seg isa BendSegment
+                # τ_geom = 0 exactly; skip.
+            elseif seg isa HelixSegment
+                τ_total += geometric_torsion(seg, 0.0) * (b_loc - a_loc)
+            else
+                ss = range(a_loc, b_loc; length = n_quad + 1)
+                h  = (b_loc - a_loc) / n_quad
+                τ_total += h * sum(geometric_torsion(seg, s) for s in ss)
+            end
+        end
+        s_seg_start = s_seg_end
+    end
+
+    # Material twist: reuse total_material_twist logic over the same window.
+    Ω_total = total_material_twist(path; s_start = s_lo, s_end = s_hi, n_quad)
+
+    return τ_total + Ω_total
 end
 
 """
