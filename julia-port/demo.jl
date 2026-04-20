@@ -220,6 +220,43 @@ function demo_fiber_path(;
 end
 
 """
+    demo_fiber_path_segment_labels(; output, fidelity, title)
+
+Illustrate optional **segment nicknames**: `straight!`, `bend!`, `catenary!`, and `helix!` are
+called with `nickname` strings. [`write_path_geometry_plot3d`](path-geometry-plot.jl) renders each
+name as 3D text near the segment midpoint (offset along the principal normal, in the osculating
+plane). Uses only straight / bend / catenary / helix segments so the demo does not depend on jump
+connectors or `min_bend_radius`.
+"""
+function demo_fiber_path_segment_labels(;
+    output::AbstractString = joinpath(@__DIR__, "..", "output", "path-geometry-segment-labels-demo.html"),
+    fidelity::Float64 = 1.0,
+    title::AbstractString = "Path geometry: segment nicknames",
+)
+    PG = PathGeometry
+    spec = PG.PathSpec()
+    PG.straight!(spec; length = 0.08, nickname = "lead-in")
+    PG.bend!(spec; radius = 0.06, angle = π / 2, nickname = "90° bend")
+    PG.straight!(spec; length = 0.06, nickname = "spacer")
+    PG.catenary!(spec; a = 0.04, length = 0.08, axis_angle = 0.0, nickname = "sag")
+    PG.helix!(spec; radius = 0.025, pitch = 0.015, turns = 1.2, axis_angle = 0.0, nickname = "twist section")
+    PG.straight!(spec; length = 0.06, nickname = "lead-out")
+    path = PG.build(spec)
+    println("Arc length (effective): ", PG.path_length(path), " m")
+    plot_path = write_path_geometry_plot3d(
+        path,
+        path.s_start,
+        path.s_end;
+        fidelity = fidelity,
+        output = output,
+        title = title,
+    )
+    println("Wrote segment-label demo to:")
+    println(plot_path)
+    return (; path, plot_path)
+end
+
+"""
     demo_fiber_path_helix(; output, n, title)
 
 Demonstrate `HelixSegment` with three separate single-segment paths, each a helix
@@ -261,6 +298,103 @@ function demo_fiber_path_helix(;
     return (; paths, plot_paths)
 end
 
+"""
+    demo_fiber_path_jumps_min_radius(; output, fidelity, title)
+
+Demonstrate `jumpby!` and `jumpto!` with focus on the min_bend_radius parameter.
+"""
+function demo_fiber_path_jumps_min_radius(;
+    output::AbstractString = joinpath(@__DIR__, "..", "output", "path-geometry-jumps-demo.html"),
+    fidelity::Float64 = 4.0,
+    title::AbstractString = "JumpBy and JumpTo: Hermite connectors, min_bend_radius",
+)
+    PG = PathGeometry
+    spec = PG.PathSpec()
+
+    PG.straight!(spec; length = 1)
+    PG.jumpto!(spec; destination = (1, 0.0, 1), tangent = (0.0, 0.0, -1.0),
+            min_bend_radius = 0.4) # T1: fails only if min_bend_radius >0.5
+    PG.straight!(spec; length = 1)
+    PG.jumpto!(spec; destination = (2, 0.0, 0), tangent = (0.0, 0.0, 1.0),
+            min_bend_radius = 0.1) # T2: fails only if min_bend_radius >0.5
+    PG.straight!(spec; length = 1)
+    PG.jumpto!(spec; destination = (3, 0.0, 1), tangent = (0.0, 0.0, -1.0),
+            min_bend_radius = 0.2) # T3: fails only if min_bend_radius >0.50
+    PG.straight!(spec; length = 1)
+    PG.jumpby!(spec; delta = (-1, 0.0, 0), tangent = (0.0, 0.0, -1.0),
+            min_bend_radius = 0.1)
+    PG.straight!(spec; length = 1)
+
+    path = PG.build(spec)
+
+    plot_path = write_path_geometry_plot3d(
+        path, path.s_start, path.s_end;
+        fidelity = fidelity, output   = output, title    = title )
+    return (; path, plot_path)
+end
+
+"""
+    demo_fiber_path_jumps2(; output, fidelity, title)
+
+Demonstrate a more complex routing scenario with multiple `jumpby!` and `jumpto!`
+calls interspersed with straights, a helix, and a circular bend.
+
+Path layout:
+  1. Short straight lead-in.
+  2. **JumpBy** with an explicit `tangent_out` — the Hermite connector prescribes
+     the exit direction (pointing diagonally upward), not the chord direction.
+  3. Single-turn helix section.
+  4. Short straight spacer.
+  5. **JumpBy** without `tangent_out` — exit tangent follows the chord.
+  6. Quarter-circle bend.
+  7. **JumpTo** to a fixed lab-frame waypoint with no prescribed tangent.
+  8. Short straight.
+  9. **JumpTo** to a second waypoint with a prescribed outgoing tangent (global +z).
+  10. Straight lead-out.
+"""
+function demo_fiber_path_jumps2(;
+    output::AbstractString = joinpath(@__DIR__, "..", "output", "path-geometry-jumps2-demo.html"),
+    fidelity::Float64 = 1.0,
+    title::AbstractString = "Multi-jump routing: JumpBy (with/without tangent_out) + JumpTo",
+)
+    PG = PathGeometry
+    spec = PG.PathSpec()
+
+    PG.straight!(spec; length = 0.05)
+
+    # Prescribed tangent_out + min_bend_radius: handle length grows to keep κ ≤ 1/R.
+    PG.jumpby!(spec; delta = (0.03, 0.0, 0.04), tangent = (0.0, 0.0, 1.0),
+               min_bend_radius = 0.02)
+
+    PG.helix!(spec; radius = 0.02, pitch = 0.01, turns = 1.0, axis_angle = 0.0)
+    PG.straight!(spec; length = 0.04)
+
+    # No tangent_out → exit tangent follows chord direction.
+    PG.jumpby!(spec; delta = (0.05, 0.0, 0.03))
+
+    PG.bend!(spec; radius = 0.04, angle = π / 2, axis_angle = 0.0)
+    PG.jumpto!(spec; destination = (0.22, 0.0, 0.20))
+    PG.straight!(spec; length = 0.03)
+    PG.jumpto!(spec; destination = (0.22, 0.0, 0.28), tangent = (0.0, 0.0, 1.0),
+               min_bend_radius = 0.1)
+    PG.straight!(spec; length = 0.05)
+
+    path = PG.build(spec)
+    println("Arc length : ", round(PG.path_length(path) * 100; digits = 2), " cm")
+    println("Start      : ", round.(PG.start_point(path) .* 100; digits = 1), " cm")
+    println("End        : ", round.(PG.end_point(path) .* 100; digits = 1), " cm")
+    println("Writhe     : ", round(PG.writhe(path); digits = 6))
+
+    plot_path = write_path_geometry_plot3d(
+        path, path.s_start, path.s_end;
+        fidelity = fidelity,
+        output   = output,
+        title    = title,
+    )
+    println("Wrote jumps2 demo to: ", plot_path)
+    return (; path, plot_path)
+end
+
 const DEMO_INDEX = [
     (
         fn   = demo_fiber_path,
@@ -270,11 +404,30 @@ const DEMO_INDEX = [
                "the Frenet–Serret sliding frame.",
     ),
     (
+        fn   = demo_fiber_path_segment_labels,
+        kwargs = NamedTuple(),
+        desc = "Same style of path as the mixed-segment demo, but each segment has a `nickname` " *
+               "string; the HTML plot shows those names as 3D labels offset in the osculating plane.",
+    ),
+    (
         fn   = demo_fiber_path_helix,
         kwargs = NamedTuple(),
         desc = "Three HelixSegment paths sharing the same radius and pitch but with " *
                "axis_angle ∈ {0, π/3, 2π/3} — shows how the winding plane rotates " *
                "while the entry tangent stays aligned with the incoming fiber direction.",
+    ),
+    (
+        fn   = demo_fiber_path_jumps_min_radius,
+        kwargs = NamedTuple(),
+        desc = "Demonstrate `jumpby!` and `jumpto!` with focus on the min_bend_radius parameter." 
+    ),
+    (
+        fn   = demo_fiber_path_jumps2,
+        kwargs = NamedTuple(),
+        desc = "Multi-jump routing: two JumpBy calls (one with, one without tangent_out) " *
+               "and two JumpTo calls (one with, one without tangent_out) interleaved with " *
+               "a helix, a circular bend, and straight spacers — exercises every " *
+               "combination of jump type × tangent prescription.",
     ),
 ]
 

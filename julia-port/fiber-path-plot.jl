@@ -603,6 +603,9 @@ module PlotRuntime
     The 3D curve is plotted as the reconstructed fiber centerline `(x(s), y(s), zc(s))`.
     Plotly provides mouse-based rotation, zooming, and panning in the generated HTML.
 
+    For interactive geometry of an analytic [`PathGeometry.Path`](path-geometry-plot.jl) built
+    from `path-geometry.jl` (no fiber or polarization layers), see [`write_path_geometry_plot3d`](path-geometry-plot.jl).
+
     Returns the output path.
     """
     function write_fiber_input_plot3d(
