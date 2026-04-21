@@ -257,3 +257,53 @@ const EXPLICIT_PATH_CASES = [
         @test norm(xyz_a - xyz_b) > 1.0
     end
 end
+
+@testset "FiberSpec temperature profile" begin
+    xs = FiberCrossSection(
+        GermaniaSilicaGlass(0.036),
+        GermaniaSilicaGlass(0.0),
+        8.2e-6,
+        125e-6
+    )
+
+    function fiber_sources(spec)
+        return build(spec).sources
+    end
+
+    @testset "default T_K is 297.15" begin
+        spec = FiberSpec(0.0, 10.0; cross_section = xs)
+        @test spec.T_K(0.0) ≈ 297.15
+        @test spec.T_K(5.0) ≈ 297.15
+        twist!(spec, 0.0, 10.0; rate = 0.1)
+        src = only(fiber_sources(spec))
+        @test src.T_K(3.0) ≈ 297.15
+    end
+
+    @testset "scalar global T_K override" begin
+        spec = FiberSpec(0.0, 10.0; cross_section = xs, T_K = 310.0)
+        @test spec.T_K(0.0) ≈ 310.0
+        twist!(spec, 0.0, 10.0; rate = 0.1)
+        src = only(fiber_sources(spec))
+        @test src.T_K(5.0) ≈ 310.0
+    end
+
+    @testset "function global T_K override" begin
+        spec = FiberSpec(0.0, 10.0; cross_section = xs, T_K = s -> 300.0 + s)
+        @test spec.T_K(0.0) ≈ 300.0
+        @test spec.T_K(4.0) ≈ 304.0
+        bend!(spec, 0.0, 10.0; angle = π / 4, axis = 0.0)
+        src = only(fiber_sources(spec))
+        @test src.T_K(4.0) ≈ 304.0
+    end
+
+    @testset "per-segment T_K overrides spec T_K" begin
+        spec = FiberSpec(0.0, 20.0; cross_section = xs, T_K = 310.0)
+        twist!(spec, 0.0, 10.0; T_K = 280.0, rate = 0.1)   # explicit override
+        twist!(spec, 10.0, 20.0; rate = 0.1)                # inherits spec T_K
+        srcs = [s for s in fiber_sources(spec) if s isa TwistSource]
+        @test length(srcs) == 2
+        # Identify sources by their T_K value at an interior point
+        vals = sort([srcs[1].T_K(5.0), srcs[2].T_K(15.0)])
+        @test vals ≈ [280.0, 310.0]
+    end
+end

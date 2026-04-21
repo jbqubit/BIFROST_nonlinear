@@ -322,6 +322,7 @@ end
 # ----------------------------
 
 const DEFAULT_ZERO_SOURCE_T_K = 297.15
+const DEFAULT_T_K = _ -> 297.15
 
 as_constant_profile(x::Real) = (_ -> Float64(x))
 
@@ -370,11 +371,17 @@ function TwistSegment(
     )
 end
 
+# TODO (low priority): temperature-dependent shrinkage coupling.
+# When FiberSpec is connected to PathSpec, segment shrinkage should be evaluated
+# from T_K at a representative arc-length (e.g. segment midpoint) rather than
+# using a manually authored scalar. Currently path-geometry.jl segments carry a
+# scalar shrinkage and are unaware of temperature.
 mutable struct FiberSpec
     cross_section::FiberCrossSection
     λ_m::Float64
     s_start::Float64
     s_end::Float64
+    T_K::Function
     bend_segments::Vector{BendSegment}
     twist_segments::Vector{TwistSegment}
 end
@@ -383,13 +390,16 @@ function FiberSpec(
     s_start::Real,
     s_end::Real;
     cross_section::FiberCrossSection,
-    λ_m::Real = 1550e-9
+    λ_m::Real = 1550e-9,
+    T_K = DEFAULT_T_K
 )
+    T_profile = T_K isa Function ? T_K : as_constant_profile(T_K)
     return FiberSpec(
         cross_section,
         Float64(λ_m),
         Float64(s_start),
         Float64(s_end),
+        T_profile,
         BendSegment[],
         TwistSegment[]
     )
@@ -399,7 +409,7 @@ function bend!(
     spec::FiberSpec,
     s_start::Real,
     s_end::Real;
-    T_K,
+    T_K = spec.T_K,
     angle,
     axis
 )
@@ -414,7 +424,7 @@ function twist!(
     spec::FiberSpec,
     s_start::Real,
     s_end::Real;
-    T_K,
+    T_K = spec.T_K,
     rate
 )
     T_profile = T_K isa Function ? T_K : as_constant_profile(T_K)
