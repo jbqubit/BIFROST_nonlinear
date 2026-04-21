@@ -45,20 +45,19 @@ xs = FiberCrossSection(
     model_number = "SMF-like"
 )
 
-spec = FiberSpec(0.0, 20.0; cross_section = xs, λ_m = 1550e-9)
-
-# Scalar arguments still work
-twist!(spec, 0.0, 5.0; T_K = 297.15, rate = 0.15)
-bend!(spec, 0.0, 2.0; T_K = 297.15, angle = π / 2, axis = 0.0)
-
-# Function-valued profiles are evaluated continuously at runtime
+# Fiber-level temperature profile (applied to all segments unless overridden per-segment).
+# Accepts a scalar (converted to a constant function) or a function s -> T_K.
 T_profile(s) = 296.0 + 0.15 * s
-twist_rate_profile(s) = 0.1 * cos(s / 6)
-bend_angle_profile(s) = (π / 4) * (0.8 + 0.2 * sin(s / 3))
-bend_axis_profile(s) = π / 8 + 0.1 * cos(s / 5)
 
-twist!(spec, 5.0, 12.0; T_K = T_profile, rate = twist_rate_profile)
-bend!(spec, 12.0, 20.0; T_K = T_profile, angle = bend_angle_profile, axis = bend_axis_profile)
+spec = FiberSpec(0.0, 20.0; cross_section = xs, λ_m = 1550e-9, T_K = T_profile)
+
+# T_K is omitted here — both segments inherit spec.T_K automatically.
+twist!(spec, 0.0, 5.0; rate = 0.15)
+bend!(spec, 5.0, 12.0; angle = π / 2, axis = 0.0)
+
+# Per-segment T_K override: takes priority over spec.T_K for this segment only.
+bend!(spec, 12.0, 20.0; T_K = 310.0, angle = s -> (π / 4) * (0.8 + 0.2 * sin(s / 3)),
+      axis = s -> π / 8 + 0.1 * cos(s / 5))
 
 fiber = build(spec)
 """
