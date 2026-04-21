@@ -476,3 +476,221 @@ end
     @test hasproperty(frames[1], :tangent)
     @test hasproperty(frames[1], :curvature)
 end
+
+# -----------------------------------------------------------------------
+# JumpBy and JumpTo (HermiteConnector)
+# -----------------------------------------------------------------------
+
+@testset "JumpBy — endpoint matches delta in local frame" begin
+    # T-PHYSICS: JumpBy with delta along the current tangent direction (ẑ)
+    # should move the path forward by that amount.
+    spec = PathSpec()
+    jumpby!(spec; delta = (0.0, 0.0, 0.5))
+    path = build(spec)
+
+    @test start_point(path) ≈ [0.0, 0.0, 0.0] atol = 1e-10
+    @test end_point(path)   ≈ [0.0, 0.0, 0.5] atol = 1e-10
+end
+
+@testset "JumpBy — initial tangent is ẑ" begin
+    # T-GUARDRAIL: incoming tangent at start of every connector is ẑ
+    spec = PathSpec()
+    jumpby!(spec; delta = (0.1, 0.0, 0.3))
+    path = build(spec)
+    @test tangent(path, 0.0) ≈ [0.0, 0.0, 1.0] atol = 1e-10
+end
+
+@testset "JumpBy — outgoing tangent honours tangent_out" begin
+    # T-PHYSICS: explicit tangent_out should be the end tangent (in local frame)
+    t_out = normalize([1.0, 0.0, 1.0])
+    spec = PathSpec()
+    jumpby!(spec; delta = (0.3, 0.0, 0.3), tangent = t_out)
+    path = build(spec)
+    @test tangent(path, path.s_end) ≈ t_out atol = 1e-8
+end
+
+@testset "JumpBy — frame orthonormality along connector" begin
+    # T-GUARDRAIL
+    spec = PathSpec()
+    jumpby!(spec; delta = (0.2, 0.1, 0.4))
+    path = build(spec)
+    for s in range(path.s_start, path.s_end; length = 11)
+        T = tangent(path, s)
+        N = normal(path, s)
+        B = binormal(path, s)
+        @test is_orthonormal(T, N, B)
+    end
+end
+
+@testset "JumpBy — shrinkage scales endpoint" begin
+    # T-PHYSICS: shrinkage α scales the displacement by α
+    spec = PathSpec()
+    jumpby!(spec; delta = (0.0, 0.0, 1.0), shrinkage = 0.8)
+    path = build(spec)
+    @test end_point(path) ≈ [0.0, 0.0, 0.8] atol = 1e-10
+end
+
+@testset "JumpBy — after straight, delta is in rotated local frame" begin
+    # T-PHYSICS: after a quarter-circle bend the local ẑ points along global +x.
+    # JumpBy with delta=(0,0,d) should therefore move +x in global frame.
+    R = 0.1; d = 0.5
+    spec = PathSpec()
+    bend!(spec; radius = R, angle = π / 2, axis_angle = 0.0)
+    jumpby!(spec; delta = (0.0, 0.0, d))   # local ẑ is now global +x
+    path = build(spec)
+    # end_point of bend is (R, 0, R); jumpby adds d along global +x
+    @test end_point(path) ≈ [R + d, 0.0, R] atol = 1e-8
+end
+
+@testset "JumpTo — endpoint matches destination" begin
+    # T-PHYSICS: JumpTo should place the path end at the specified global position.
+    dest = [1.0, 0.5, 2.0]
+    spec = PathSpec()
+    jumpto!(spec; destination = dest)
+    path = build(spec)
+    @test end_point(path) ≈ dest atol = 1e-10
+end
+
+@testset "JumpTo — initial tangent is ẑ" begin
+    spec = PathSpec()
+    jumpto!(spec; destination = (0.3, 0.1, 0.8))
+    path = build(spec)
+    @test tangent(path, 0.0) ≈ [0.0, 0.0, 1.0] atol = 1e-10
+end
+
+@testset "JumpTo — after bend, destination is in global frame" begin
+    # T-PHYSICS: JumpTo destination is always in global frame regardless of prior segments.
+    R = 0.1
+    dest = [R + 0.5, 0.0, R]   # global position
+    spec = PathSpec()
+    bend!(spec; radius = R, angle = π / 2, axis_angle = 0.0)
+    jumpto!(spec; destination = dest)
+    path = build(spec)
+    @test end_point(path) ≈ collect(dest) atol = 1e-8
+end
+
+@testset "JumpTo — outgoing tangent honours tangent_out (global)" begin
+    # T-PHYSICS: tangent_out for JumpTo is specified in global frame
+    t_out_global = normalize([1.0, 0.0, 0.0])
+    spec = PathSpec()
+    jumpto!(spec; destination = (1.0, 0.0, 0.5), tangent = t_out_global)
+    path = build(spec)
+    @test tangent(path, path.s_end) ≈ t_out_global atol = 1e-8
+end
+
+@testset "JumpBy/JumpTo — sample_path works on connector" begin
+    # T-GUARDRAIL: sample_path must not error on paths containing connectors
+    spec = PathSpec()
+    straight!(spec; length = 0.3)
+    jumpby!(spec; delta = (0.1, 0.0, 0.4))
+    straight!(spec; length = 0.2)
+    path = build(spec)
+    ps = sample_path(path, path.s_start, path.s_end)
+    @test ps.n >= 4
+    @test ps.samples[1].s ≈ path.s_start atol = 1e-12
+    @test ps.samples[end].s ≈ path.s_end  atol = 1e-12
+end
+
+@testset "JumpBy — min_bend_radius keeps curvature ≤ 1/R_min" begin
+    # T-PHYSICS: every point along the connector must have κ ≤ 1/R_min.
+    R_min = 0.05
+    spec = PathSpec()
+    jumpby!(spec; delta = (0.02, 0.0, 0.03), min_bend_radius = R_min)
+    path = build(spec)
+    for s in range(path.s_start, path.s_end; length = 51)
+        @test curvature(path, s) ≤ 1.0 / R_min
+    end
+end
+
+@testset "JumpTo — min_bend_radius keeps curvature ≤ 1/R_min" begin
+    # T-PHYSICS: min_bend_radius on JumpTo also constrains the connector curvature.
+    R_min = 0.04
+    spec = PathSpec()
+    jumpto!(spec; destination = (0.05, 0.0, 0.06), min_bend_radius = R_min)
+    path = build(spec)
+    for s in range(path.s_start, path.s_end; length = 51)
+        @test curvature(path, s) ≤ 1.0 / R_min
+    end
+end
+
+@testset "JumpBy — min_bend_radius does not move endpoint" begin
+    # T-GUARDRAIL: the constraint changes handle length only, not the target position.
+    delta = (0.03, 0.0, 0.05)
+    spec = PathSpec()
+    jumpby!(spec; delta = delta, min_bend_radius = 0.10)
+    path = build(spec)
+    @test end_point(path) ≈ collect(delta) atol = 1e-10
+end
+
+@testset "JumpTo — infeasible min_bend_radius throws ArgumentError" begin
+    # T-GUARDRAIL: anti-parallel incoming/outgoing tangents cause peak curvature to
+    # increase (not decrease) with handle length — no equal-handle Hermite can satisfy
+    # the constraint, so build() must throw ArgumentError.
+    spec = PathSpec()
+    straight!(spec; length = 1.0)
+    # After straight, incoming tangent is +z. destination=(2,0,1) is 1 m transverse.
+    # Outgoing tangent is -z (anti-parallel). κ grows with h → infeasible.
+    jumpto!(spec; destination = (2.0, 0.0, 1.0), tangent = (0.0, 0.0, -1.0),
+            min_bend_radius = 2.0)
+    @test_throws ArgumentError build(spec)
+end
+
+# -----------------------------------------------------------------------
+# JumpTo min_bend_radius — T1/T2/T3 from demo_fiber_path_jumps_min_radius
+# -----------------------------------------------------------------------
+# Each helper builds the path up to and including the named jump.
+# Thresholds are taken from the demo comments.
+
+@testset "JumpTo min_bend_radius — T1: passes at 0.5, fails above 0.5" begin
+    # T-PHYSICS: transverse chord (1,0,0), outgoing tangent (0,0,-1) anti-parallel
+    # to incoming (0,0,1). Minimum-curvature connector has bend radius ≈ 0.5 m.
+    function build_T1(mbr)
+        spec = PathSpec()
+        straight!(spec; length = 1)
+        jumpto!(spec; destination = (1, 0.0, 1), tangent = (0.0, 0.0, -1.0),
+                min_bend_radius = mbr)
+        build(spec)
+    end
+    @test_nowarn build_T1(0.49)
+    @test_nowarn build_T1(0.5)
+    @test_throws ArgumentError build_T1(0.51)
+end
+
+@testset "JumpTo min_bend_radius — T2: passes at 0.5, fails above 0.5" begin
+    # T-PHYSICS: after T1 the path runs downward (-z). The straight extends
+    # that to position (1,0,0). T2 jumps to (2,0,0) with outgoing tangent (0,0,1)
+    # — again transverse chord, anti-parallel tangents.
+    function build_T2(mbr)
+        spec = PathSpec()
+        straight!(spec; length = 1)
+        jumpto!(spec; destination = (1, 0.0, 1), tangent = (0.0, 0.0, -1.0),
+                min_bend_radius = 0.1) # so small it won't error
+        straight!(spec; length = 1)
+        jumpto!(spec; destination = (2, 0.0, 0), tangent = (0.0, 0.0, 1.0),
+                min_bend_radius = mbr)
+        build(spec)
+    end
+    @test_nowarn build_T2(0.49)
+    @test_nowarn build_T2(0.5)
+    @test_throws ArgumentError build_T2(0.51)
+end
+
+@testset "JumpTo min_bend_radius — T3: passes at 0.50, fails at 0.51" begin
+    # T-PHYSICS: same pattern as T1; threshold is 0.50 m.
+    function build_T3(mbr)
+        spec = PathSpec()
+        straight!(spec; length = 1)
+        jumpto!(spec; destination = (1, 0.0, 1), tangent = (0.0, 0.0, -1.0),
+                min_bend_radius = 0.1) # so small it won't error
+        straight!(spec; length = 1)
+        jumpto!(spec; destination = (2, 0.0, 0), tangent = (0.0, 0.0, 1.0),
+                min_bend_radius = 0.1) # so small it won't error
+        straight!(spec; length = 1)
+        jumpto!(spec; destination = (3, 0.0, 1), tangent = (0.0, 0.0, -1.0),
+                min_bend_radius = mbr)
+        build(spec)
+    end
+    @test_nowarn build_T3(0.49)
+    @test_nowarn build_T3(0.50)
+    @test_throws ArgumentError build_T3(0.51)
+end

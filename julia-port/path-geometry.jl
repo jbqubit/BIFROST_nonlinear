@@ -118,8 +118,9 @@ struct StraightSegment <: AbstractPathSegment
     shrinkage::Float64
 end
 
-StraightSegment(length::Real; shrinkage::Real = 1.0) =
+function StraightSegment(length::Real; shrinkage::Real = 1.0)
     StraightSegment(Float64(length), Float64(shrinkage))
+end
 
 arc_length(seg::StraightSegment)         = seg.length * seg.shrinkage
 nominal_arc_length(seg::StraightSegment) = seg.length
@@ -404,7 +405,7 @@ end
 # -----------------------------------------------------------------------
 
 """
-    JumpBy(delta, tangent_out, shrinkage)
+    JumpBy(delta, tangent_out, shrinkage, min_bend_radius)
 
 Connects the current position to current_position + shrinkage·delta using an
 Euler spiral (clothoid).  The incoming tangent is the current sliding frame
@@ -414,27 +415,38 @@ the connector computes an implicit tangent that minimizes curvature variation
 
 The Euler spiral respects the incoming curvature κ_in for C² continuity.
 
+`min_bend_radius` (metres, nothing = unconstrained) sets a lower bound on the
+radius of curvature of the Hermite connector.  The tangent handle length is
+extended beyond the chord default when necessary to keep κ ≤ 1/R_min.
+
 TODO: implement the Euler spiral solver.
 """
 struct JumpBy <: AbstractPathSegment
     delta::NTuple{3, Float64}
     tangent_out::Union{Nothing, NTuple{3, Float64}}
     shrinkage::Float64
+    min_bend_radius::Union{Nothing, Float64}
 end
 
-function JumpBy(delta; tangent_out = nothing, shrinkage::Real = 1.0)
+function JumpBy(delta; tangent_out = nothing, shrinkage::Real = 1.0,
+                min_bend_radius = nothing)
     d = (Float64(delta[1]), Float64(delta[2]), Float64(delta[3]))
     t = isnothing(tangent_out) ? nothing :
         (Float64(tangent_out[1]), Float64(tangent_out[2]), Float64(tangent_out[3]))
-    JumpBy(d, t, Float64(shrinkage))
+    r = isnothing(min_bend_radius) ? nothing : Float64(min_bend_radius)
+    JumpBy(d, t, Float64(shrinkage), r)
 end
 
 """
-    JumpTo(destination, tangent_out, shrinkage)
+    JumpTo(destination, tangent_out, shrinkage, min_bend_radius)
 
 Connects the current position to the fixed lab-frame `destination` using an
 Euler spiral.  Shrinkage changes the arc length of the connector (the
 connector absorbs the geometry change) but does not move the destination.
+
+`min_bend_radius` (metres, nothing = unconstrained) sets a lower bound on the
+radius of curvature of the Hermite connector.  The tangent handle length is
+extended beyond the chord default when necessary to keep κ ≤ 1/R_min.
 
 TODO: implement the Euler spiral solver.
 """
@@ -442,29 +454,333 @@ struct JumpTo <: AbstractPathSegment
     destination::NTuple{3, Float64}
     tangent_out::Union{Nothing, NTuple{3, Float64}}
     shrinkage::Float64
+    min_bend_radius::Union{Nothing, Float64}
 end
 
-function JumpTo(destination; tangent_out = nothing, shrinkage::Real = 1.0)
+function JumpTo(destination; tangent_out = nothing, shrinkage::Real = 1.0,
+                min_bend_radius = nothing)
     d = (Float64(destination[1]), Float64(destination[2]), Float64(destination[3]))
     t = isnothing(tangent_out) ? nothing :
         (Float64(tangent_out[1]), Float64(tangent_out[2]), Float64(tangent_out[3]))
-    JumpTo(d, t, Float64(shrinkage))
+    r = isnothing(min_bend_radius) ? nothing : Float64(min_bend_radius)
+    JumpTo(d, t, Float64(shrinkage), r)
 end
 
+# JumpBy and JumpTo are context-dependent: geometry is resolved at build() time
+# into a HermiteConnector.  Calling these methods on the raw structs is unsupported.
 for T in (JumpBy, JumpTo)
     @eval begin
-        arc_length(::$T) = error($(string(T)) * ": not yet implemented (requires Euler spiral solver)")
-        nominal_arc_length(::$T) = error($(string(T)) * ": not yet implemented")
-        curvature(::$T, ::Real) = error($(string(T)) * ": not yet implemented")
+        arc_length(::$T)             = error($(string(T)) * ": call build() to resolve jump geometry")
+        nominal_arc_length(::$T)     = error($(string(T)) * ": call build() to resolve jump geometry")
+        curvature(::$T, ::Real)      = error($(string(T)) * ": call build() to resolve jump geometry")
         geometric_torsion(::$T, ::Real) = 0.0
-        position_local(::$T, ::Real) = error($(string(T)) * ": not yet implemented")
-        tangent_local(::$T, ::Real) = error($(string(T)) * ": not yet implemented")
-        normal_local(::$T, ::Real) = error($(string(T)) * ": not yet implemented")
-        binormal_local(::$T, ::Real) = error($(string(T)) * ": not yet implemented")
-        end_position_local(::$T) = error($(string(T)) * ": not yet implemented")
-        end_frame_local(::$T) = error($(string(T)) * ": not yet implemented")
+        position_local(::$T, ::Real) = error($(string(T)) * ": call build() to resolve jump geometry")
+        tangent_local(::$T, ::Real)  = error($(string(T)) * ": call build() to resolve jump geometry")
+        normal_local(::$T, ::Real)   = error($(string(T)) * ": call build() to resolve jump geometry")
+        binormal_local(::$T, ::Real) = error($(string(T)) * ": call build() to resolve jump geometry")
+        end_position_local(::$T)     = error($(string(T)) * ": call build() to resolve jump geometry")
+        end_frame_local(::$T)        = error($(string(T)) * ": call build() to resolve jump geometry")
     end
 end
+
+# -----------------------------------------------------------------------
+# HermiteConnector  (resolved form of JumpBy / JumpTo)
+# -----------------------------------------------------------------------
+
+# Returns a unit vector perpendicular to t (arbitrary orientation).
+function _perp_unit(t::Vector{Float64})
+    ref = abs(t[3]) < 0.9 ? [0.0, 0.0, 1.0] : [1.0, 0.0, 0.0]
+    n   = ref .- dot(ref, t) .* t
+    nn  = norm(n)
+    return nn > 1e-12 ? n ./ nn : [1.0, 0.0, 0.0]
+end
+
+"""
+    HermiteConnector
+
+Internal segment produced by resolving a `JumpBy` or `JumpTo` at `build()` time.
+Implements a cubic Hermite spline in local frame coordinates, connecting
+(0,0,0) with incoming tangent ẑ to `p1_local` with outgoing tangent `t_hat_out`.
+Tangent vectors are scaled by the chord length.
+
+A 256-point Gauss-quadrature arc-length table enables arc-length reparameterisation
+of all interface methods.  Curvature and geometric torsion are computed analytically
+from the polynomial derivatives.
+"""
+struct HermiteConnector <: AbstractPathSegment
+    a0        :: NTuple{3,Float64}   # P(t) = a0 + a1 t + a2 t² + a3 t³, t ∈ [0,1]
+    a1        :: NTuple{3,Float64}
+    a2        :: NTuple{3,Float64}
+    a3        :: NTuple{3,Float64}
+    s_table   :: Vector{Float64}     # s_table[i] = arc-length at t = (i-1)/(n-1)
+    shrinkage :: Float64             # always 1.0; stored for interface uniformity
+end
+
+const _HC_GAUSS4_NODES   = (-0.8611363115940526, -0.3399810435848563,
+                              0.3399810435848563,  0.8611363115940526)
+const _HC_GAUSS4_WEIGHTS = ( 0.3478548451374538,  0.6521451548625461,
+                              0.6521451548625461,  0.3478548451374538)
+
+function _hc_dp(a1::NTuple{3,Float64}, a2::NTuple{3,Float64}, a3::NTuple{3,Float64}, t::Float64)
+    t2 = t * t
+    return (a1[1] + 2*a2[1]*t + 3*a3[1]*t2,
+            a1[2] + 2*a2[2]*t + 3*a3[2]*t2,
+            a1[3] + 2*a2[3]*t + 3*a3[3]*t2)
+end
+
+function _hc_speed(a1, a2, a3, t::Float64)
+    dp = _hc_dp(a1, a2, a3, t)
+    return sqrt(dp[1]^2 + dp[2]^2 + dp[3]^2)
+end
+
+function _hc_ddp(a2::NTuple{3,Float64}, a3::NTuple{3,Float64}, t::Float64)
+    return (2*a2[1] + 6*a3[1]*t, 2*a2[2] + 6*a3[2]*t, 2*a2[3] + 6*a3[3]*t)
+end
+
+function _hc_build_table(a1, a2, a3, n::Int)
+    s = zeros(n)
+    for i in 2:n
+        t0 = (i - 2) / (n - 1)
+        t1 = (i - 1) / (n - 1)
+        tm, th = (t0 + t1) / 2, (t1 - t0) / 2
+        s[i] = s[i-1] + th * (
+            _HC_GAUSS4_WEIGHTS[1] * _hc_speed(a1, a2, a3, tm + th * _HC_GAUSS4_NODES[1]) +
+            _HC_GAUSS4_WEIGHTS[2] * _hc_speed(a1, a2, a3, tm + th * _HC_GAUSS4_NODES[2]) +
+            _HC_GAUSS4_WEIGHTS[3] * _hc_speed(a1, a2, a3, tm + th * _HC_GAUSS4_NODES[3]) +
+            _HC_GAUSS4_WEIGHTS[4] * _hc_speed(a1, a2, a3, tm + th * _HC_GAUSS4_NODES[4]))
+    end
+    return s
+end
+
+function _hc_t_from_s(seg::HermiteConnector, s_target::Float64)
+    s_table = seg.s_table
+    n = length(s_table)
+    L = s_table[end]
+    L < 1e-15 && return 0.0
+    sc = clamp(s_target, 0.0, L)
+
+    lo, hi = 1, n
+    while hi - lo > 1
+        mid = (lo + hi) >> 1
+        s_table[mid] <= sc ? (lo = mid) : (hi = mid)
+    end
+    t0 = (lo - 1) / (n - 1)
+    t1 = (hi - 1) / (n - 1)
+    s0 = s_table[lo]
+    ds = s_table[hi] - s0
+
+    t = ds > 1e-15 ? t0 + (sc - s0) / ds * (t1 - t0) : t0
+
+    # Newton refinement: s(t) ≈ s0 + (t-t0)*speed_at_midpoint
+    a1, a2, a3 = seg.a1, seg.a2, seg.a3
+    for _ in 1:2
+        spd_mid = _hc_speed(a1, a2, a3, (t0 + t) / 2)
+        spd_mid < 1e-15 && break
+        s_est = s0 + (t - t0) * spd_mid
+        spd   = _hc_speed(a1, a2, a3, t)
+        spd   < 1e-15 && break
+        t = clamp(t - (s_est - sc) / spd, t0, t1)
+    end
+    return t
+end
+
+# Compute peak curvature of a Hermite connector (in t-space) by sampling n_check
+# uniformly-spaced t values.  At least 3 interior points are always included so
+# that the mid-curve bulge is never missed.
+function _hc_peak_curvature(a1, a2, a3; n_check::Int = 128)
+    κ_max = 0.0
+    for i in 0:n_check
+        t  = i / n_check
+        dp    = _hc_dp(a1, a2, a3, t)
+        dp_v  = [dp[1], dp[2], dp[3]]
+        dp_n  = norm(dp_v)
+        dp_n < 1e-15 && continue
+        ddp   = _hc_ddp(a2, a3, t)
+        ddp_v = [ddp[1], ddp[2], ddp[3]]
+        κ = norm(cross(dp_v, ddp_v)) / dp_n^3
+        κ > κ_max && (κ_max = κ)
+    end
+    return κ_max
+end
+
+# Assemble Hermite coefficients from handle scale h and unit tangents.
+function _hc_coeffs(p1_local, t_hat_out, h)
+    v0  = h .* [0.0, 0.0, 1.0]
+    v1  = h .* t_hat_out
+    a1v = v0
+    a2v = 3 .* p1_local .- 2 .* v0 .- v1
+    a3v = 2 .* (.-p1_local) .+ v0 .+ v1
+    a1 = (a1v[1], a1v[2], a1v[3])
+    a2 = (a2v[1], a2v[2], a2v[3])
+    a3 = (a3v[1], a3v[2], a3v[3])
+    return a1, a2, a3
+end
+
+function _build_hermite_connector(p1_local::Vector{Float64}, t_hat_out::Vector{Float64};
+                                   n_table::Int = 256,
+                                   min_bend_radius::Union{Nothing,Float64} = nothing)
+    chord = norm(p1_local)
+    h = chord   # default: chord-proportioned handles
+
+    if !isnothing(min_bend_radius)
+        κ_limit = 1.0 / min_bend_radius
+
+        _κ(hv) = _hc_peak_curvature(_hc_coeffs(p1_local, t_hat_out, hv)...)
+
+        # Scan κ(h) over an exponential ladder to find any h where κ(h) ≤ κ_limit.
+        # κ(h) can be non-monotone for inflecting geometries (e.g. anti-parallel
+        # tangents with transverse chord), so a simple two-point probe is insufficient.
+        h0 = max(chord, 1e-12)
+        h_scan = h0
+        κ_prev = _κ(h_scan)
+        h_hi_bracket = nothing   # smallest h where κ(h) ≤ κ_limit
+
+        for _ in 1:64
+            h_next = 2.0 * h_scan
+            κ_next = _κ(h_next)
+            if κ_next <= κ_limit
+                h_hi_bracket = h_next
+                break
+            end
+            h_scan = h_next
+            κ_prev = κ_next
+        end
+
+        if isnothing(h_hi_bracket)
+            throw(ArgumentError(
+                "min_bend_radius=$(min_bend_radius) m is infeasible for this jump: " *
+                "peak curvature could not be brought below $(round(κ_limit;digits=2)) m⁻¹ " *
+                "within practical handle lengths (h_max=$(round(h_scan;digits=4)) m). " *
+                "Geometry: chord=$(round(chord*1e3;digits=2)) mm, " *
+                "outgoing tangent $(round.(t_hat_out;digits=3))."))
+        end
+
+        if _κ(h0) > κ_limit
+            # Bisect in [h0, h_hi_bracket]: h0 violates, h_hi_bracket satisfies.
+            # κ(h) may be non-monotone so this finds *a* valid h, not necessarily
+            # the minimum; that is acceptable for the connector length optimisation.
+            h_lo = h0
+            h_hi = h_hi_bracket
+            for _ in 1:64
+                h_mid = (h_lo + h_hi) / 2
+                if _κ(h_mid) > κ_limit
+                    h_lo = h_mid
+                else
+                    h_hi = h_mid
+                end
+                h_hi - h_lo < 1e-10 * h_hi && break
+            end
+            h = h_hi
+        end
+    end
+
+    a1, a2, a3 = _hc_coeffs(p1_local, t_hat_out, h)
+    a0 = (0.0, 0.0, 0.0)
+    return HermiteConnector(a0, a1, a2, a3, _hc_build_table(a1, a2, a3, n_table), 1.0)
+end
+
+arc_length(seg::HermiteConnector)         = seg.s_table[end]
+nominal_arc_length(seg::HermiteConnector) = arc_length(seg)
+
+function curvature(seg::HermiteConnector, s::Real)
+    t      = _hc_t_from_s(seg, Float64(s))
+    dp     = _hc_dp(seg.a1, seg.a2, seg.a3, t)
+    dp_v   = [dp[1], dp[2], dp[3]]
+    ddp    = _hc_ddp(seg.a2, seg.a3, t)
+    ddp_v  = [ddp[1], ddp[2], ddp[3]]
+    dp_n   = norm(dp_v)
+    dp_n < 1e-15 && return 0.0
+    return norm(cross(dp_v, ddp_v)) / dp_n^3
+end
+
+function geometric_torsion(seg::HermiteConnector, s::Real)
+    t      = _hc_t_from_s(seg, Float64(s))
+    dp     = _hc_dp(seg.a1, seg.a2, seg.a3, t)
+    dp_v   = [dp[1], dp[2], dp[3]]
+    ddp    = _hc_ddp(seg.a2, seg.a3, t)
+    ddp_v  = [ddp[1], ddp[2], ddp[3]]
+    dddp_v = [6*seg.a3[1], 6*seg.a3[2], 6*seg.a3[3]]
+    c      = cross(dp_v, ddp_v)
+    denom  = dot(c, c)
+    denom < 1e-30 && return 0.0
+    return dot(c, dddp_v) / denom
+end
+
+function position_local(seg::HermiteConnector, s::Real)
+    t = _hc_t_from_s(seg, Float64(s))
+    a0, a1, a2, a3 = seg.a0, seg.a1, seg.a2, seg.a3
+    t2, t3 = t*t, t*t*t
+    return [a0[i] + a1[i]*t + a2[i]*t2 + a3[i]*t3 for i in 1:3]
+end
+
+function tangent_local(seg::HermiteConnector, s::Real)
+    t    = _hc_t_from_s(seg, Float64(s))
+    dp   = _hc_dp(seg.a1, seg.a2, seg.a3, t)
+    dp_v = [dp[1], dp[2], dp[3]]
+    spd  = norm(dp_v)
+    spd < 1e-15 && return [0.0, 0.0, 1.0]
+    return dp_v ./ spd
+end
+
+function normal_local(seg::HermiteConnector, s::Real)
+    t    = _hc_t_from_s(seg, Float64(s))
+    dp   = _hc_dp(seg.a1, seg.a2, seg.a3, t)
+    dp_v = [dp[1], dp[2], dp[3]]
+    spd  = norm(dp_v)
+    T    = spd > 1e-15 ? dp_v ./ spd : [0.0, 0.0, 1.0]
+    ddp  = _hc_ddp(seg.a2, seg.a3, t)
+    acc  = [ddp[1], ddp[2], ddp[3]] .- dot([ddp[1], ddp[2], ddp[3]], T) .* T
+    an   = norm(acc)
+    return an > 1e-15 ? acc ./ an : _perp_unit(T)
+end
+
+function binormal_local(seg::HermiteConnector, s::Real)
+    return cross(tangent_local(seg, s), normal_local(seg, s))
+end
+
+function end_position_local(seg::HermiteConnector)
+    a0, a1, a2, a3 = seg.a0, seg.a1, seg.a2, seg.a3
+    return [a0[i] + a1[i] + a2[i] + a3[i] for i in 1:3]
+end
+
+function end_frame_local(seg::HermiteConnector)
+    # t = 1.0 exactly at the endpoint; skip the arc-length table lookup.
+    dp  = _hc_dp(seg.a1, seg.a2, seg.a3, 1.0)
+    dp_v = [dp[1], dp[2], dp[3]]
+    spd  = norm(dp_v)
+    T    = spd > 1e-15 ? dp_v ./ spd : [0.0, 0.0, 1.0]
+    ddp  = _hc_ddp(seg.a2, seg.a3, 1.0)
+    acc  = [ddp[1], ddp[2], ddp[3]] .- dot([ddp[1], ddp[2], ddp[3]], T) .* T
+    an   = norm(acc)
+    N    = an > 1e-15 ? acc ./ an : _perp_unit(T)
+    return (T, N, cross(T, N))
+end
+
+# Resolve JumpBy / JumpTo to a HermiteConnector at build() time.
+
+function _resolve_at_placement(seg::JumpBy, pos::Vector{Float64}, frame_mat::Matrix{Float64})
+    p1_local  = collect(seg.delta) .* seg.shrinkage
+    chord     = norm(p1_local)
+    t_hat_out = isnothing(seg.tangent_out) ?
+        (chord > 1e-15 ? p1_local ./ chord : [0.0, 0.0, 1.0]) :
+        normalize(collect(seg.tangent_out))
+    return _build_hermite_connector(p1_local, t_hat_out;
+                                    min_bend_radius = seg.min_bend_radius)
+end
+
+function _resolve_at_placement(seg::JumpTo, pos::Vector{Float64}, frame_mat::Matrix{Float64})
+    p1_local  = frame_mat' * (collect(seg.destination) .- pos)
+    chord     = norm(p1_local)
+    t_hat_out = if isnothing(seg.tangent_out)
+        chord > 1e-15 ? p1_local ./ chord : [0.0, 0.0, 1.0]
+    else
+        normalize(frame_mat' * normalize(collect(seg.tangent_out)))
+    end
+    return _build_hermite_connector(p1_local, t_hat_out;
+                                    min_bend_radius = seg.min_bend_radius)
+end
+
+_resolve_at_placement(seg::AbstractPathSegment, ::Vector{Float64}, ::Matrix{Float64}) = seg
 
 # -----------------------------------------------------------------------
 # PathSpec  (mutable authoring struct)
@@ -499,13 +815,15 @@ function catenary!(spec::PathSpec; a::Real, length::Real, axis_angle::Real = 0.0
     return spec
 end
 
-function jumpby!(spec::PathSpec; delta, tangent = nothing, shrinkage::Real = 1.0)
-    push!(spec.segments, JumpBy(delta; tangent_out = tangent, shrinkage))
+function jumpby!(spec::PathSpec; delta, tangent = nothing, shrinkage::Real = 1.0,
+                 min_bend_radius = nothing)
+    push!(spec.segments, JumpBy(delta; tangent_out = tangent, shrinkage, min_bend_radius))
     return spec
 end
 
-function jumpto!(spec::PathSpec; destination, tangent = nothing, shrinkage::Real = 1.0)
-    push!(spec.segments, JumpTo(destination; tangent_out = tangent, shrinkage))
+function jumpto!(spec::PathSpec; destination, tangent = nothing, shrinkage::Real = 1.0,
+                 min_bend_radius = nothing)
+    push!(spec.segments, JumpTo(destination; tangent_out = tangent, shrinkage, min_bend_radius))
     return spec
 end
 
@@ -566,11 +884,10 @@ end
 function _apply_shrinkage_override(seg::S, override) where {S <: AbstractPathSegment}
     isnothing(override) && return seg
     α = Float64(override)
-    # Reconstruct with new shrinkage — uses positional fields common to all segments.
-    # This works because every concrete segment stores shrinkage as the last field.
+    # All segment outer constructors take shrinkage as a keyword argument.
     flds = fieldnames(S)
-    vals = [f === :shrinkage ? α : getfield(seg, f) for f in flds]
-    return S(vals...)
+    vals = [getfield(seg, f) for f in flds if f !== :shrinkage]
+    return S(vals...; shrinkage = α)
 end
 
 function _resolve_overlay(overlay::TwistOverlay,
@@ -613,6 +930,8 @@ function build(spec::PathSpec; shrinkage = nothing)
     B_frame = [0.0, 1.0, 0.0]
     T_frame = [0.0, 0.0, 1.0]
 
+    isempty(spec.segments) && error("build: PathSpec contains no segments")
+
     s_eff = 0.0
     s_nom = 0.0
     placed = PlacedSegment[]
@@ -629,12 +948,13 @@ function build(spec::PathSpec; shrinkage = nothing)
             seg_orig
         end
 
-        frame = hcat(N_frame, B_frame, T_frame)   # columns: [N | B | T]
-        push!(placed, PlacedSegment(seg, s_eff, s_nom, copy(pos), copy(frame)))
+        frame      = hcat(N_frame, B_frame, T_frame)   # columns: [N | B | T]
+        seg_placed = _resolve_at_placement(seg, pos, frame)
+        push!(placed, PlacedSegment(seg_placed, s_eff, s_nom, copy(pos), copy(frame)))
 
         # Advance position and frame
-        pos_end_local         = end_position_local(seg)
-        (T_end_l, N_end_l, _) = end_frame_local(seg)
+        pos_end_local         = end_position_local(seg_placed)
+        (T_end_l, N_end_l, _) = end_frame_local(seg_placed)
 
         pos     = pos + frame * pos_end_local
         T_frame = normalize(frame * T_end_l)
@@ -643,8 +963,8 @@ function build(spec::PathSpec; shrinkage = nothing)
         N_frame = normalize(N_end_g - dot(N_end_g, T_frame) * T_frame)
         B_frame = cross(T_frame, N_frame)
 
-        s_eff += arc_length(seg)
-        s_nom += nominal_arc_length(seg)
+        s_eff += arc_length(seg_placed)
+        s_nom += nominal_arc_length(seg_placed)
     end
 
     resolved = [_resolve_overlay(ov, placed) for ov in spec.twist_overlays]
@@ -826,13 +1146,8 @@ function total_material_twist(
     s_end::Real = path.s_end,
     n_quad::Int = 128,
 )
-    s_lo = Float64(s_start)
-    s_hi = Float64(s_end)
-    if s_lo > s_hi
-        throw(ArgumentError(
-            "total_material_twist: require s_start ≤ s_end; got s_start=$(s_start), s_end=$(s_end)",
-        ))
-    end
+    s_lo = min(Float64(s_start), Float64(s_end))
+    s_hi = max(Float64(s_start), Float64(s_end))
     ps0 = path.s_start
     ps1 = path.s_end
     if !(ps0 <= s_lo <= ps1) || !(ps0 <= s_hi <= ps1)
@@ -851,7 +1166,7 @@ function total_material_twist(
             b <= a && continue
             ss = range(a, b; length = n_quad + 1)
             h = (b - a) / n_quad
-            total += h * sum(r.rate(s) for s in ss)
+            total += h * (sum(r.rate(s) for s in ss) - r.rate(a)/2 - r.rate(b)/2)
         end
     end
     return total
@@ -878,13 +1193,8 @@ function total_frame_rotation(
     s_end::Real   = path.s_end,
     n_quad::Int   = 128,
 )
-    s_lo = Float64(s_start)
-    s_hi = Float64(s_end)
-    if s_lo > s_hi
-        throw(ArgumentError(
-            "total_frame_rotation: require s_start ≤ s_end; got s_start=$(s_start), s_end=$(s_end)",
-        ))
-    end
+    s_lo = min(Float64(s_start), Float64(s_end))
+    s_hi = max(Float64(s_start), Float64(s_end))
     ps0 = path.s_start
     ps1 = path.s_end
     if !(ps0 <= s_lo <= ps1) || !(ps0 <= s_hi <= ps1)
@@ -914,7 +1224,8 @@ function total_frame_rotation(
             else
                 ss = range(a_loc, b_loc; length = n_quad + 1)
                 h  = (b_loc - a_loc) / n_quad
-                τ_total += h * sum(geometric_torsion(seg, s) for s in ss)
+                τ_total += h * (sum(geometric_torsion(seg, s) for s in ss) -
+                                geometric_torsion(seg, a_loc)/2 - geometric_torsion(seg, b_loc)/2)
             end
         end
         s_seg_start = s_seg_end
@@ -1023,6 +1334,15 @@ end
 
 function _segment_total_angle(seg::HelixSegment)
     return seg.turns * 2π
+end
+
+function _segment_total_angle(seg::HermiteConnector)
+    L = arc_length(seg)
+    L < 1e-15 && return 0.0
+    n = 16
+    ss = range(0.0, L; length = n + 1)
+    h  = L / n
+    return h * (sum(curvature(seg, s) for s in ss) - curvature(seg, 0.0)/2 - curvature(seg, L)/2)
 end
 
 _segment_total_angle(::AbstractPathSegment) = 0.0
