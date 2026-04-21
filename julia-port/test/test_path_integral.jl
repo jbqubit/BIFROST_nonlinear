@@ -1,10 +1,11 @@
 using Test
 using LinearAlgebra
 
-if !isdefined(Main, :propagate_fiber_sensitivity)
+if !isdefined(Main, :propagate_piecewise)
     include("../path-integral.jl")
 end
 
+const PI_MATRIX_ATOL = 1e-9
 const SIGMA_X = ComplexF64[0 1; 1 0]
 const SIGMA_Y = ComplexF64[0 -im; im 0]
 const SIGMA_Z = ComplexF64[1 0; 0 -1]
@@ -23,11 +24,153 @@ function piecewise_constant_matrix(breaks::Vector{Float64}, values::Vector{Matri
 end
 
 function propagate_dgd_case(K, Komega, breaks; rtol = 1e-11, atol = 1e-13, h_init = 0.05)
-    J, G, stats = propagate_piecewise_sensitivity(K, Komega, breaks; rtol = rtol, atol = atol, h_init = h_init)
+    J, G, stats = propagate_piecewise_Kω(K, Komega, breaks; rtol = rtol, atol = atol, h_init = h_init)
     return J, G, stats
 end
 
 accepted_steps(stats) = sum(st.accepted_steps for st in stats)
+
+# ─── T-PHYSICS: noncommuting piecewise-constant generators ──────────────────────────────────────
+#
+# For piecewise-constant K with a breakpoint, path-ordering gives
+#
+#   J = exp(K₂ Δs₂) · exp(K₁ Δs₁)
+#
+# where K₁ and K₂ are on different Pauli axes, so they do NOT commute.
+# The expected result is the explicit matrix product of the two closed-form exponentials.
+# This is the minimal noncommuting benchmark: if the propagator ignored ordering it would
+# compute exp((K₁+K₂)/2 · L) instead, which is wrong when [K₁,K₂] ≠ 0.
+
+@testset "Path-ordering: noncommuting piecewise-constant generators" begin
+    # T-PHYSICS
+    # K₁ = β₁·i·σ_x on [0, L₁],  K₂ = β₂·i·σ_z on [L₁, L₁+L₂]
+    # J_expected = exp(β₂·i·σ_z·L₂) · exp(β₁·i·σ_x·L₁)   (right-to-left composition)
+    L1 = 0.7
+    L2 = 1.3
+    β1 = 0.6
+    β2 = 0.4
+    breaks = [0.0, L1, L1 + L2]
+
+    K = function (s::Real)
+        s < L1 ? β1 * im .* SIGMA_X : β2 * im .* SIGMA_Z
+    end
+
+    J_num, _ = propagate_piecewise(K, breaks; rtol = 1e-11, atol = 1e-13)
+
+    J_seg1 = exp_jones_generator(L1 * β1 * im .* SIGMA_X)
+    J_seg2 = exp_jones_generator(L2 * β2 * im .* SIGMA_Z)
+    J_expected = J_seg2 * J_seg1
+
+    @test J_num ≈ J_expected atol = PI_MATRIX_ATOL
+
+    # Confirm that the wrong (commuting) result is actually different, so this test has
+    # power to detect an ordering bug.
+    J_wrong = exp_jones_generator(L1 * β1 * im .* SIGMA_X + L2 * β2 * im .* SIGMA_Z)
+    @test opnorm(J_expected - J_wrong) > 1e-3
+end
+
+@testset "Path-ordering: three noncommuting segments" begin
+    # T-PHYSICS
+    # Three segments on three different Pauli axes — each pair is noncommuting.
+    # J_expected = exp(K₃ L₃) · exp(K₂ L₂) · exp(K₁ L₁)
+    L1, L2, L3 = 0.5, 0.8, 0.6
+    β1, β2, β3 = 0.5, -0.3, 0.7
+    breaks = [0.0, L1, L1 + L2, L1 + L2 + L3]
+
+    function K3(s::Real)
+        if s < L1
+            return β1 * im .* SIGMA_X
+        elseif s < L1 + L2
+            return β2 * im .* SIGMA_Y
+        else
+            return β3 * im .* SIGMA_Z
+        end
+    end
+
+    J_num, _ = propagate_piecewise(K3, breaks; rtol = 1e-11, atol = 1e-13)
+
+    J1 = exp_jones_generator(L1 * β1 * im .* SIGMA_X)
+    J2 = exp_jones_generator(L2 * β2 * im .* SIGMA_Y)
+    J3 = exp_jones_generator(L3 * β3 * im .* SIGMA_Z)
+    J_expected = J3 * J2 * J1
+
+    @test J_num ≈ J_expected atol = PI_MATRIX_ATOL
+end
+
+@testset "Noncommuting smooth K: convergence to analytic result" begin
+    # T-PHYSICS
+    # K(s) = α·i·σ_x·cos(s) + β·i·σ_z·sin(s)  on [0, π].
+    # σ_x and σ_z do not commute, so no closed form exists; instead we check that
+    # the adaptive integrator converges: coarse and fine tolerances agree to fine-tol precision.
+    α = 0.8
+    β = 0.5
+    breaks = [0.0, Float64(π)]
+
+    K_smooth = s -> α * im * cos(s) .* SIGMA_X + β * im * sin(s) .* SIGMA_Z
+
+    J_fine, stats_fine = propagate_piecewise(K_smooth, breaks; rtol = 1e-11, atol = 1e-13)
+    J_coarse, stats_coarse = propagate_piecewise(K_smooth, breaks; rtol = 1e-6, atol = 1e-8)
+
+    # Fine result is the reference; coarse should agree to its own tolerance (~1e-6 rtol on a unit matrix).
+    @test opnorm(J_fine - J_coarse) <= 1e-4
+
+    # Fine integrator should be unitary (SU(2) invariant).
+    @test opnorm(J_fine' * J_fine - Matrix{ComplexF64}(I, 2, 2)) <= PI_MATRIX_ATOL
+
+    # Sanity: the result is not the identity — K is non-trivial.
+    @test opnorm(J_fine - Matrix{ComplexF64}(I, 2, 2)) > 1e-2
+end
+
+@testset "Noncommuting: unitary preservation" begin
+    # T-GUARDRAIL
+    # For any noncommuting piecewise K, the propagated J must remain unitary to solver tolerance.
+    breaks = [0.0, 0.5, 1.2, 2.0]
+    mixed_axis = (SIGMA_X .+ SIGMA_Y .+ SIGMA_Z) ./ sqrt(3)
+    K_mixed = function (s::Real)
+        if s < 0.5
+            return 0.6im .* SIGMA_X
+        elseif s < 1.2
+            return -0.4im .* SIGMA_Z
+        else
+            return 0.3im .* mixed_axis
+        end
+    end
+
+    J, _ = propagate_piecewise(K_mixed, breaks; rtol = 1e-11, atol = 1e-13)
+
+    @test opnorm(J' * J - Matrix{ComplexF64}(I, 2, 2)) <= PI_MATRIX_ATOL
+    @test abs(det(J) - 1.0) <= PI_MATRIX_ATOL
+end
+
+@testset "Noncommuting: reverse path gives inverse Jones matrix" begin
+    # T-PHYSICS
+    # If K_rev(s) = -K(L - s), then propagating K_rev over [0, L] gives J⁻¹.
+    # This tests that path-ordering is globally consistent: reversing the path
+    # undoes the forward propagation.
+    L = 1.8
+    breaks_fwd = [0.0, 0.6, 1.2, L]
+    β_vals = [0.5, -0.3, 0.7]
+    axes = [SIGMA_X, SIGMA_Z, SIGMA_Y]
+
+    K_fwd = function (s::Real)
+        if s < 0.6
+            return β_vals[1] * im .* axes[1]
+        elseif s < 1.2
+            return β_vals[2] * im .* axes[2]
+        else
+            return β_vals[3] * im .* axes[3]
+        end
+    end
+
+    # K_rev(s) = -K_fwd(L - s)
+    K_rev = s -> -K_fwd(L - s)
+    breaks_rev = [0.0, L - 1.2, L - 0.6, L]
+
+    J_fwd, _ = propagate_piecewise(K_fwd, breaks_fwd; rtol = 1e-11, atol = 1e-13)
+    J_rev, _ = propagate_piecewise(K_rev, breaks_rev; rtol = 1e-11, atol = 1e-13)
+
+    @test J_rev * J_fwd ≈ Matrix{ComplexF64}(I, 2, 2) atol = PI_MATRIX_ATOL
+end
 
 @testset "DGD exact cases" begin
     @testset "Zero Komega gives zero DGD" begin
@@ -224,8 +367,8 @@ end
     fiber = Fiber(0.0, 3.0, AbstractBirefringenceSource[bend, twist])
 
     @testset "Automatic breakpoint union matches explicit partition" begin
-        J_auto, G_auto, stats_auto = propagate_fiber_sensitivity(fiber; rtol = 1e-11, atol = 1e-13, h_init = 0.05)
-        J_explicit, G_explicit, stats_explicit = propagate_piecewise_sensitivity(
+        J_auto, G_auto, stats_auto = propagate_fiber_Kω(fiber; rtol = 1e-11, atol = 1e-13, h_init = 0.05)
+        J_explicit, G_explicit, stats_explicit = propagate_piecewise_Kω(
             generator_K(fiber),
             generator_Kω(fiber),
             explicit_union;

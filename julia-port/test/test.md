@@ -6,9 +6,11 @@ It is intended to be self-sufficient and not to rely on any separate design-note
 The test entrypoint runs:
 
 - `test_fiber_path.jl`
-- `test_path_integral_sources.jl`
+- `test_path_integral.jl` (Jones propagation, path-ordering checks, and DGD / Kω)
+- `test_material_properties.jl`
+- `fiber-cross-section.jl` (in-repo include)
 - `test_paddle_transfer.jl`
-- `test_dgd.jl`
+- `test_fiber_cross_section.jl`
 
 ## Governing equations
 
@@ -560,9 +562,9 @@ The `5P-*` cases are long-composition regression tests:
 
 These are useful because small sign or ordering defects can accumulate and only become obvious in longer sequences.
 
-## `test_dgd.jl`
+## DGD tests (`test_path_integral.jl`)
 
-This file tests the DGD channel directly. It is the most analytic part of the suite.
+These test sets live in `test_path_integral.jl` alongside the path-integral tests. They exercise the DGD channel directly and are the most analytic part of that file.
 
 ### Test-side helper subroutines
 

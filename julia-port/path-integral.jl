@@ -10,11 +10,11 @@ using LinearAlgebra
 #     - phase_insensitive_error
 #     - propagate_interval!
 #     - propagate_piecewise
-# - the DGD sensitivity stack consists of
-#     - exp_sensitivity_midpoint_step
-#     - sensitivity_phase_insensitive_error
-#     - propagate_interval_sensitivity!
-#     - propagate_piecewise_sensitivity
+# - the DGD Kω stack consists of
+#     - exp_Kω_midpoint_step
+#     - Kω_phase_insensitive_error
+#     - propagate_interval_Kω!
+#     - propagate_piecewise_Kω
 #     - output_dgd
 #
 # fiber-path-plot.jl sits on top of that stack; it provides visual diagnostics.
@@ -79,7 +79,7 @@ function exp_midpoint_step(K, s::Float64, h::Float64, J::Matrix{ComplexF64})
     return exp_jones_generator(h * M) * J
 end
 
-function exp_sensitivity_midpoint_step(
+function exp_Kω_midpoint_step(
     K,
     Kω,
     s::Float64,
@@ -123,7 +123,7 @@ function align_global_phase(A::Matrix{ComplexF64}, B::Matrix{ComplexF64})
     return α / abs(α)
 end
 
-function sensitivity_phase_insensitive_error(
+function Kω_phase_insensitive_error(
     J_ref::Matrix{ComplexF64},
     G_ref::Matrix{ComplexF64},
     J_cmp::Matrix{ComplexF64},
@@ -206,7 +206,11 @@ function propagate_interval!(
     return J, PropagatorStats(accepted, rejected)
 end
 
-function propagate_interval_sensitivity!(
+# ----------------------------
+# Adaptive step-doubling on one smooth interval
+# ----------------------------
+
+function propagate_interval_Kω!(
     K,
     Kω,
     s0::Float64,
@@ -234,12 +238,12 @@ function propagate_interval_sensitivity!(
         h = min(h, s1 - s)
         @assert h >= h_min "Step size underflow near s=$s"
 
-        J_full, G_full = exp_sensitivity_midpoint_step(K, Kω, s, h, J, G)
+        J_full, G_full = exp_Kω_midpoint_step(K, Kω, s, h, J, G)
 
-        J_half, G_half = exp_sensitivity_midpoint_step(K, Kω, s, 0.5h, J, G)
-        J_twohalf, G_twohalf = exp_sensitivity_midpoint_step(K, Kω, s + 0.5h, 0.5h, J_half, G_half)
+        J_half, G_half = exp_Kω_midpoint_step(K, Kω, s, 0.5h, J, G)
+        J_twohalf, G_twohalf = exp_Kω_midpoint_step(K, Kω, s + 0.5h, 0.5h, J_half, G_half)
 
-        err_abs = sensitivity_phase_insensitive_error(J_full, G_full, J_twohalf, G_twohalf)
+        err_abs = Kω_phase_insensitive_error(J_full, G_full, J_twohalf, G_twohalf)
         scale = max(opnorm(J_full), opnorm(J_twohalf), opnorm(G_full), opnorm(G_twohalf))
         tol = atol + rtol * scale
 
@@ -324,7 +328,7 @@ function propagate_fiber(
 end
 
 """
-    propagate_piecewise_sensitivity(K, Kω, breaks; jumps=Dict(), jump_omegas=Dict(), kwargs...)
+    propagate_piecewise_Kω(K, Kω, breaks; jumps=Dict(), jump_omegas=Dict(), kwargs...)
 
 Propagate the coupled system
 `dJ/ds = K(s) J`,
@@ -337,7 +341,7 @@ Returns
 - `G_final = ∂ωJ_final`
 - `stats_per_interval`
 """
-function propagate_piecewise_sensitivity(
+function propagate_piecewise_Kω(
     K,
     Kω,
     breaks::Vector{Float64};
@@ -356,7 +360,7 @@ function propagate_piecewise_sensitivity(
         sL = breaks[i]
         sR = breaks[i+1]
 
-        J, G, st = propagate_interval_sensitivity!(K, Kω, sL, sR, J; G0 = G, kwargs...)
+        J, G, st = propagate_interval_Kω!(K, Kω, sL, sR, J; G0 = G, kwargs...)
         push!(stats, st)
 
         if haskey(jumps, sR)
@@ -372,13 +376,13 @@ function propagate_piecewise_sensitivity(
     return J, G, stats
 end
 
-function propagate_fiber_sensitivity(
+function propagate_fiber_Kω(
     f::Fiber;
     jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
     jump_omegas::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
     kwargs...
 )
-    return propagate_piecewise_sensitivity(
+    return propagate_piecewise_Kω(
         generator_K(f),
         generator_Kω(f),
         fiber_breakpoints(f);
