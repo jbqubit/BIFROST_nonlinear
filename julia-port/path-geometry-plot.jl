@@ -3,8 +3,8 @@ path-geometry-plot.jl
 
 Interactive Plotly HTML for a [`Path`](path-geometry.jl): 3D centerline, a draggable cursor
 driven by horizontal mouse position, a movable transverse square (normal–binormal plane),
-short tangent/normal/binormal axes at the cursor, and an inset showing the unit disk in
-local Frenet **n̂**–**b̂** coordinates.
+short tangent/normal/binormal axes at the cursor, and optional per-segment nickname labels when
+authoring segments with a `nickname` string.
 
 This file depends only on `path-geometry.jl` (via the nested `PathGeometry` module) and the
 Plotly CDN. It does not load or reference other `julia-port/` sources.
@@ -89,10 +89,12 @@ function _js_string_array(xs::AbstractVector{<:AbstractString})
 end
 
 """
-    write_path_geometry_plot3d(path::PathGeometry.Path, s1, s2; fidelity, output, title, plane_extent_frac, axis_extent_frac, twist_n_quad)
+    write_path_geometry_plot3d(path::PathGeometry.Path, s1, s2; fidelity, output, title, plane_extent_frac, axis_extent_frac, segment_label_nudge_frac, twist_n_quad)
 
 Write a standalone Plotly HTML file. Horizontal mouse position (without a mouse button pressed)
-scrubs the arc-length parameter; the transverse plane and frame axes update accordingly.
+scrubs arc length: left-to-right maps linearly in ``s`` over the plotted ``[s_1, s_2]`` interval
+(not linearly in sample index). The cursor snaps to the nearest polyline sample. The transverse
+plane and frame axes update accordingly.
 
 Keywords `plane_extent_frac` and `axis_extent_frac` scale the half-width of the movable square
 and the length of the **T**, **N**, **B** segments relative to the axis-aligned bounding box
@@ -100,11 +102,18 @@ diagonal of the path (before padding).
 
 The main 3D scene axis ranges are fixed at generation time from
 [`PathGeometry.bounding_box`](path-geometry.jl), expanded to keep the transverse square and
-**T**/**N**/**B** axes in view. After each scrub update, the same ranges are re-applied with
-`Plotly.relayout` so Plotly does not re-fit the scene to the moving mesh.
+**T**/**N**/**B** axes in view. The scene uses Plotly `aspectmode: "cube"` so one meter along x, y,
+and z maps to the same on-screen length. After each scrub update, the same ranges are re-applied
+with `Plotly.relayout` so Plotly does not re-fit the scene to the moving mesh.
 
 Open-circle markers are drawn at effective arc-length joins between authored segments (interior
 segment boundaries) that fall within `[s1, s2]`.
+
+Segments may carry an optional `nickname` string (see [`PathGeometry.straight!`](path-geometry.jl),
+`bend!`, …). For each named segment that overlaps `[s1, s2]`, a 3D text label is drawn at the
+midpoint arc length, offset slightly along the principal normal so the anchor lies in the local
+osculating plane. `segment_label_nudge_frac` scales that offset relative to the scene bounding-box
+diagonal.
 
 A red arrow in the local **N̂**–**B̂** plane at the cursor points along
 cos(Φ) N̂ + sin(Φ) B̂, where Φ is [`PathGeometry.total_material_twist`](path-geometry.jl) from `s1`
@@ -123,6 +132,7 @@ function write_path_geometry_plot3d(
     title::AbstractString = "Path geometry",
     plane_extent_frac::Float64 = 0.08,
     axis_extent_frac::Float64 = 0.06,
+    segment_label_nudge_frac::Float64 = 0.035,
     twist_n_quad::Int = 128,
 )
     path_sample = PathGeometry.sample_path(path, s1, s2; fidelity = fidelity)
@@ -171,20 +181,35 @@ function write_path_geometry_plot3d(
         end
     end
 
-    title_html = replace(replace(title, "&" => "&amp;"), "<" => "&lt;")
-
-    # Unit circle in local (n̂, b̂) coordinates for the inset
-    nθ = 121
-    θs = collect(range(0.0, 2π; length = nθ))
-    inset_x = cos.(θs)
-    inset_y = sin.(θs)
-
-    inset_tick_x = Float64[]
-    inset_tick_y = Float64[]
-    for ϕ in (0.0, 0.5π, π, 1.5π)
-        push!(inset_tick_x, 0.88 * cos(ϕ), cos(ϕ), NaN)
-        push!(inset_tick_y, 0.88 * sin(ϕ), sin(ϕ), NaN)
+    label_x = Float64[]
+    label_y = Float64[]
+    label_z = Float64[]
+    label_strs = String[]
+    nudge = Float64(segment_label_nudge_frac) * diag
+    for ps in placed
+        nick = PathGeometry.segment_nickname(ps.segment)
+        isnothing(nick) && continue
+        s_lo = ps.s_offset_eff
+        s_hi = s_lo + PathGeometry.arc_length(ps.segment)
+        s_a = max(s_lo, s1f)
+        s_b = min(s_hi, s2f)
+        s_a >= s_b - 1e-15 && continue
+        s_mid = (s_a + s_b) / 2
+        fr = PathGeometry.frame(path, s_mid)
+        r = collect(fr.position)
+        N = collect(fr.normal)
+        nn = norm(N)
+        if nn >= 1e-12
+            N ./= nn
+            r .+= nudge .* N
+        end
+        push!(label_x, r[1])
+        push!(label_y, r[2])
+        push!(label_z, r[3])
+        push!(label_strs, nick)
     end
+
+    title_html = replace(replace(title, "&" => "&amp;"), "<" => "&lt;")
 
     s_samples = Vector{Float64}(samples.s)
     integrated_tau_mat = Vector{Float64}(undef, length(s_samples))
@@ -214,8 +239,8 @@ function write_path_geometry_plot3d(
       - B̂: green segment, binormal T̂×N̂ at the cursor.
       - ∫τ_mat: red arrow in the N̂–B̂ plane at the cursor; Φ = total_material_twist(path; s_start
         = plot start, s_end = cursor) (same length scale as T̂/N̂/B̂ axes).
-      Inset plot: unit circle and axes in local transverse (n̂, b̂) coordinates at the same
-      scrub position.
+      - segment labels (optional): 3D text for each authored segment that has a nickname, when
+        that segment overlaps the plotted s-interval.
     -->
     <!DOCTYPE html>
     <html lang="en">
@@ -241,21 +266,9 @@ function write_path_geometry_plot3d(
           width: 100%;
           height: 100%;
         }
-        #inset {
-          position: absolute;
-          top: 16px;
-          right: 16px;
-          width: min(28vw, 340px);
-          height: min(28vw, 340px);
-          min-width: 220px;
-          min-height: 220px;
-          border: 1px solid rgba(0, 0, 0, 0.15);
-          background: rgba(255, 255, 255, 0.9);
-          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-        }
         #status {
           position: absolute;
-          top: calc(16px + min(28vw, 340px) + 10px);
+          top: 16px;
           right: 16px;
           width: min(28vw, 340px);
           min-width: 220px;
@@ -282,7 +295,6 @@ function write_path_geometry_plot3d(
     <body>
       <div id="viewer">
         <div id="plot"></div>
-        <div id="inset"></div>
         <div id="status"></div>
         <div id="scrub-help">Move the mouse left-to-right over the main view to move the plane along the path (arc length).</div>
       </div>
@@ -307,11 +319,6 @@ function write_path_geometry_plot3d(
         const planeHalf = $(_js_real(plane_half));
         const axisLen = $(_js_real(axis_len));
 
-        const insetCircleX = $(_js_array(inset_x));
-        const insetCircleY = $(_js_array(inset_y));
-        const insetTickX = $(_js_array(inset_tick_x));
-        const insetTickY = $(_js_array(inset_tick_y));
-
         const xRange = $x_range_js;
         const yRange = $y_range_js;
         const zRange = $z_range_js;
@@ -321,7 +328,13 @@ function write_path_geometry_plot3d(
         const segBoundZ = $(_js_array(seg_bz));
         const segBoundHover = $(_js_string_array(seg_bound_hover));
 
+        const labelX = $(_js_array(label_x));
+        const labelY = $(_js_array(label_y));
+        const labelZ = $(_js_array(label_z));
+        const labelTexts = $(_js_string_array(label_strs));
+
         const sceneAxisLayout = {
+          "scene.aspectmode": "cube",
           "scene.xaxis.autorange": false,
           "scene.xaxis.range": xRange,
           "scene.yaxis.autorange": false,
@@ -329,6 +342,27 @@ function write_path_geometry_plot3d(
           "scene.zaxis.autorange": false,
           "scene.zaxis.range": zRange
         };
+
+        /** Map horizontal fraction t in [0,1] to nearest sample index so s = ss[0] + t*(ss[end]-ss[0]). */
+        function scrubIndexFromT(t) {
+          const n = ss.length;
+          if (n <= 1) return 0;
+          const s0 = ss[0];
+          const sEnd = ss[n - 1];
+          const span = sEnd - s0;
+          if (!(span > 0)) return 0;
+          const sTarget = s0 + t * span;
+          if (sTarget <= s0) return 0;
+          if (sTarget >= sEnd) return n - 1;
+          let lo = 0;
+          let hi = n - 1;
+          while (lo < hi - 1) {
+            const mid = (lo + hi) >> 1;
+            if (ss[mid] <= sTarget) lo = mid;
+            else hi = mid;
+          }
+          return (sTarget - ss[lo]) <= (ss[hi] - sTarget) ? lo : hi;
+        }
 
         function planeMesh(i) {
           const r = [xs[i], ys[i], zs[i]];
@@ -539,77 +573,29 @@ function write_path_geometry_plot3d(
             yaxis: { title: "y (m)", range: yRange, autorange: false, showspikes: false },
             zaxis: { title: "z (m)", range: zRange, autorange: false, showspikes: false },
             camera: { eye: { x: 1.6, y: 1.6, z: 0.9 } },
-            aspectmode: "data"
+            aspectmode: "cube"
           }
         };
 
-        Plotly.newPlot("plot", [pathTrace, segmentBoundaryTrace, startTrace, endTrace, cursorTrace, planeTrace, traceT, traceN, traceB, traceTwistInt], layout, {
+        const plotTraces = [pathTrace, segmentBoundaryTrace, startTrace, endTrace, cursorTrace, planeTrace, traceT, traceN, traceB, traceTwistInt];
+        if (labelX.length > 0) {
+          plotTraces.push({
+            type: "scatter3d",
+            mode: "text",
+            x: labelX,
+            y: labelY,
+            z: labelZ,
+            text: labelTexts,
+            textposition: "top center",
+            textfont: { size: 14, color: "rgba(35, 35, 35, 0.92)" },
+            hoverinfo: "text",
+            showlegend: false
+          });
+        }
+        Plotly.newPlot("plot", plotTraces, layout, {
           responsive: true,
           scrollZoom: true,
           displaylogo: false
-        });
-
-        const insetCircleTrace = {
-          type: "scatter",
-          mode: "lines",
-          x: insetCircleX,
-          y: insetCircleY,
-          line: { width: 2, color: "rgba(30, 30, 30, 0.45)" },
-          hoverinfo: "skip",
-          name: "unit circle"
-        };
-        const insetAxesTrace = {
-          type: "scatter",
-          mode: "lines",
-          x: [-1.25, 1.25, null, 0, 0],
-          y: [0, 0, null, -1.25, 1.25],
-          line: { width: 1.5, color: "rgba(0, 0, 0, 0.35)" },
-          hoverinfo: "skip",
-          showlegend: false
-        };
-        const insetTicksTrace = {
-          type: "scatter",
-          mode: "lines",
-          x: insetTickX,
-          y: insetTickY,
-          line: { width: 2, color: "#111111" },
-          hoverinfo: "skip",
-          showlegend: false
-        };
-        const insetLabels = {
-          type: "scatter",
-          mode: "text",
-          x: [1.15, 0.08, 0.08],
-          y: [0.08, 1.15, -1.2],
-          text: ["n̂", "b̂", "Transverse (n̂, b̂) coordinates"],
-          textposition: "middle center",
-          textfont: { size: 14, color: "#111111", family: "sans-serif" },
-          hoverinfo: "skip",
-          showlegend: false
-        };
-
-        const insetLayout = {
-          margin: { l: 36, r: 18, b: 36, t: 28 },
-          title: { text: "Local Frenet section", font: { size: 14 } },
-          xaxis: {
-            title: "component along N̂",
-            range: [-1.35, 1.35],
-            scaleanchor: "y",
-            scaleratio: 1,
-            zeroline: false
-          },
-          yaxis: {
-            title: "component along B̂",
-            range: [-1.35, 1.35],
-            zeroline: false
-          },
-          showlegend: false
-        };
-
-        Plotly.newPlot("inset", [insetCircleTrace, insetAxesTrace, insetTicksTrace, insetLabels], insetLayout, {
-          responsive: true,
-          displaylogo: false,
-          staticPlot: true
         });
 
         const statusBox = document.getElementById("status");
@@ -677,7 +663,7 @@ function write_path_geometry_plot3d(
           if (event.buttons !== 0) return;
           const rect = viewer.getBoundingClientRect();
           const t = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-          const idx = Math.round(t * (xs.length - 1));
+          const idx = scrubIndexFromT(t);
           if (idx !== activeIndex) updateCursor(idx);
         });
 
@@ -685,7 +671,7 @@ function write_path_geometry_plot3d(
           if (event.touches.length === 0) return;
           const rect = viewer.getBoundingClientRect();
           const t = Math.max(0, Math.min(1, (event.touches[0].clientX - rect.left) / rect.width));
-          const idx = Math.round(t * (xs.length - 1));
+          const idx = scrubIndexFromT(t);
           if (idx !== activeIndex) updateCursor(idx);
         }, { passive: true });
 
