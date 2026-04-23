@@ -3,15 +3,25 @@ Material properties for silica-based optical glasses.
 
 This file defines endpoint materials (`SiO2`, `GeO2`) and binary silica-glass
 models with either germania or fluorine as the single dopant.
+
+Units (SI unless noted):
+- λ                     wavelength in m
+- T_K                   temperature in K
+- x_ge, x_f             dopant molar fraction (dimensionless, 0..1)
+- refractive indices, Poisson ratio, photoelastic constants: dimensionless
+- cte                   1/K
+- softening_temperature  K
+- youngs_modulus        Pa
+- nonlinear_refractive_index (n2)  m²/W
 """
 
-# Example usage 
+# Example usage
 """
 glass = GermaniaSilicaGlass(0.036)   # 3.6 mol% GeO2 in SiO2
-T = 297.15
+T_K = 297.15
 λ = 1550e-9
-n = refractive_index(glass, λ, T)
-cte_value = cte(glass, T)
+n = refractive_index(glass, λ, T_K)
+cte_value = cte(glass, T_K)
 """
 
 abstract type AbstractMaterial end
@@ -37,13 +47,12 @@ function TemperaturePolynomial(coeffs::NTuple{5, <:Real})
     return TemperaturePolynomial(map(Float64, coeffs))
 end
 
-function (poly::TemperaturePolynomial)(T_kelvin::Real)
-    T = float(T_kelvin)
-    value = zero(T)
-    power = one(T)
+function (poly::TemperaturePolynomial)(T_K)
+    value = zero(T_K)
+    power = one(T_K)
     for coeff in poly.coeffs
         value += coeff * power
-        power *= T
+        power *= T_K
     end
     return value
 end
@@ -53,7 +62,7 @@ struct ConstantLaw
 end
 
 ConstantLaw(value::Real) = ConstantLaw(Float64(value))
-(law::ConstantLaw)(::Real) = law.value
+(law::ConstantLaw)(x) = law.value * one(x)
 
 struct QuadraticMolarLaw
     quadratic::Float64
@@ -61,21 +70,21 @@ struct QuadraticMolarLaw
 end
 
 QuadraticMolarLaw(quadratic::Real, linear::Real) = QuadraticMolarLaw(Float64(quadratic), Float64(linear))
-(law::QuadraticMolarLaw)(x::Real) = law.quadratic * Float64(x)^2 + law.linear * Float64(x)
+(law::QuadraticMolarLaw)(x) = law.quadratic * x^2 + law.linear * x
 
 struct SellmeierTerm{TB, TC}
     B_law::TB
     C_law::TC
 end
 
-evaluate(term::SellmeierTerm, temperature_like::Real) = (term.B_law(temperature_like), term.C_law(temperature_like))
+evaluate(term::SellmeierTerm, temperature_like) = (term.B_law(temperature_like), term.C_law(temperature_like))
 
 struct SellmeierCorrectionTerm
     ΔB_law::QuadraticMolarLaw
     ΔC_law::QuadraticMolarLaw
 end
 
-evaluate(term::SellmeierCorrectionTerm, molar_fraction::Real) = (term.ΔB_law(molar_fraction), term.ΔC_law(molar_fraction))
+evaluate(term::SellmeierCorrectionTerm, molar_fraction) = (term.ΔB_law(molar_fraction), term.ΔC_law(molar_fraction))
 
 struct SiO2 <: AbstractTemperatureDependentSellmeier
     terms::NTuple{3, SellmeierTerm}
@@ -165,24 +174,11 @@ const GERMANIA_N2 = 4.6e-20
 sellmeier_terms(material::SiO2) = material.terms
 reference_sellmeier_terms(material::GeO2) = material.reference_terms
 
-function temperature_kelvin(T_kelvin::Real)
-    T = float(T_kelvin)
-    if !(isfinite(T) && T > 0.0)
-        throw(ArgumentError("temperature must be a finite positive value in kelvin"))
-    end
-    return T
-end
-
 # TODO Banner... validate ranges
 const MIN_VALID_TEMPERATURE_K = 243.0
 const MAX_VALID_TEMPERATURE_K = 373.0
 const MIN_VALID_WAVELENGTH_M = 1300e-9
 const MAX_VALID_WAVELENGTH_M = 1700e-9
-
-function wavelength_microns(λ_meters::Real)
-    λ = validate_model_wavelength(λ_meters)
-    return λ * 1e6
-end
 
 function validate_molar_fraction(x::Real)
     xf = Float64(x)
@@ -192,19 +188,21 @@ function validate_molar_fraction(x::Real)
     return xf
 end
 
-function validate_model_temperature(T_kelvin::Real)
-    T = temperature_kelvin(T_kelvin)
-    if !(MIN_VALID_TEMPERATURE_K <= T <= MAX_VALID_TEMPERATURE_K)
+function validate_model_temperature(T_K)
+    if !(isfinite(T_K) && T_K > 0.0)
+        throw(ArgumentError("temperature must be a finite positive value in kelvin"))
+    end
+    if !(MIN_VALID_TEMPERATURE_K <= T_K <= MAX_VALID_TEMPERATURE_K)
         throw(ArgumentError(
             "temperature is outside the current model validity range " *
-            "[$(MIN_VALID_TEMPERATURE_K), $(MAX_VALID_TEMPERATURE_K)] K: got $(T)"
+            "[$(MIN_VALID_TEMPERATURE_K), $(MAX_VALID_TEMPERATURE_K)] K: got $(T_K)"
         ))
     end
-    return T
+    return T_K
 end
 
-function validate_model_wavelength(λ_meters::Real)
-    λ = float(λ_meters)
+function validate_model_wavelength(λ)
+    λ = float(λ)
     if !(isfinite(λ) && λ > 0.0)
         throw(ArgumentError("wavelength must be a finite positive value in meters"))
     end
@@ -217,22 +215,22 @@ function validate_model_wavelength(λ_meters::Real)
     return λ
 end
 
-interpolate_scalar(a::Real, b::Real, x::Real) = (1.0 - Float64(x)) * Float64(a) + Float64(x) * Float64(b)
+interpolate_scalar(a, b, x) = (one(x) - x) * a + x * b
 
-function interpolate_pair(a::Tuple{<:Real, <:Real}, b::Tuple{<:Real, <:Real}, x::Real)
+function interpolate_pair(a::Tuple, b::Tuple, x)
     return (
         interpolate_scalar(a[1], b[1], x),
         interpolate_scalar(a[2], b[2], x)
     )
 end
 
-function sellmeier_coefficients(material::AbstractTemperatureDependentSellmeier, T_kelvin::Real)
-    T = validate_model_temperature(T_kelvin)
+function sellmeier_coefficients(material::AbstractTemperatureDependentSellmeier, T_K)
+    T = validate_model_temperature(T_K)
     return map(term -> evaluate(term, T), sellmeier_terms(material))
 end
 
-function fluorine_corrected_sellmeier_coefficients(glass::FluorinatedSilicaGlass, T_kelvin::Real)
-    silica_coeffs = sellmeier_coefficients(PURE_SILICA, T_kelvin)
+function fluorine_corrected_sellmeier_coefficients(glass::FluorinatedSilicaGlass, T_K)
+    silica_coeffs = sellmeier_coefficients(PURE_SILICA, T_K)
     x_f = glass.x_f
     return ntuple(i -> begin
         B0, C0 = silica_coeffs[i]
@@ -241,9 +239,9 @@ function fluorine_corrected_sellmeier_coefficients(glass::FluorinatedSilicaGlass
     end, 3)
 end
 
-function sellmeier_index_from_coefficients(coeffs, λ_meters::Real)
-    λ_m = validate_model_wavelength(λ_meters)
-    λ_um = wavelength_microns(λ_m)
+function sellmeier_index_from_coefficients(coeffs, λ)
+    λ_m = validate_model_wavelength(λ)
+    λ_um = λ_m * 1e6
     total = one(λ_um)
     for (B, C) in coeffs
         total += B * λ_um^2 / (λ_um^2 - C^2)
@@ -251,9 +249,9 @@ function sellmeier_index_from_coefficients(coeffs, λ_meters::Real)
     return sqrt(total)
 end
 
-function sellmeier_index_from_coefficients_dω(coeffs, λ_meters::Real)
-    λ_m = validate_model_wavelength(λ_meters)
-    λ_um = wavelength_microns(λ_m)
+function sellmeier_index_from_coefficients_dω(coeffs, λ)
+    λ_m = validate_model_wavelength(λ)
+    λ_um = λ_m * 1e6
     total = one(λ_um)
     dtotal_dλm = zero(λ_um)
     for (B, C) in coeffs
@@ -268,116 +266,116 @@ function sellmeier_index_from_coefficients_dω(coeffs, λ_meters::Real)
     return SpectralResponse(n, dn_dλ * dλ_dω)
 end
 
-function thermo_optic_index_shift(material::GeO2, T_kelvin::Real)
-    T = validate_model_temperature(T_kelvin)
+function thermo_optic_index_shift(material::GeO2, T_K)
+    T = validate_model_temperature(T_K)
     Tref = GERMANIA_REFERENCE_TEMPERATURE_K
     return 6.2153e-13 / 4 * (T^4 - Tref^4) -
            5.3387e-10 / 3 * (T^3 - Tref^3) +
            1.6654e-7 / 2 * (T^2 - Tref^2)
 end
 
-function reference_refractive_index(material::GeO2, λ_meters::Real, T_kelvin::Real)
-    T = validate_model_temperature(T_kelvin)
+function reference_refractive_index(material::GeO2, λ, T_K)
+    T = validate_model_temperature(T_K)
     base_coeffs = map(term -> evaluate(term, T), reference_sellmeier_terms(material))
-    n_ref = sellmeier_index_from_coefficients(base_coeffs, λ_meters)
+    n_ref = sellmeier_index_from_coefficients(base_coeffs, λ)
     return n_ref + thermo_optic_index_shift(material, T)
 end
 
-function reference_refractive_index(::WithDerivative, material::GeO2, λ_meters::Real, T_kelvin::Real)
-    T = validate_model_temperature(T_kelvin)
+function reference_refractive_index(::WithDerivative, material::GeO2, λ, T_K)
+    T = validate_model_temperature(T_K)
     base_coeffs = map(term -> evaluate(term, T), reference_sellmeier_terms(material))
-    base = sellmeier_index_from_coefficients_dω(base_coeffs, λ_meters)
+    base = sellmeier_index_from_coefficients_dω(base_coeffs, λ)
     return SpectralResponse(base.value + thermo_optic_index_shift(material, T), base.dω)
 end
 
-function refractive_index(::ValueOnly, material::SiO2, λ_meters::Real, T_kelvin::Real)
-    coeffs = sellmeier_coefficients(material, T_kelvin)
-    return sellmeier_index_from_coefficients(coeffs, λ_meters)
+function refractive_index(::ValueOnly, material::SiO2, λ, T_K)
+    coeffs = sellmeier_coefficients(material, T_K)
+    return sellmeier_index_from_coefficients(coeffs, λ)
 end
 
-function refractive_index(::WithDerivative, material::SiO2, λ_meters::Real, T_kelvin::Real)
-    coeffs = sellmeier_coefficients(material, T_kelvin)
-    return sellmeier_index_from_coefficients_dω(coeffs, λ_meters)
+function refractive_index(::WithDerivative, material::SiO2, λ, T_K)
+    coeffs = sellmeier_coefficients(material, T_K)
+    return sellmeier_index_from_coefficients_dω(coeffs, λ)
 end
 
-refractive_index(style::ValueOnly, material::GeO2, λ_meters::Real, T_kelvin::Real) =
-    reference_refractive_index(material, λ_meters, T_kelvin)
+refractive_index(style::ValueOnly, material::GeO2, λ, T_K) =
+    reference_refractive_index(material, λ, T_K)
 
-refractive_index(style::WithDerivative, material::GeO2, λ_meters::Real, T_kelvin::Real) =
-    reference_refractive_index(style, material, λ_meters, T_kelvin)
+refractive_index(style::WithDerivative, material::GeO2, λ, T_K) =
+    reference_refractive_index(style, material, λ, T_K)
 
-function refractive_index(::ValueOnly, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)
-    n_silica = refractive_index(ValueOnly(), PURE_SILICA, λ_meters, T_kelvin)
-    n_germania = refractive_index(ValueOnly(), PURE_GERMANIA, λ_meters, T_kelvin)
+function refractive_index(::ValueOnly, glass::GermaniaSilicaGlass, λ, T_K)
+    n_silica = refractive_index(ValueOnly(), PURE_SILICA, λ, T_K)
+    n_germania = refractive_index(ValueOnly(), PURE_GERMANIA, λ, T_K)
     return interpolate_scalar(n_silica, n_germania, glass.x_ge)
 end
 
-function refractive_index(::WithDerivative, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)
-    n_silica = refractive_index(WithDerivative(), PURE_SILICA, λ_meters, T_kelvin)
-    n_germania = refractive_index(WithDerivative(), PURE_GERMANIA, λ_meters, T_kelvin)
+function refractive_index(::WithDerivative, glass::GermaniaSilicaGlass, λ, T_K)
+    n_silica = refractive_index(WithDerivative(), PURE_SILICA, λ, T_K)
+    n_germania = refractive_index(WithDerivative(), PURE_GERMANIA, λ, T_K)
     return SpectralResponse(
         interpolate_scalar(n_silica.value, n_germania.value, glass.x_ge),
         interpolate_scalar(n_silica.dω, n_germania.dω, glass.x_ge)
     )
 end
 
-function refractive_index(::ValueOnly, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)
-    coeffs = fluorine_corrected_sellmeier_coefficients(glass, T_kelvin)
-    return sellmeier_index_from_coefficients(coeffs, λ_meters)
+function refractive_index(::ValueOnly, glass::FluorinatedSilicaGlass, λ, T_K)
+    coeffs = fluorine_corrected_sellmeier_coefficients(glass, T_K)
+    return sellmeier_index_from_coefficients(coeffs, λ)
 end
 
-function refractive_index(::WithDerivative, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)
-    coeffs = fluorine_corrected_sellmeier_coefficients(glass, T_kelvin)
-    return sellmeier_index_from_coefficients_dω(coeffs, λ_meters)
+function refractive_index(::WithDerivative, glass::FluorinatedSilicaGlass, λ, T_K)
+    coeffs = fluorine_corrected_sellmeier_coefficients(glass, T_K)
+    return sellmeier_index_from_coefficients_dω(coeffs, λ)
 end
 
-refractive_index(material::AbstractMaterial, λ_meters::Real, T_kelvin::Real) =
-    refractive_index(ValueOnly(), material, λ_meters, T_kelvin)
+refractive_index(material::AbstractMaterial, λ, T_K) =
+    refractive_index(ValueOnly(), material, λ, T_K)
 
-cte(::SiO2, ::Real) = SILICA_CTE
-cte(::GeO2, ::Real) = GERMANIA_CTE
-cte(glass::GermaniaSilicaGlass, ::Real) = interpolate_scalar(SILICA_CTE, GERMANIA_CTE, glass.x_ge)
-cte(::FluorinatedSilicaGlass, ::Real) = unsupported_fluorine_property("cte")
+cte(::SiO2, _) = SILICA_CTE
+cte(::GeO2, _) = GERMANIA_CTE
+cte(glass::GermaniaSilicaGlass, _) = interpolate_scalar(SILICA_CTE, GERMANIA_CTE, glass.x_ge)
+cte(::FluorinatedSilicaGlass, _) = unsupported_fluorine_property("cte")
 
-softening_temperature(::SiO2, ::Real) = SILICA_SOFTENING_TEMPERATURE_K
-softening_temperature(::GeO2, ::Real) = GERMANIA_SOFTENING_TEMPERATURE_K
-softening_temperature(glass::GermaniaSilicaGlass, ::Real) = interpolate_scalar(SILICA_SOFTENING_TEMPERATURE_K, GERMANIA_SOFTENING_TEMPERATURE_K, glass.x_ge)
-softening_temperature(::FluorinatedSilicaGlass, ::Real) = unsupported_fluorine_property("softening_temperature")
+softening_temperature(::SiO2, _) = SILICA_SOFTENING_TEMPERATURE_K
+softening_temperature(::GeO2, _) = GERMANIA_SOFTENING_TEMPERATURE_K
+softening_temperature(glass::GermaniaSilicaGlass, _) = interpolate_scalar(SILICA_SOFTENING_TEMPERATURE_K, GERMANIA_SOFTENING_TEMPERATURE_K, glass.x_ge)
+softening_temperature(::FluorinatedSilicaGlass, _) = unsupported_fluorine_property("softening_temperature")
 
-poisson_ratio(::SiO2, ::Real) = SILICA_POISSON_RATIO
-poisson_ratio(::GeO2, ::Real) = GERMANIA_POISSON_RATIO
-poisson_ratio(glass::GermaniaSilicaGlass, ::Real) = interpolate_scalar(SILICA_POISSON_RATIO, GERMANIA_POISSON_RATIO, glass.x_ge)
-poisson_ratio(::FluorinatedSilicaGlass, ::Real) = unsupported_fluorine_property("poisson_ratio")
+poisson_ratio(::SiO2, _) = SILICA_POISSON_RATIO
+poisson_ratio(::GeO2, _) = GERMANIA_POISSON_RATIO
+poisson_ratio(glass::GermaniaSilicaGlass, _) = interpolate_scalar(SILICA_POISSON_RATIO, GERMANIA_POISSON_RATIO, glass.x_ge)
+poisson_ratio(::FluorinatedSilicaGlass, _) = unsupported_fluorine_property("poisson_ratio")
 
-photoelastic_constants(::SiO2, ::Real) = SILICA_PHOTOELASTIC_CONSTANTS
-photoelastic_constants(::GeO2, ::Real) = GERMANIA_PHOTOELASTIC_CONSTANTS
-photoelastic_constants(glass::GermaniaSilicaGlass, ::Real) = interpolate_pair(SILICA_PHOTOELASTIC_CONSTANTS, GERMANIA_PHOTOELASTIC_CONSTANTS, glass.x_ge)
-photoelastic_constants(::FluorinatedSilicaGlass, ::Real) = unsupported_fluorine_property("photoelastic_constants")
+photoelastic_constants(::SiO2, _) = SILICA_PHOTOELASTIC_CONSTANTS
+photoelastic_constants(::GeO2, _) = GERMANIA_PHOTOELASTIC_CONSTANTS
+photoelastic_constants(glass::GermaniaSilicaGlass, _) = interpolate_pair(SILICA_PHOTOELASTIC_CONSTANTS, GERMANIA_PHOTOELASTIC_CONSTANTS, glass.x_ge)
+photoelastic_constants(::FluorinatedSilicaGlass, _) = unsupported_fluorine_property("photoelastic_constants")
 
-youngs_modulus(::SiO2, ::Real) = SILICA_YOUNGS_MODULUS
-youngs_modulus(::GeO2, ::Real) = GERMANIA_YOUNGS_MODULUS
-youngs_modulus(glass::GermaniaSilicaGlass, ::Real) = interpolate_scalar(SILICA_YOUNGS_MODULUS, GERMANIA_YOUNGS_MODULUS, glass.x_ge)
-youngs_modulus(::FluorinatedSilicaGlass, ::Real) = unsupported_fluorine_property("youngs_modulus")
+youngs_modulus(::SiO2, _) = SILICA_YOUNGS_MODULUS
+youngs_modulus(::GeO2, _) = GERMANIA_YOUNGS_MODULUS
+youngs_modulus(glass::GermaniaSilicaGlass, _) = interpolate_scalar(SILICA_YOUNGS_MODULUS, GERMANIA_YOUNGS_MODULUS, glass.x_ge)
+youngs_modulus(::FluorinatedSilicaGlass, _) = unsupported_fluorine_property("youngs_modulus")
 
-function nonlinear_refractive_index(::SiO2, λ_meters::Real, T_kelvin::Real)
-    validate_model_wavelength(λ_meters)
-    validate_model_temperature(T_kelvin)
+function nonlinear_refractive_index(::SiO2, λ, T_K)
+    validate_model_wavelength(λ)
+    validate_model_temperature(T_K)
     return SILICA_N2
 end
 
-function nonlinear_refractive_index(::GeO2, λ_meters::Real, T_kelvin::Real)
-    validate_model_wavelength(λ_meters)
-    validate_model_temperature(T_kelvin)
+function nonlinear_refractive_index(::GeO2, λ, T_K)
+    validate_model_wavelength(λ)
+    validate_model_temperature(T_K)
     return GERMANIA_N2
 end
 
-function nonlinear_refractive_index(glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)
-    validate_model_wavelength(λ_meters)
-    validate_model_temperature(T_kelvin)
+function nonlinear_refractive_index(glass::GermaniaSilicaGlass, λ, T_K)
+    validate_model_wavelength(λ)
+    validate_model_temperature(T_K)
     return interpolate_scalar(SILICA_N2, GERMANIA_N2, glass.x_ge)
 end
 
-nonlinear_refractive_index(::FluorinatedSilicaGlass, ::Real, ::Real) = unsupported_fluorine_property("nonlinear_refractive_index")
+nonlinear_refractive_index(::FluorinatedSilicaGlass, _, _) = unsupported_fluorine_property("nonlinear_refractive_index")
 
 function unsupported_fluorine_property(name::AbstractString)
     throw(ArgumentError("$(name) is not defined for fluorine-doped silica in the current model"))
