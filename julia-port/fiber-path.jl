@@ -562,13 +562,15 @@ function generator_K_contribution(src::BendSource, s::Real)
     Δβb = if isnothing(src.cross_section)
         src.response(:value, curv.k2).Δβ
     else
-        T = Float64(src.T_K(s))
+        T = src.T_K(s)
         R = inv(sqrt(curv.k2))
         bending_birefringence(src.cross_section, src.λ_m, T; bend_radius_m = R)
     end
     c2φ = (curv.kx * curv.kx - curv.ky * curv.ky) / curv.k2
     s2φ = (2 * curv.kx * curv.ky) / curv.k2
-    return ComplexF64[
+    # Plain matrix literal so Δβb can be Particles-valued — element type is
+    # promoted from ComplexF64 × typeof(Δβb) rather than forced to ComplexF64.
+    return [
          0.5im * Δβb * c2φ             0.5im * Δβb * s2φ
          0.5im * Δβb * s2φ            -0.5im * Δβb * c2φ
     ]
@@ -583,13 +585,13 @@ function generator_Kω_contribution(src::BendSource, s::Real)
     Δβbω = if isnothing(src.cross_section)
         src.response(:spectral, curv.k2).dω
     else
-        T = Float64(src.T_K(s))
+        T = src.T_K(s)
         R = inv(sqrt(curv.k2))
         bending_birefringence(WithDerivative(), src.cross_section, src.λ_m, T; bend_radius_m = R).dω
     end
     c2φ = (curv.kx * curv.kx - curv.ky * curv.ky) / curv.k2
     s2φ = (2 * curv.kx * curv.ky) / curv.k2
-    return ComplexF64[
+    return [
          0.5im * Δβbω * c2φ             0.5im * Δβbω * s2φ
          0.5im * Δβbω * s2φ            -0.5im * Δβbω * c2φ
     ]
@@ -600,12 +602,12 @@ function generator_K_contribution(src::TwistSource, s::Real)
     Δβt = if isnothing(src.cross_section)
         src.response(:value, tau).Δβ
     else
-        T = Float64(src.T_K(s))
+        T = src.T_K(s)
         twisting_birefringence(src.cross_section, src.λ_m, T; twist_rate_rad_per_m = tau)
     end
-    return ComplexF64[
-         0.0 + 0.0im   -0.5 * Δβt
-         0.5 * Δβt      0.0 + 0.0im
+    return Complex[
+         0.0           -0.5 * Δβt
+         0.5 * Δβt      0.0
     ]
 end
 
@@ -614,12 +616,12 @@ function generator_Kω_contribution(src::TwistSource, s::Real)
     Δβtω = if isnothing(src.cross_section)
         src.response(:spectral, tau).dω
     else
-        T = Float64(src.T_K(s))
+        T = src.T_K(s)
         twisting_birefringence(WithDerivative(), src.cross_section, src.λ_m, T; twist_rate_rad_per_m = tau).dω
     end
-    return ComplexF64[
-         0.0 + 0.0im   -0.5 * Δβtω
-         0.5 * Δβtω     0.0 + 0.0im
+    return Complex[
+         0.0           -0.5 * Δβtω
+         0.5 * Δβtω     0.0
     ]
 end
 
@@ -637,9 +639,12 @@ end
 
 function generator_K(f::Fiber)
     return function (s::Real)
+        # Use `+` rather than broadcast-assign into a ComplexF64 matrix so that
+        # contributions with Particles-valued entries promote the result type
+        # instead of being narrowed back to ComplexF64.
         K = zero_generator()
         for src in f.sources
-            K .+= generator_K_contribution(src, s)
+            K = K + generator_K_contribution(src, s)
         end
         return K
     end
@@ -649,7 +654,7 @@ function generator_Kω(f::Fiber)
     return function (s::Real)
         Kω = zero_generator()
         for src in f.sources
-            Kω .+= generator_Kω_contribution(src, s)
+            Kω = Kω + generator_Kω_contribution(src, s)
         end
         return Kω
     end
