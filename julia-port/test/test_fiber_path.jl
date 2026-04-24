@@ -296,8 +296,8 @@ end
         straight!(spec; length = 0.8)
         fiber = Fiber(build(spec); cross_section = xs)
 
-        @test generator_K(fiber, 1550e-9, 297.15)(0.4) ≈ zeros(ComplexF64, 2, 2) atol = 1e-14
-        @test generator_Kω(fiber, 1550e-9, 297.15)(0.4) ≈ zeros(ComplexF64, 2, 2) atol = 1e-14
+        @test generator_K(fiber, 1550e-9)(0.4) ≈ zeros(ComplexF64, 2, 2) atol = 1e-14
+        @test generator_Kω(fiber, 1550e-9)(0.4) ≈ zeros(ComplexF64, 2, 2) atol = 1e-14
     end
 
     @testset "T-PHYSICS: circular bend uses bending_birefringence" begin
@@ -306,8 +306,8 @@ end
         R = 0.04
         spec = PathSpec()
         bend!(spec; radius = R, angle = π / 3)
-        fiber = Fiber(build(spec); cross_section = xs)
-        K = generator_K(fiber, λ, T)(0.5 * fiber.s_end)
+        fiber = Fiber(build(spec); cross_section = xs, T_ref_K = T)
+        K = generator_K(fiber, λ)(0.5 * fiber.s_end)
         Δβ = bending_birefringence(xs, λ, T; bend_radius_m = R)
 
         @test K[1, 1] ≈ 0.5im * Δβ atol = 1e-12
@@ -323,8 +323,8 @@ end
         spec = PathSpec()
         straight!(spec; length = 1.0)
         twist!(spec; s_start = 0.0, length = 1.0, rate = τ)
-        fiber = Fiber(build(spec); cross_section = xs)
-        K = generator_K(fiber, λ, T)(0.5)
+        fiber = Fiber(build(spec); cross_section = xs, T_ref_K = T)
+        K = generator_K(fiber, λ)(0.5)
         Δβ = twisting_birefringence(xs, λ, T; twist_rate_rad_per_m = τ)
 
         @test K[1, 1] ≈ 0.0 atol = 1e-12
@@ -333,19 +333,4 @@ end
         @test K[2, 1] ≈ 0.5 * Δβ atol = 1e-12
     end
 
-    @testset "generator_K accepts function T_K" begin
-        spec = PathSpec()
-        straight!(spec; length = 0.4)
-        bend!(spec; radius = 0.1, angle = π / 4)
-        path = build(spec)
-        fiber = Fiber(path; cross_section = xs)
-        T_profile = s -> 300.0 + 2s
-
-        # Smoke test: function T_K should produce the same K as a scalar T_K
-        # evaluated at the same s.
-        s_eval = 0.6
-        K_fn = generator_K(fiber, 1550e-9, T_profile)(s_eval)
-        K_sc = generator_K(fiber, 1550e-9, T_profile(s_eval))(s_eval)
-        @test K_fn ≈ K_sc atol = 1e-14
-    end
 end

@@ -33,7 +33,8 @@ Two approaches are supported to build a PathSpec and can be freely mixed:
 
 `path-geometry.jl` is intentionally free of shrinkage. A `Path` represents pure,
 temperature-independent geometry. Thermal contraction and related length-scaling
-are applied by `fiber-path-shrinkage.jl` as a `shrink(path, α) → Path` transform.
+are applied by `fiber-path-modify.jl` as a `modify(fiber) → Path` transform
+driven by per-segment `MCMadd` / `MCMmul` annotations.
 
 # Interface
 
@@ -84,7 +85,18 @@ abstract type AbstractPathSegment end
 # HermiteConnector (and its JumpBy/JumpTo precursors) is Float64-only; see its
 # docstring.
 
-segment_nickname(seg::AbstractPathSegment)  = :nickname ∈ fieldnames(typeof(seg)) ? seg.nickname : nothing
+# -----------------------------------------------------------------------
+# AbstractMeta — per-segment annotations
+# -----------------------------------------------------------------------
+# Every segment carries a `meta::Vector{AbstractMeta}` bag. path-geometry.jl
+# is deliberately ignorant of what's inside; downstream layers define their
+# own `AbstractMeta` subtypes (see fiber-path-meta.jl) and decide how to act
+# on them.
+
+abstract type AbstractMeta end
+
+segment_meta(seg::AbstractPathSegment) =
+    :meta ∈ fieldnames(typeof(seg)) ? seg.meta : AbstractMeta[]
 
 # -----------------------------------------------------------------------
 # TwistOverlay
@@ -110,11 +122,11 @@ end
 
 struct StraightSegment{T} <: AbstractPathSegment
     length::T
-    nickname::Union{Nothing,String}
+    meta::Vector{AbstractMeta}
 end
 
-function StraightSegment(length; nickname = nothing)
-    StraightSegment{typeof(length)}(length, isnothing(nickname) ? nothing : String(nickname))
+function StraightSegment(length; meta = AbstractMeta[])
+    StraightSegment{typeof(length)}(length, Vector{AbstractMeta}(meta))
 end
 
 arc_length(seg::StraightSegment)         = seg.length
@@ -150,13 +162,13 @@ struct BendSegment{T} <: AbstractPathSegment
     radius::T
     angle::T       # total angle swept (rad)
     axis_angle::T  # orientation of inward normal in transverse plane (rad)
-    nickname::Union{Nothing,String}
+    meta::Vector{AbstractMeta}
 
     function BendSegment(radius, angle, axis_angle = 0.0;
-                         nickname = nothing)
+                         meta = AbstractMeta[])
         @assert radius > 0 "BendSegment: radius must be positive"
         r, a, x = promote(radius, angle, axis_angle)
-        new{typeof(r)}(r, a, x, isnothing(nickname) ? nothing : String(nickname))
+        new{typeof(r)}(r, a, x, Vector{AbstractMeta}(meta))
     end
 end
 
@@ -225,14 +237,14 @@ struct CatenarySegment{T} <: AbstractPathSegment
     a::T
     length::T
     axis_angle::T
-    nickname::Union{Nothing,String}
+    meta::Vector{AbstractMeta}
 
     function CatenarySegment(a, length, axis_angle = 0.0;
-                             nickname = nothing)
+                             meta = AbstractMeta[])
         @assert a > 0      "CatenarySegment: a must be positive"
         @assert length > 0 "CatenarySegment: length must be positive"
         av, L, x = promote(a, length, axis_angle)
-        new{typeof(av)}(av, L, x, isnothing(nickname) ? nothing : String(nickname))
+        new{typeof(av)}(av, L, x, Vector{AbstractMeta}(meta))
     end
 end
 
@@ -311,14 +323,14 @@ struct HelixSegment{T} <: AbstractPathSegment
     pitch::T
     turns::T
     axis_angle::T
-    nickname::Union{Nothing,String}
+    meta::Vector{AbstractMeta}
 
     function HelixSegment(radius, pitch, turns,
-                          axis_angle = 0.0; nickname = nothing)
+                          axis_angle = 0.0; meta = AbstractMeta[])
         @assert radius > 0 "HelixSegment: radius must be positive"
         @assert turns  > 0 "HelixSegment: turns must be positive"
         r, p, n, x = promote(radius, pitch, turns, axis_angle)
-        new{typeof(r)}(r, p, n, x, isnothing(nickname) ? nothing : String(nickname))
+        new{typeof(r)}(r, p, n, x, Vector{AbstractMeta}(meta))
     end
 end
 
@@ -414,14 +426,16 @@ struct JumpBy <: AbstractPathSegment
     delta::NTuple{3, Float64}
     tangent_out::Union{Nothing, NTuple{3, Float64}}
     min_bend_radius::Union{Nothing, Float64}
+    meta::Vector{AbstractMeta}
 end
 
-function JumpBy(delta; tangent_out = nothing, min_bend_radius = nothing)
+function JumpBy(delta; tangent_out = nothing, min_bend_radius = nothing,
+                meta = AbstractMeta[])
     d = (Float64(delta[1]), Float64(delta[2]), Float64(delta[3]))
     t = isnothing(tangent_out) ? nothing :
         (Float64(tangent_out[1]), Float64(tangent_out[2]), Float64(tangent_out[3]))
     r = isnothing(min_bend_radius) ? nothing : Float64(min_bend_radius)
-    JumpBy(d, t, r)
+    JumpBy(d, t, r, Vector{AbstractMeta}(meta))
 end
 
 """
@@ -439,14 +453,16 @@ struct JumpTo <: AbstractPathSegment
     destination::NTuple{3, Float64}
     tangent_out::Union{Nothing, NTuple{3, Float64}}
     min_bend_radius::Union{Nothing, Float64}
+    meta::Vector{AbstractMeta}
 end
 
-function JumpTo(destination; tangent_out = nothing, min_bend_radius = nothing)
+function JumpTo(destination; tangent_out = nothing, min_bend_radius = nothing,
+                meta = AbstractMeta[])
     d = (Float64(destination[1]), Float64(destination[2]), Float64(destination[3]))
     t = isnothing(tangent_out) ? nothing :
         (Float64(tangent_out[1]), Float64(tangent_out[2]), Float64(tangent_out[3]))
     r = isnothing(min_bend_radius) ? nothing : Float64(min_bend_radius)
-    JumpTo(d, t, r)
+    JumpTo(d, t, r, Vector{AbstractMeta}(meta))
 end
 
 # JumpBy and JumpTo are context-dependent: geometry is resolved at build() time
@@ -502,7 +518,11 @@ struct HermiteConnector <: AbstractPathSegment
     a2        :: NTuple{3,Float64}
     a3        :: NTuple{3,Float64}
     s_table   :: Vector{Float64}     # s_table[i] = arc-length at t = (i-1)/(n-1)
+    meta      :: Vector{AbstractMeta}
 end
+
+HermiteConnector(a0, a1, a2, a3, s_table; meta = AbstractMeta[]) =
+    HermiteConnector(a0, a1, a2, a3, s_table, Vector{AbstractMeta}(meta))
 
 const _HC_GAUSS4_NODES   = (-0.8611363115940526, -0.3399810435848563,
                               0.3399810435848563,  0.8611363115940526)
@@ -606,7 +626,8 @@ end
 
 function _build_hermite_connector(p1_local::Vector{Float64}, t_hat_out::Vector{Float64};
                                    n_table::Int = 256,
-                                   min_bend_radius::Union{Nothing,Float64} = nothing)
+                                   min_bend_radius::Union{Nothing,Float64} = nothing,
+                                   meta = AbstractMeta[])
     chord = norm(p1_local)
     h = chord   # default: chord-proportioned handles
 
@@ -664,7 +685,8 @@ function _build_hermite_connector(p1_local::Vector{Float64}, t_hat_out::Vector{F
 
     a1, a2, a3 = _hc_coeffs(p1_local, t_hat_out, h)
     a0 = (0.0, 0.0, 0.0)
-    return HermiteConnector(a0, a1, a2, a3, _hc_build_table(a1, a2, a3, n_table))
+    return HermiteConnector(a0, a1, a2, a3, _hc_build_table(a1, a2, a3, n_table);
+                            meta = meta)
 end
 
 arc_length(seg::HermiteConnector) = seg.s_table[end]
@@ -752,7 +774,8 @@ function _resolve_at_placement(seg::JumpBy, pos::Vector{Float64}, frame_mat::Mat
         (chord > 1e-15 ? p1_local ./ chord : [0.0, 0.0, 1.0]) :
         normalize(collect(seg.tangent_out))
     return _build_hermite_connector(p1_local, t_hat_out;
-                                    min_bend_radius = seg.min_bend_radius)
+                                    min_bend_radius = seg.min_bend_radius,
+                                    meta = seg.meta)
 end
 
 function _resolve_at_placement(seg::JumpTo, pos::Vector{Float64}, frame_mat::Matrix{Float64})
@@ -764,7 +787,8 @@ function _resolve_at_placement(seg::JumpTo, pos::Vector{Float64}, frame_mat::Mat
         normalize(frame_mat' * normalize(collect(seg.tangent_out)))
     end
     return _build_hermite_connector(p1_local, t_hat_out;
-                                    min_bend_radius = seg.min_bend_radius)
+                                    min_bend_radius = seg.min_bend_radius,
+                                    meta = seg.meta)
 end
 
 _resolve_at_placement(seg::AbstractPathSegment, ::AbstractVector, ::AbstractMatrix) = seg
@@ -779,36 +803,38 @@ mutable struct PathSpec
     PathSpec() = new(AbstractPathSegment[], TwistOverlay[])
 end
 
-function straight!(spec::PathSpec; length, nickname = nothing)
-    push!(spec.segments, StraightSegment(length; nickname))
+function straight!(spec::PathSpec; length, meta = AbstractMeta[])
+    push!(spec.segments, StraightSegment(length; meta))
     return spec
 end
 
 function bend!(spec::PathSpec; radius::Real, angle::Real, axis_angle::Real = 0.0,
-               nickname = nothing)
-    push!(spec.segments, BendSegment(radius, angle, axis_angle; nickname))
+               meta = AbstractMeta[])
+    push!(spec.segments, BendSegment(radius, angle, axis_angle; meta))
     return spec
 end
 
 function helix!(spec::PathSpec; radius::Real, pitch::Real, turns::Real,
-                axis_angle::Real = 0.0, nickname = nothing)
-    push!(spec.segments, HelixSegment(radius, pitch, turns, axis_angle; nickname))
+                axis_angle::Real = 0.0, meta = AbstractMeta[])
+    push!(spec.segments, HelixSegment(radius, pitch, turns, axis_angle; meta))
     return spec
 end
 
 function catenary!(spec::PathSpec; a::Real, length::Real, axis_angle::Real = 0.0,
-                   nickname = nothing)
-    push!(spec.segments, CatenarySegment(a, length, axis_angle; nickname))
+                   meta = AbstractMeta[])
+    push!(spec.segments, CatenarySegment(a, length, axis_angle; meta))
     return spec
 end
 
-function jumpby!(spec::PathSpec; delta, tangent = nothing, min_bend_radius = nothing)
-    push!(spec.segments, JumpBy(delta; tangent_out = tangent, min_bend_radius))
+function jumpby!(spec::PathSpec; delta, tangent = nothing, min_bend_radius = nothing,
+                 meta = AbstractMeta[])
+    push!(spec.segments, JumpBy(delta; tangent_out = tangent, min_bend_radius, meta))
     return spec
 end
 
-function jumpto!(spec::PathSpec; destination, tangent = nothing, min_bend_radius = nothing)
-    push!(spec.segments, JumpTo(destination; tangent_out = tangent, min_bend_radius))
+function jumpto!(spec::PathSpec; destination, tangent = nothing, min_bend_radius = nothing,
+                 meta = AbstractMeta[])
+    push!(spec.segments, JumpTo(destination; tangent_out = tangent, min_bend_radius, meta))
     return spec
 end
 

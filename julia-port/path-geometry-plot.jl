@@ -32,6 +32,7 @@ file is `include`d alongside unrelated code.
 module PathGeometry
 using LinearAlgebra
 include(joinpath(@__DIR__, "path-geometry.jl"))
+include(joinpath(@__DIR__, "fiber-path-meta.jl"))
 end
 
 # ---------------------------------------------------------------------------

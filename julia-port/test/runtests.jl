@@ -1,6 +1,6 @@
 include("test_path_geometry.jl")
 include("test_fiber_path.jl")
-include("test_fiber_path_shrinkage.jl")
+include("test_fiber_path_modify.jl")
 include("test_material_properties.jl")
 include("test_mcm_compatability.jl")
 include("../fiber-cross-section.jl")

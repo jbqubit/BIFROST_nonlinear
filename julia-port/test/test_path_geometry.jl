@@ -513,6 +513,94 @@ end
     @test ps.samples[end].s ≈ path.s_end  atol = 1e-12
 end
 
+# -----------------------------------------------------------------------
+# Per-segment meta bag
+# -----------------------------------------------------------------------
+
+if !isdefined(Main, :Nickname)
+    include("../fiber-path-meta.jl")
+end
+if !isdefined(Main, :Fiber)
+    include("../fiber-path.jl")
+end
+if !isdefined(Main, :modify)
+    include("../fiber-path-modify.jl")
+end
+
+@testset "per-segment meta — builders forward meta to every segment type" begin
+    nick = AbstractMeta[Nickname("alpha")]
+    mcm  = AbstractMeta[MCMadd(:T_K, (:Normal, 0.0, 1.0))]
+
+    spec = PathSpec()
+    straight!(spec; length = 0.1, meta = nick)
+    bend!(spec; radius = 0.05, angle = π / 2, meta = mcm)
+    helix!(spec; radius = 0.02, pitch = 0.01, turns = 1.0,
+           meta = AbstractMeta[Nickname("helix"), MCMadd(:T_K, :stub)])
+    catenary!(spec; a = 0.04, length = 0.05, meta = AbstractMeta[Nickname("cat")])
+    jumpby!(spec; delta = (0.0, 0.0, 0.05), meta = AbstractMeta[Nickname("jb")])
+    jumpto!(spec; destination = (0.0, 0.1, 0.4), meta = AbstractMeta[Nickname("jt")])
+
+    segs = spec.segments
+    @test segs[1].meta == nick
+    @test segs[2].meta == mcm
+    @test length(segs[3].meta) == 2
+    @test segs[4].meta[1] isa Nickname
+    @test segs[5].meta[1] isa Nickname
+    @test segs[6].meta[1] isa Nickname
+
+    @test segment_meta(segs[1]) === segs[1].meta
+    @test segment_nickname(segs[1]) == "alpha"
+    @test isnothing(segment_nickname(segs[2]))  # mcm only
+end
+
+@testset "per-segment meta — build() copies jump meta onto HermiteConnector" begin
+    spec = PathSpec()
+    straight!(spec; length = 0.1)
+    jumpby!(spec; delta = (0.05, 0.0, 0.2),
+            meta = AbstractMeta[Nickname("connector-1"),
+                                MCMadd(:T_K, :stub)])
+    path = build(spec)
+
+    hc = path.placed_segments[2].segment
+    @test hc isa HermiteConnector
+    @test length(hc.meta) == 2
+    @test segment_nickname(hc) == "connector-1"
+    @test any(m -> m isa MCMadd, hc.meta)
+end
+
+@testset "per-segment meta — shrinkage preserves meta" begin
+    xs = FiberCrossSection(GermaniaSilicaGlass(0.036), GermaniaSilicaGlass(0.0),
+                           8.2e-6, 125e-6)
+
+    spec = PathSpec()
+    straight!(spec; length = 0.1,
+              meta = AbstractMeta[Nickname("s"), MCMadd(:T_K, 10.0)])
+    bend!(spec; radius = 0.05, angle = π / 3,
+          meta = AbstractMeta[Nickname("b")])
+    helix!(spec; radius = 0.02, pitch = 0.01, turns = 1.0,
+           meta = AbstractMeta[Nickname("h")])
+    catenary!(spec; a = 0.03, length = 0.04,
+              meta = AbstractMeta[Nickname("c")])
+    jumpby!(spec; delta = (0.0, 0.0, 0.05),
+            meta = AbstractMeta[Nickname("j")])
+    path = build(spec)
+    fiber = Fiber(path; cross_section = xs, T_ref_K = 297.15)
+    path2 = modify(fiber)
+
+    @test segment_nickname(path2.placed_segments[1].segment) == "s"
+    @test any(m -> m isa MCMadd, path2.placed_segments[1].segment.meta)
+    @test segment_nickname(path2.placed_segments[2].segment) == "b"
+    @test segment_nickname(path2.placed_segments[3].segment) == "h"
+    @test segment_nickname(path2.placed_segments[4].segment) == "c"
+    @test segment_nickname(path2.placed_segments[5].segment) == "j"
+end
+
+@testset "per-segment meta — segment_meta returns empty default" begin
+    seg = StraightSegment(0.1)
+    @test segment_meta(seg) == AbstractMeta[]
+    @test isnothing(segment_nickname(seg))
+end
+
 #=
 DISABLED: min_bend_radius enforcement is a stub.
 
