@@ -1,14 +1,16 @@
 """
 path-geometry.jl
 
-Three-dimensional path geometry for smooth space curves.
+Three-dimensional path geometry for smooth space curves. 
 
-This file  describes the shape of a 3D curve and its associated differential 
-geometry.
 
-# Assembly
+# Assembly of a Path
 
-Two approaches are supported and can be freely mixed:
+struct Path is the immutable built struct that represents a compiled, 
+ready-to-query geometric path. It's the counterpart to the mutable 
+authoring struct PathSpec.
+
+Two approaches are supported to build a PathSpec and can be freely mixed:
 
 (1) Sliding-frame approach: each segment is specified relative to the frame left by
     the previous segment. The tangent direction at the start of each new segment is
@@ -1483,6 +1485,35 @@ function sample_path(path::Path, s1::Real, s2::Real; fidelity::Float64 = 1.0)
         )
     end
     return PathSample(samples, s_lo, s_hi, n)
+end
+
+function normalize_breakpoints(breakpoints::Vector{Float64})
+    return sort(unique(copy(breakpoints)))
+end
+
+function path_segment_breakpoints(path::Path)
+    points = Float64[Float64(path.s_start)]
+    for ps in path.placed_segments
+        push!(points, Float64(ps.s_offset_eff))
+        push!(points, Float64(ps.s_offset_eff + arc_length(ps.segment)))
+    end
+    push!(points, Float64(path.s_end))
+    return normalize_breakpoints(points)
+end
+
+function path_twist_breakpoints(path::Path)
+    points = Float64[Float64(path.s_start), Float64(path.s_end)]
+    for overlay in path.resolved_overlays
+        for rate in overlay.rates
+            push!(points, Float64(rate.s_eff_start))
+            push!(points, Float64(rate.s_eff_end))
+        end
+    end
+    return normalize_breakpoints(points)
+end
+
+function breakpoints(path::Path)
+    return normalize_breakpoints(vcat(path_segment_breakpoints(path), path_twist_breakpoints(path)))
 end
 
 function sample(path::Path, s_values)
