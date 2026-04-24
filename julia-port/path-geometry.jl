@@ -419,12 +419,10 @@ end
     JumpBy(delta, tangent_out, shrinkage, min_bend_radius)
 
 Connects the current position to current_position + shrinkage·delta using an
-Euler spiral (clothoid).  The incoming tangent is the current sliding frame
+smooth function.  The incoming tangent is the current sliding frame
 tangent.  `tangent_out` is the desired outgoing tangent direction; if nothing,
 the connector computes an implicit tangent that minimizes curvature variation
 (requires a nonlinear solve).
-
-The Euler spiral respects the incoming curvature κ_in for C² continuity.
 
 `min_bend_radius` (metres, nothing = unconstrained) sets a lower bound on the
 radius of curvature of the Hermite connector.  The tangent handle length is
@@ -451,8 +449,8 @@ end
 """
     JumpTo(destination, tangent_out, shrinkage, min_bend_radius)
 
-Connects the current position to the fixed lab-frame `destination` using an
-Euler spiral.  Shrinkage changes the arc length of the connector (the
+Connects the current position to the fixed lab-frame `destination` using smooth
+function.  Shrinkage changes the arc length of the connector (the
 connector absorbs the geometry change) but does not move the destination.
 
 `min_bend_radius` (metres, nothing = unconstrained) sets a lower bound on the

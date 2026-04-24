@@ -4,6 +4,10 @@ upcoming features. Agents should not start work on these without explicit author
 - [ ] add struct in path-integral.jl that reflects simulation parameters (eg `rtol`,
       `atol`, step controls)
 
+- [ ] Resume work on branch benchmark-integrate. 
+
+- [ ] Finish ensuring MCM compatability across the rest of the codebase.
+
 - [x] Update AGENT.md to provide guidance on how to structure unit tests. Focus on
       clearly deliniating high-value physics motivated tests, test involving validation
       data, tests that accompany select simulation test runs and finally tests that help
@@ -50,6 +54,8 @@ upcoming features. Agents should not start work on these without explicit author
       distance s along the length of an optical fiber.
 
 - [ ] Is this what we want? Piecewise bend! loops don't accumulate geometric twist in total_material_twist — but they shouldn't, because a BendSegment has geometric_torsion = 0 (circular arcs have zero torsion). A helix does have nonzero geometric_torsion, but that's captured in geometric_torsion(seg, s), not in total_material_twist.
+
+- [ ] Update demo.jl to use physical birefringences if possible.
 
 - [ ] Create a path-geometry.md that documents how it works. Add specific 
   illustratings for important features of path-geometry.jl. Each is described in

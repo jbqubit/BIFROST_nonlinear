@@ -96,15 +96,27 @@ Do not break these without explicit user discussion:
   raw matrix difference. This is intentional.
 - **Function-valued inputs**: Physical profiles (bend radius, twist rate, temperature,
   axis angle) must be callable at arbitrary `s`, not just on a fixed grid.
-- **MCM compatibility**: `material-properties.jl`, `fiber-cross-section.jl`, and
-  `path-geometry.jl` accept `MonteCarloMeasurements.Particles` on the uncertain
-  inputs (`T_K`, bend/twist/tension/axis-ratio properties, segment shrinkage). Keep
+- **MCM compatibility**: `material-properties.jl`, `fiber-cross-section.jl`,
+  `path-geometry.jl`, and `path-integral.jl` accept
+  `MonteCarloMeasurements.Particles` on the uncertain inputs (`T_K`,
+  bend/twist/tension/axis-ratio properties, segment shrinkage, and the
+  per-entry eltype of the Jones matrices `J` and sensitivity `G`). Keep
   these files `::Real`-free on uncertain-input slots and avoid `Float64(·)`
   coercions on those paths. Test files using MCM must wrap blocks in
   `MonteCarloMeasurements.unsafe_comparisons(true)`; under unsafe comparisons,
   invariants like "breakpoints are sorted and deduplicated" reduce via `pmean`
-  rather than failing. Hermite connectors (`JumpBy`/`JumpTo`), `cutoff_wavelength`,
-  and `path-integral.jl` are explicit Float64-only exceptions today.
+  rather than failing. In `path-integral.jl` specifically:
+  - The adaptive step controller reduces the error metric through
+    `scalar_reduce` (pmaximum under MCM) so the ensemble takes one step at a
+    time. A `pmean`-based reduction is a reasonable performance compromise if
+    step counts become too large under tight tolerances.
+  - The 4×4 sensitivity exp is a closed-form Fréchet derivative of the 2×2
+    exp (`exp_block_upper_triangular_2x2`), not `LinearAlgebra.exp` — this is
+    required for MCM compatibility and is also faster/exacter for Float64.
+  - `output_dgd_2x2` is the MCM-friendly DGD extractor (closed form, no
+    `eigvals`); `output_dgd` still uses `eigvals` and is Float64-only.
+  Remaining Float64-only exceptions: Hermite connectors (`JumpBy`/`JumpTo`),
+  `cutoff_wavelength`.
 
 ## Adding a New Birefringence Source
 

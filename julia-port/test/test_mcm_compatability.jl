@@ -144,6 +144,105 @@ end
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# ▓▓▓  path-integral.jl  ▓▓▓
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if !isdefined(Main, :exp_jones_generator)
+    include("../fiber-path.jl")
+    include("../path-integral.jl")
+end
+
+@testset "MCM :: path-integral.jl (Frechet 4×4 exp)" begin
+    # Confirm the Particles-compatible 4×4 block exp agrees with the generic exp
+    # on a deterministic Float64 instance, and lifts through Particles.
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        M_det = ComplexF64[0.1+0.2im  0.3; -0.2  -0.05-0.1im]
+        Mω_det = ComplexF64[0.01  0.02+0.01im; -0.01  0.005]
+        A = zeros(ComplexF64, 4, 4)
+        A[1:2, 1:2] = M_det;  A[1:2, 3:4] = Mω_det;  A[3:4, 3:4] = M_det
+        E_ref = exp(A)[1:2, 1:2]
+        F_ref = exp(A)[1:2, 3:4]
+        E, F = exp_block_upper_triangular_2x2(M_det, Mω_det)
+        @test isapprox(E, E_ref; atol = 1e-10)
+        @test isapprox(F, F_ref; atol = 1e-10)
+
+        # Same call with Particles-valued entries lifts cleanly.
+        ε = 1.0 ± 0.01
+        M_p = M_det .* ε
+        Mω_p = Mω_det .* ε
+        E_p, F_p = exp_block_upper_triangular_2x2(M_p, Mω_p)
+        @test eltype(E_p) <: Complex{<:Particles}
+        @test eltype(F_p) <: Complex{<:Particles}
+        # Mean should track the deterministic result.
+        @test isapprox(pmean.(real.(E_p)), real.(E_ref); atol = 1e-3)
+        @test isapprox(pmean.(imag.(E_p)), imag.(E_ref); atol = 1e-3)
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end
+
+@testset "MCM :: path-integral.jl (single-interval propagation)" begin
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        # T-PHYSICS: pure twist at constant rate τ over length L produces
+        # J = rotation by τ·L. Under uncertain τ, the mean output should track
+        # the rotation for the nominal τ.
+        τ_nom = 0.5
+        τ = τ_nom ± 0.05
+        L = 2.0
+        # K(s) for a pure twist (no bend) with material-twist rate τ is a 2×2
+        # skew-Hermitian with entries [0 -τ; τ 0]. Build a direct generator:
+        zT = zero(τ) + 0im
+        K = s -> [zT  -(τ + 0im); (τ + 0im)  zT]
+        J0 = Matrix{Complex{Particles{Float64, 2000}}}(I, 2, 2)
+        # Promote the identity to the Particles eltype so eltype propagation is uniform.
+        J0_det = Matrix{ComplexF64}(I, 2, 2)
+        J_out, stats = propagate_interval!(K, 0.0, L, J0_det; rtol = 1e-8, atol = 1e-10)
+        @test eltype(J_out) <: Complex{<:Particles}
+        # Expected rotation by θ = τ·L:  [cos θ  -sin θ; sin θ  cos θ]
+        θ_nom = τ_nom * L
+        expected = ComplexF64[cos(θ_nom)  -sin(θ_nom); sin(θ_nom)  cos(θ_nom)]
+        for i in 1:2, j in 1:2
+            @test pmean(real(J_out[i, j])) ≈ real(expected[i, j]) rtol=5e-2
+            @test pmean(imag(J_out[i, j])) ≈ imag(expected[i, j]) rtol=5e-2 atol=1e-3
+        end
+        # Step controller should have made a reasonable number of accepted steps.
+        @test stats.accepted_steps > 0
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end
+
+@testset "MCM :: path-integral.jl (sensitivity propagation)" begin
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        # Sensitivity propagation with an uncertain twist rate.
+        τ_nom = 0.5
+        τ = τ_nom ± 0.05
+        L = 1.5
+        zT = zero(τ) + 0im
+        K = s -> [zT  -(τ + 0im); (τ + 0im)  zT]
+        Kω = s -> zeros(ComplexF64, 2, 2)  # no frequency dispersion for pure twist
+        J0 = Matrix{ComplexF64}(I, 2, 2)
+        J_out, G_out, _ = propagate_interval_sensitivity!(K, Kω, 0.0, L, J0;
+                                                          rtol = 1e-8, atol = 1e-10)
+        @test eltype(J_out) <: Complex{<:Particles}
+        @test eltype(G_out) <: Complex{<:Particles}
+        # With Kω = 0 the group-delay operator G should be identically zero.
+        for i in 1:2, j in 1:2
+            @test pmean(abs(G_out[i, j])) < 1e-8
+        end
+
+        # 2×2 closed-form DGD: when G = 0, PMD generator H = 0, so DGD = 0.
+        dgd = output_dgd_2x2(J_out, G_out)
+        @test pmean(dgd) ≈ 0.0 atol=1e-6
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # ▓▓▓  path-geometry.jl  ▓▓▓
 # ═══════════════════════════════════════════════════════════════════════════════
 
