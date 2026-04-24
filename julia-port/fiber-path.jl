@@ -4,7 +4,7 @@ Fiber path, source specification, and segment-based authoring.
 This file has two layers.
 
 Authoring layer:
-- `FiberSpec`, `BendSegment`, and `TwistSegment` provide a readable way to
+- `FiberSpec`, `FiberBendSegment`, and `FiberTwistSegment` provide a readable way to
   build a fiber segment by segment on absolute `s`-intervals.
 - `FiberSpec` also holds a `FiberCrossSection` (step-index core/cladding model)
   so the authored path is tied to a specific transverse fiber type.
@@ -325,7 +325,7 @@ const DEFAULT_T_K = _ -> 297.15
 
 as_constant_profile(x::Real) = (_ -> Float64(x))
 
-struct BendSegment
+struct FiberBendSegment
     s_start::Float64
     s_end::Float64
     T_K::Function
@@ -333,14 +333,14 @@ struct BendSegment
     axis::Function
 end
 
-function BendSegment(
+function FiberBendSegment(
     s_start::Real,
     s_end::Real;
     T_K::Function,
     angle::Function,
     axis::Function
 )
-    return BendSegment(
+    return FiberBendSegment(
         Float64(s_start),
         Float64(s_end),
         T_K,
@@ -349,20 +349,20 @@ function BendSegment(
     )
 end
 
-struct TwistSegment
+struct FiberTwistSegment
     s_start::Float64
     s_end::Float64
     T_K::Function
     rate::Function
 end
 
-function TwistSegment(
+function FiberTwistSegment(
     s_start::Real,
     s_end::Real;
     T_K::Function,
     rate::Function
 )
-    return TwistSegment(
+    return FiberTwistSegment(
         Float64(s_start),
         Float64(s_end),
         T_K,
@@ -381,8 +381,8 @@ mutable struct FiberSpec
     s_start::Float64
     s_end::Float64
     T_K::Function
-    bend_segments::Vector{BendSegment}
-    twist_segments::Vector{TwistSegment}
+    bend_segments::Vector{FiberBendSegment}
+    twist_segments::Vector{FiberTwistSegment}
 end
 
 function FiberSpec(
@@ -399,8 +399,8 @@ function FiberSpec(
         Float64(s_start),
         Float64(s_end),
         T_profile,
-        BendSegment[],
-        TwistSegment[]
+        FiberBendSegment[],
+        FiberTwistSegment[]
     )
 end
 
@@ -415,7 +415,7 @@ function bend!(
     T_profile = T_K isa Function ? T_K : as_constant_profile(T_K)
     angle_profile = angle isa Function ? angle : as_constant_profile(angle)
     axis_profile = axis isa Function ? axis : as_constant_profile(axis)
-    push!(spec.bend_segments, BendSegment(s_start, s_end; T_K = T_profile, angle = angle_profile, axis = axis_profile))
+    push!(spec.bend_segments, FiberBendSegment(s_start, s_end; T_K = T_profile, angle = angle_profile, axis = axis_profile))
     return spec
 end
 
@@ -428,7 +428,7 @@ function twist!(
 )
     T_profile = T_K isa Function ? T_K : as_constant_profile(T_K)
     rate_profile = rate isa Function ? rate : as_constant_profile(rate)
-    push!(spec.twist_segments, TwistSegment(s_start, s_end; T_K = T_profile, rate = rate_profile))
+    push!(spec.twist_segments, FiberTwistSegment(s_start, s_end; T_K = T_profile, rate = rate_profile))
     return spec
 end
 
@@ -466,7 +466,7 @@ function segment_profile_breaks(domain_start::Float64, domain_end::Float64, seg_
     return breaks
 end
 
-function compile_bend_source(spec::FiberSpec, seg::BendSegment)
+function compile_bend_source(spec::FiberSpec, seg::FiberBendSegment)
     breaks = segment_profile_breaks(spec.s_start, spec.s_end, seg.s_start, seg.s_end)
     Rb_profile = function (s)
         if seg.s_start <= s <= seg.s_end
@@ -493,7 +493,7 @@ function compile_bend_source(spec::FiberSpec, seg::BendSegment)
     )
 end
 
-function compile_twist_source(spec::FiberSpec, seg::TwistSegment)
+function compile_twist_source(spec::FiberSpec, seg::FiberTwistSegment)
     breaks = segment_profile_breaks(spec.s_start, spec.s_end, seg.s_start, seg.s_end)
     dtwist_profile = function (s)
         if seg.s_start <= s <= seg.s_end

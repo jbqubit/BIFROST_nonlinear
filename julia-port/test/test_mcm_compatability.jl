@@ -67,7 +67,81 @@ end
 # ▓▓▓  fiber-cross-section.jl  ▓▓▓
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# (pending Stage 1 Part B)
+if !isdefined(Main, :FiberCrossSection)
+    include("../fiber-cross-section.jl")
+end
+
+@testset "MCM :: fiber-cross-section.jl" begin
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        λ = 1550e-9
+        T_nom = 293.0
+        T = T_nom ± 2.0
+        fiber = FiberCrossSection(
+            GermaniaSilicaGlass(0.036),
+            GermaniaSilicaGlass(0.0),
+            8.2e-6,
+            125e-6,
+        )
+
+        # ---- T-dependent mode quantities lift through Particles T
+        β = propagation_constant(fiber, λ, T)
+        @test β isa Particles
+        @test pmean(β) ≈ propagation_constant(fiber, λ, T_nom) rtol=1e-4
+
+        V = normalized_frequency(fiber, λ, T)
+        @test V isa Particles
+        @test pmean(V) ≈ normalized_frequency(fiber, λ, T_nom) rtol=1e-4
+
+        @test effective_mode_area(fiber, λ, T) isa Particles
+        @test nonlinear_coefficient(fiber, λ, T) isa Particles
+
+        # WithDerivative carries Particles in both fields
+        β_resp = propagation_constant(WithDerivative(), fiber, λ, T)
+        @test β_resp.value isa Particles
+        @test β_resp.dω isa Particles
+
+        # ---- bending_birefringence with uncertain bend_radius_m
+        R = 0.03 ± 0.003
+        Δβ_bend = bending_birefringence(fiber, λ, T_nom; bend_radius_m = R)
+        @test Δβ_bend isa Particles
+        @test pmean(Δβ_bend) ≈
+              bending_birefringence(fiber, λ, T_nom; bend_radius_m = 0.03) rtol=5e-2
+
+        # ---- axial_tension_birefringence with uncertain axial_tension_N
+        Δβ_tension = axial_tension_birefringence(fiber, λ, T_nom;
+                                                  bend_radius_m = 0.03,
+                                                  axial_tension_N = 0.5 ± 0.05)
+        @test Δβ_tension isa Particles
+
+        # ---- twisting_birefringence with uncertain twist_rate
+        Δβ_twist = twisting_birefringence(fiber, λ, T_nom;
+                                           twist_rate_rad_per_m = 10.0 ± 1.0)
+        @test Δβ_twist isa Particles
+        @test pmean(Δβ_twist) ≈
+              twisting_birefringence(fiber, λ, T_nom; twist_rate_rad_per_m = 10.0) rtol=1e-3
+
+        # ---- core_noncircularity and asymmetric_thermal_stress with uncertain axis_ratio
+        ε = 1.02 ± 0.005
+        Δβ_nc = core_noncircularity_birefringence(fiber, λ, T_nom; axis_ratio = ε)
+        @test Δβ_nc isa Particles
+        Δβ_ats = asymmetric_thermal_stress_birefringence(fiber, λ, T_nom; axis_ratio = ε)
+        @test Δβ_ats isa Particles
+
+        # ---- Combined: uncertain T AND uncertain bend radius (both lift together)
+        Δβ_both = bending_birefringence(fiber, λ, T; bend_radius_m = R)
+        @test Δβ_both isa Particles
+
+        # ---- Guardrails
+        # Invalid uncertain bend radius (mean negative) → error.
+        @test_throws ArgumentError bending_birefringence(fiber, λ, T_nom;
+                                                         bend_radius_m = -0.01 ± 0.001)
+        # cutoff_wavelength requires scalar T (documented pmean-only).
+        @test cutoff_wavelength(fiber, T_nom) isa Float64
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ▓▓▓  path-geometry.jl  ▓▓▓

@@ -37,7 +37,7 @@ struct SpectralResponse{T}
     dω::T
 end
 
-const MATERIAL_LIGHT_SPEED_M_PER_S = 299_792_458.0
+const SPEED_OF_LIGHT_M_PER_S = 299_792_458.0
 
 struct TemperaturePolynomial
     coeffs::NTuple{5, Float64}
@@ -262,7 +262,7 @@ function sellmeier_index_from_coefficients_dω(coeffs, λ)
     end
     n = sqrt(total)
     dn_dλ = dtotal_dλm / (2 * n)
-    dλ_dω = -(λ_m^2) / (2π * MATERIAL_LIGHT_SPEED_M_PER_S)
+    dλ_dω = -(λ_m^2) / (2π * SPEED_OF_LIGHT_M_PER_S)
     return SpectralResponse(n, dn_dλ * dλ_dω)
 end
 
