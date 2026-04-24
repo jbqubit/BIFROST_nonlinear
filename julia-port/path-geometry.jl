@@ -61,11 +61,6 @@ changes as τ(s) = 2π·N·α(s) / ∫α ds over the overlay interval.
     writhe(path)
     sample(path, s_values)
     sample_uniform(path; n)
-
-# JSON
-
-    path_from_json(filename) → PathSpec
-    path_to_json(spec, filename)
 """
 
 using LinearAlgebra
@@ -76,17 +71,21 @@ using LinearAlgebra
 
 abstract type AbstractPathSegment end
 
-# Required interface for each concrete segment (local arc-length s ∈ [0, arc_length(seg)]):
-#   arc_length(seg)                   → Float64
-#   nominal_arc_length(seg)           → Float64  (arc length at shrinkage = 1)
-#   curvature(seg, s)                 → Float64  (κ, 1/m)
-#   geometric_torsion(seg, s)         → Float64  (τ_geom, rad/m)
-#   position_local(seg, s)            → Vector{Float64} length 3
-#   tangent_local(seg, s)             → Vector{Float64} unit, length 3
-#   normal_local(seg, s)              → Vector{Float64} unit, length 3
-#   binormal_local(seg, s)            → Vector{Float64} unit, length 3
-#   end_position_local(seg)           → Vector{Float64} length 3
-#   end_frame_local(seg)              → (T, N, B) each Vector{Float64} length 3
+# Required interface for each concrete segment (local arc-length s ∈ [0, arc_length(seg)]).
+# Return element type T follows the segment's own type parameter (Float64 for
+# deterministic segments, Particles for MCM-valued fields):
+#   arc_length(seg)                   → T
+#   nominal_arc_length(seg)           → T          (arc length at shrinkage = 1)
+#   curvature(seg, s)                 → T          (κ, 1/m)
+#   geometric_torsion(seg, s)         → T          (τ_geom, rad/m)
+#   position_local(seg, s)            → Vector{T} length 3
+#   tangent_local(seg, s)             → Vector{T} unit, length 3
+#   normal_local(seg, s)              → Vector{T} unit, length 3
+#   binormal_local(seg, s)            → Vector{T} unit, length 3
+#   end_position_local(seg)           → Vector{T} length 3
+#   end_frame_local(seg)              → (T, N, B) each Vector{T} length 3
+# HermiteConnector (and its JumpBy/JumpTo precursors) is Float64-only; see its
+# docstring.
 
 segment_shrinkage(seg::AbstractPathSegment) = seg.shrinkage
 segment_nickname(seg::AbstractPathSegment)  = :nickname ∈ fieldnames(typeof(seg)) ? seg.nickname : nothing
@@ -114,27 +113,30 @@ end
 # StraightSegment
 # -----------------------------------------------------------------------
 
-struct StraightSegment <: AbstractPathSegment
-    length::Float64
-    shrinkage::Float64
+struct StraightSegment{T} <: AbstractPathSegment
+    length::T
+    shrinkage::T
     nickname::Union{Nothing,String}
 end
 
-function StraightSegment(length::Real; shrinkage::Real = 1.0, nickname = nothing)
-    StraightSegment(Float64(length), Float64(shrinkage), isnothing(nickname) ? nothing : String(nickname))
+function StraightSegment(length; shrinkage = 1.0, nickname = nothing)
+    L, α = promote(length, shrinkage)
+    StraightSegment{typeof(L)}(L, α, isnothing(nickname) ? nothing : String(nickname))
 end
 
 arc_length(seg::StraightSegment)         = seg.length * seg.shrinkage
 nominal_arc_length(seg::StraightSegment) = seg.length
-curvature(::StraightSegment, ::Real)     = 0.0
-geometric_torsion(::StraightSegment, ::Real) = 0.0
+curvature(seg::StraightSegment, _)       = zero(seg.length)
+geometric_torsion(seg::StraightSegment, _) = zero(seg.length)
 
-position_local(::StraightSegment, s::Real)  = [0.0, 0.0, Float64(s)]
-tangent_local(::StraightSegment, ::Real)        = [0.0, 0.0, 1.0]
-normal_local(::StraightSegment, ::Real)         = [1.0, 0.0, 0.0]
-binormal_local(::StraightSegment, ::Real)       = [0.0, 1.0, 0.0]
-end_position_local(seg::StraightSegment)        = [0.0, 0.0, arc_length(seg)]
-end_frame_local(::StraightSegment) = ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])
+position_local(seg::StraightSegment, s)   = [zero(s), zero(s), s]
+tangent_local(seg::StraightSegment, _)    = [zero(seg.length), zero(seg.length), one(seg.length)]
+normal_local(seg::StraightSegment, _)     = [one(seg.length), zero(seg.length), zero(seg.length)]
+binormal_local(seg::StraightSegment, _)   = [zero(seg.length), one(seg.length), zero(seg.length)]
+end_position_local(seg::StraightSegment)  = [zero(seg.length), zero(seg.length), arc_length(seg)]
+end_frame_local(seg::StraightSegment) = ([zero(seg.length), zero(seg.length), one(seg.length)],
+                                          [one(seg.length), zero(seg.length), zero(seg.length)],
+                                          [zero(seg.length), one(seg.length), zero(seg.length)])
 
 # -----------------------------------------------------------------------
 # BendSegment  (circular arc)
@@ -153,59 +155,59 @@ local y = incoming binormal), the inward normal direction is:
 Shrinkage scales the radius and arc length but preserves the swept angle.
 Curvature κ = 1 / (shrinkage · radius).
 """
-struct BendSegment <: AbstractPathSegment
-    radius::Float64
-    angle::Float64       # total angle swept (rad), preserved under shrinkage
-    axis_angle::Float64  # orientation of inward normal in transverse plane (rad)
-    shrinkage::Float64
+struct BendSegment{T} <: AbstractPathSegment
+    radius::T
+    angle::T       # total angle swept (rad), preserved under shrinkage
+    axis_angle::T  # orientation of inward normal in transverse plane (rad)
+    shrinkage::T
     nickname::Union{Nothing,String}
 
-    function BendSegment(radius::Real, angle::Real, axis_angle::Real = 0.0;
-                         shrinkage::Real = 1.0, nickname = nothing)
+    function BendSegment(radius, angle, axis_angle = 0.0;
+                         shrinkage = 1.0, nickname = nothing)
         @assert radius > 0 "BendSegment: radius must be positive"
-        new(Float64(radius), Float64(angle), Float64(axis_angle), Float64(shrinkage),
-            isnothing(nickname) ? nothing : String(nickname))
+        r, a, x, α = promote(radius, angle, axis_angle, shrinkage)
+        new{typeof(r)}(r, a, x, α, isnothing(nickname) ? nothing : String(nickname))
     end
 end
 
 arc_length(seg::BendSegment)         = seg.shrinkage * seg.radius * abs(seg.angle)
 nominal_arc_length(seg::BendSegment) = seg.radius * abs(seg.angle)
-curvature(seg::BendSegment, ::Real)  = 1.0 / (seg.shrinkage * seg.radius)
-geometric_torsion(::BendSegment, ::Real) = 0.0
+curvature(seg::BendSegment, _)       = one(seg.radius) / (seg.shrinkage * seg.radius)
+geometric_torsion(seg::BendSegment, _) = zero(seg.radius)
 
-function position_local(seg::BendSegment, s::Real)
+function position_local(seg::BendSegment, s)
     R   = seg.shrinkage * seg.radius
     θ   = s / R
     φ   = seg.axis_angle
-    n̂   = [cos(φ), sin(φ), 0.0]
-    return R * (1 - cos(θ)) * n̂ + [0.0, 0.0, R * sin(θ)]
+    n̂   = [cos(φ), sin(φ), zero(φ)]
+    return R * (1 - cos(θ)) * n̂ + [zero(R), zero(R), R * sin(θ)]
 end
 
-function tangent_local(seg::BendSegment, s::Real)
+function tangent_local(seg::BendSegment, s)
     R = seg.shrinkage * seg.radius
     θ = s / R
     φ = seg.axis_angle
     return [sin(θ) * cos(φ), sin(θ) * sin(φ), cos(θ)]
 end
 
-function normal_local(seg::BendSegment, s::Real)
+function normal_local(seg::BendSegment, s)
     R = seg.shrinkage * seg.radius
     θ = s / R
     φ = seg.axis_angle
     return [cos(θ) * cos(φ), cos(θ) * sin(φ), -sin(θ)]
 end
 
-function binormal_local(seg::BendSegment, ::Real)
+function binormal_local(seg::BendSegment, _)
     φ = seg.axis_angle
-    return [-sin(φ), cos(φ), 0.0]   # constant for circular arc (zero torsion)
+    return [-sin(φ), cos(φ), zero(φ)]   # constant for circular arc (zero torsion)
 end
 
 function end_position_local(seg::BendSegment)
     R = seg.shrinkage * seg.radius
     θ = seg.angle
     φ = seg.axis_angle
-    n̂ = [cos(φ), sin(φ), 0.0]
-    return R * (1 - cos(θ)) * n̂ + [0.0, 0.0, R * sin(θ)]
+    n̂ = [cos(φ), sin(φ), zero(φ)]
+    return R * (1 - cos(θ)) * n̂ + [zero(R), zero(R), R * sin(θ)]
 end
 
 function end_frame_local(seg::BendSegment)
@@ -213,7 +215,7 @@ function end_frame_local(seg::BendSegment)
     φ = seg.axis_angle
     T = [sin(θ) * cos(φ), sin(θ) * sin(φ),  cos(θ)]
     N = [cos(θ) * cos(φ), cos(θ) * sin(φ), -sin(θ)]
-    B = [-sin(φ), cos(φ), 0.0]
+    B = [-sin(φ), cos(φ), zero(φ)]
     return (T, N, B)
 end
 
@@ -233,48 +235,48 @@ curves horizontally.
 Under shrinkage α: effective parameter a → α·a, arc length → α·length,
 curvature κ(s) = a_eff / (a_eff² + s²).  Angles are preserved.
 """
-struct CatenarySegment <: AbstractPathSegment
-    a::Float64
-    length::Float64
-    axis_angle::Float64
-    shrinkage::Float64
+struct CatenarySegment{T} <: AbstractPathSegment
+    a::T
+    length::T
+    axis_angle::T
+    shrinkage::T
     nickname::Union{Nothing,String}
 
-    function CatenarySegment(a::Real, length::Real, axis_angle::Real = 0.0;
-                             shrinkage::Real = 1.0, nickname = nothing)
+    function CatenarySegment(a, length, axis_angle = 0.0;
+                             shrinkage = 1.0, nickname = nothing)
         @assert a > 0      "CatenarySegment: a must be positive"
         @assert length > 0 "CatenarySegment: length must be positive"
-        new(Float64(a), Float64(length), Float64(axis_angle), Float64(shrinkage),
-            isnothing(nickname) ? nothing : String(nickname))
+        av, L, x, α = promote(a, length, axis_angle, shrinkage)
+        new{typeof(av)}(av, L, x, α, isnothing(nickname) ? nothing : String(nickname))
     end
 end
 
 arc_length(seg::CatenarySegment)         = seg.length * seg.shrinkage
 nominal_arc_length(seg::CatenarySegment) = seg.length
-geometric_torsion(::CatenarySegment, ::Real) = 0.0
+geometric_torsion(seg::CatenarySegment, _) = zero(seg.a)
 
-function curvature(seg::CatenarySegment, s::Real)
+function curvature(seg::CatenarySegment, s)
     a = seg.a * seg.shrinkage
     return a / (a^2 + s^2)
 end
 
-function position_local(seg::CatenarySegment, s::Real)
+function position_local(seg::CatenarySegment, s)
     a = seg.a * seg.shrinkage
     φ = seg.axis_angle
-    n̂ = [cos(φ), sin(φ), 0.0]
+    n̂ = [cos(φ), sin(φ), zero(φ)]
     horiz = a * (sqrt(1 + (s / a)^2) - 1)
     vert  = a * asinh(s / a)
-    return horiz * n̂ + [0.0, 0.0, vert]
+    return horiz * n̂ + [zero(a), zero(a), vert]
 end
 
-function tangent_local(seg::CatenarySegment, s::Real)
+function tangent_local(seg::CatenarySegment, s)
     a = seg.a * seg.shrinkage
     φ = seg.axis_angle
     q = sqrt(1 + (s / a)^2)
-    return [(s / a) / q * cos(φ), (s / a) / q * sin(φ), 1.0 / q]
+    return [(s / a) / q * cos(φ), (s / a) / q * sin(φ), one(q) / q]
 end
 
-function normal_local(seg::CatenarySegment, s::Real)
+function normal_local(seg::CatenarySegment, s)
     # N = dT/ds / |dT/ds|, derived analytically: N = [n̂_horiz/q, -s/a/q] normalised
     a = seg.a * seg.shrinkage
     φ = seg.axis_angle
@@ -282,7 +284,7 @@ function normal_local(seg::CatenarySegment, s::Real)
     return [cos(φ) / q, sin(φ) / q, -(s / a) / q]
 end
 
-function binormal_local(seg::CatenarySegment, s::Real)
+function binormal_local(seg::CatenarySegment, s)
     return cross(tangent_local(seg, s), normal_local(seg, s))
 end
 
@@ -320,21 +322,20 @@ Local-frame basis vectors:
     r̂₀ = [-sin(axis_angle), cos(axis_angle), 0]    (outward radial at s=0)
     ê_φ = (R·ẑ - h·n̂) / ℓ'                        (tangential at s=0, ⊥ axis)
 """
-struct HelixSegment <: AbstractPathSegment
-    radius::Float64
-    pitch::Float64
-    turns::Float64
-    axis_angle::Float64
-    shrinkage::Float64
+struct HelixSegment{T} <: AbstractPathSegment
+    radius::T
+    pitch::T
+    turns::T
+    axis_angle::T
+    shrinkage::T
     nickname::Union{Nothing,String}
 
-    function HelixSegment(radius::Real, pitch::Real, turns::Real,
-                          axis_angle::Real = 0.0; shrinkage::Real = 1.0, nickname = nothing)
+    function HelixSegment(radius, pitch, turns,
+                          axis_angle = 0.0; shrinkage = 1.0, nickname = nothing)
         @assert radius > 0 "HelixSegment: radius must be positive"
         @assert turns  > 0 "HelixSegment: turns must be positive"
-        new(Float64(radius), Float64(pitch), Float64(turns),
-            Float64(axis_angle), Float64(shrinkage),
-            isnothing(nickname) ? nothing : String(nickname))
+        r, p, n, x, α = promote(radius, pitch, turns, axis_angle, shrinkage)
+        new{typeof(r)}(r, p, n, x, α, isnothing(nickname) ? nothing : String(nickname))
     end
 end
 
@@ -349,13 +350,13 @@ end
 
 nominal_arc_length(seg::HelixSegment) = arc_length(seg) / seg.shrinkage
 
-function curvature(seg::HelixSegment, ::Real)
+function curvature(seg::HelixSegment, _)
     R = seg.radius * seg.shrinkage
     h = _helix_h(seg) * seg.shrinkage
     return R / (R^2 + h^2)
 end
 
-function geometric_torsion(seg::HelixSegment, ::Real)
+function geometric_torsion(seg::HelixSegment, _)
     R = seg.radius * seg.shrinkage
     h = _helix_h(seg) * seg.shrinkage
     return h / (R^2 + h^2)
@@ -366,32 +367,34 @@ function _helix_basis(seg::HelixSegment)
     h  = _helix_h(seg) * seg.shrinkage
     φ_a = seg.axis_angle
     ℓ′  = sqrt(R^2 + h^2)
-    n̂   = [cos(φ_a), sin(φ_a), 0.0]
-    â   = (h .* [0.0, 0.0, 1.0] .+ R .* n̂) ./ ℓ′
-    r̂₀  = [-sin(φ_a), cos(φ_a), 0.0]   # ẑ × n̂
-    ê_φ = (R .* [0.0, 0.0, 1.0] .- h .* n̂) ./ ℓ′  # â × r̂₀, tangential at s=0
+    z0 = zero(R); z1 = one(R)
+    ẑ   = [z0, z0, z1]
+    n̂   = [cos(φ_a), sin(φ_a), z0]
+    â   = (h .* ẑ .+ R .* n̂) ./ ℓ′
+    r̂₀  = [-sin(φ_a), cos(φ_a), z0]   # ẑ × n̂
+    ê_φ = (R .* ẑ .- h .* n̂) ./ ℓ′  # â × r̂₀, tangential at s=0
     return R, h, ℓ′, â, r̂₀, ê_φ
 end
 
-function position_local(seg::HelixSegment, s::Real)
+function position_local(seg::HelixSegment, s)
     R, h, ℓ′, â, r̂₀, ê_φ = _helix_basis(seg)
     φ = s / ℓ′
     return h .* â .* φ .+ R .* (cos(φ) - 1) .* r̂₀ .+ R .* sin(φ) .* ê_φ
 end
 
-function tangent_local(seg::HelixSegment, s::Real)
+function tangent_local(seg::HelixSegment, s)
     R, h, ℓ′, â, r̂₀, ê_φ = _helix_basis(seg)
     φ = s / ℓ′
     return (h .* â .- R .* sin(φ) .* r̂₀ .+ R .* cos(φ) .* ê_φ) ./ ℓ′
 end
 
-function normal_local(seg::HelixSegment, s::Real)
+function normal_local(seg::HelixSegment, s)
     _, _, ℓ′, _, r̂₀, ê_φ = _helix_basis(seg)
     φ = s / ℓ′
     return -(cos(φ) .* r̂₀ .+ sin(φ) .* ê_φ)
 end
 
-function binormal_local(seg::HelixSegment, s::Real)
+function binormal_local(seg::HelixSegment, s)
     R, h, ℓ′, â, r̂₀, ê_φ = _helix_basis(seg)
     φ = s / ℓ′
     # B = T × N; expanding in {â, r̂₀, ê_φ} orthonormal frame:
@@ -426,8 +429,8 @@ The Euler spiral respects the incoming curvature κ_in for C² continuity.
 `min_bend_radius` (metres, nothing = unconstrained) sets a lower bound on the
 radius of curvature of the Hermite connector.  The tangent handle length is
 extended beyond the chord default when necessary to keep κ ≤ 1/R_min.
+Currently a stub. 
 
-TODO: implement the Euler spiral solver.
 """
 struct JumpBy <: AbstractPathSegment
     delta::NTuple{3, Float64}
@@ -455,8 +458,7 @@ connector absorbs the geometry change) but does not move the destination.
 `min_bend_radius` (metres, nothing = unconstrained) sets a lower bound on the
 radius of curvature of the Hermite connector.  The tangent handle length is
 extended beyond the chord default when necessary to keep κ ≤ 1/R_min.
-
-TODO: implement the Euler spiral solver.
+Currently a stub. 
 """
 struct JumpTo <: AbstractPathSegment
     destination::NTuple{3, Float64}
@@ -514,6 +516,13 @@ Tangent vectors are scaled by the chord length.
 A 256-point Gauss-quadrature arc-length table enables arc-length reparameterisation
 of all interface methods.  Curvature and geometric torsion are computed analytically
 from the polynomial derivatives.
+
+!!! note "MCM compatibility"
+    `HermiteConnector`, `JumpBy`, and `JumpTo` are Float64-only. Their internals
+    (Newton inversion of the arc-length table, `_perp_unit` fallback, tuple
+    arithmetic) are not lifted to `Particles`. A `PathSpec` that mixes an
+    uncertain `BendSegment`/`HelixSegment`/etc. with a `jumpby!`/`jumpto!`
+    will fail at `build()`.
 """
 struct HermiteConnector <: AbstractPathSegment
     a0        :: NTuple{3,Float64}   # P(t) = a0 + a1 t + a2 t² + a3 t³, t ∈ [0,1]
@@ -788,7 +797,7 @@ function _resolve_at_placement(seg::JumpTo, pos::Vector{Float64}, frame_mat::Mat
                                     min_bend_radius = seg.min_bend_radius)
 end
 
-_resolve_at_placement(seg::AbstractPathSegment, ::Vector{Float64}, ::Matrix{Float64}) = seg
+_resolve_at_placement(seg::AbstractPathSegment, ::AbstractVector, ::AbstractMatrix) = seg
 
 # -----------------------------------------------------------------------
 # PathSpec  (mutable authoring struct)
@@ -857,16 +866,16 @@ end
 
 struct PlacedSegment
     segment::AbstractPathSegment
-    s_offset_eff::Float64       # cumulative effective arc-length at segment start
-    s_offset_nom::Float64       # cumulative nominal arc-length at segment start
-    origin::Vector{Float64}     # global start position
-    frame::Matrix{Float64}      # 3×3, columns [N_global | B_global | T_global]
+    s_offset_eff::Real          # cumulative effective arc-length at segment start
+    s_offset_nom::Real          # cumulative nominal arc-length at segment start
+    origin::AbstractVector      # global start position (length 3)
+    frame::AbstractMatrix       # 3×3, columns [N_global | B_global | T_global]
                                 # transforms local vectors → global: v_g = frame * v_l
 end
 
 struct ResolvedTwistRate
-    s_eff_start::Float64
-    s_eff_end::Float64
+    s_eff_start::Real
+    s_eff_end::Real
     rate::Function                     # τ_mat(s_eff) in rad/m
 end
 
@@ -879,8 +888,8 @@ end
 # -----------------------------------------------------------------------
 
 struct Path
-    s_start::Float64
-    s_end::Float64
+    s_start::Real
+    s_end::Real
     placed_segments::Vector{PlacedSegment}
     resolved_overlays::Vector{ResolvedTwistOverlay}
 end
@@ -891,13 +900,13 @@ end
 
 function _apply_shrinkage_override(seg::S, override) where {S <: AbstractPathSegment}
     isnothing(override) && return seg
-    α = Float64(override)
     # shrinkage and nickname are keyword arguments in the outer constructors.
     excluded = (:shrinkage, :nickname)
     flds = fieldnames(S)
     vals = [getfield(seg, f) for f in flds if f ∉ excluded]
     nick = :nickname ∈ flds ? getfield(seg, :nickname) : nothing
-    return S(vals...; shrinkage = α, nickname = nick)
+    # Use the UnionAll (unparameterized) name so the outer keyword constructor dispatches.
+    return S.name.wrapper(vals...; shrinkage = override, nickname = nick)
 end
 
 function _resolve_overlay(overlay::TwistOverlay,
@@ -934,6 +943,8 @@ Compile a `PathSpec` into an immutable `Path`.  Optional `shrinkage` argument:
 - `Float64`  — uniform override applied to all segments
 - `Dict{Int,Float64}` — override by segment index (1-based)
 """
+_safe_normalize(v::AbstractVector) = v ./ sqrt(sum(abs2, v))
+
 function build(spec::PathSpec; shrinkage = nothing)
     pos     = zeros(3)
     N_frame = [1.0, 0.0, 0.0]
@@ -967,10 +978,10 @@ function build(spec::PathSpec; shrinkage = nothing)
         (T_end_l, N_end_l, _) = end_frame_local(seg_placed)
 
         pos     = pos + frame * pos_end_local
-        T_frame = normalize(frame * T_end_l)
+        T_frame = _safe_normalize(frame * T_end_l)
         N_end_g = frame * N_end_l
         # Re-orthogonalise to prevent floating-point drift
-        N_frame = normalize(N_end_g - dot(N_end_g, T_frame) * T_frame)
+        N_frame = _safe_normalize(N_end_g - dot(N_end_g, T_frame) * T_frame)
         B_frame = cross(T_frame, N_frame)
 
         s_eff += arc_length(seg_placed)
@@ -986,21 +997,21 @@ end
 # Segment lookup helpers
 # -----------------------------------------------------------------------
 
-function _find_placed_segment(path::Path, s::Real)
-    sf = Float64(s)
+function _find_placed_segment(path::Path, s)
     n = length(path.placed_segments)
     for i in 1:n
         ps = path.placed_segments[i]
-        s_end = ps.s_offset_eff + arc_length(ps.segment)
-        if sf <= s_end + 1e-12 || i == n
-            s_local = clamp(sf - ps.s_offset_eff, 0.0, arc_length(ps.segment))
+        seg_len = arc_length(ps.segment)
+        s_end = ps.s_offset_eff + seg_len
+        if s <= s_end + 1e-12 || i == n
+            s_local = clamp(s - ps.s_offset_eff, zero(seg_len), seg_len)
             return ps, s_local
         end
     end
     error("s = $s out of path bounds [$(path.s_start), $(path.s_end)]")
 end
 
-function _local_to_global(ps::PlacedSegment, v_local::Vector{Float64})
+function _local_to_global(ps::PlacedSegment, v_local::AbstractVector)
     return ps.frame * v_local
 end
 
@@ -1010,9 +1021,9 @@ end
 
 arc_length(path::Path) = path.s_end - path.s_start
 
-function arc_length(::Path, s1::Real, s2::Real)
+function arc_length(::Path, s1, s2)
     @assert s2 >= s1 "arc_length: require s2 >= s1"
-    return Float64(s2) - Float64(s1)
+    return s2 - s1
 end
 
 function curvature(path::Path, s::Real)
@@ -1030,13 +1041,12 @@ end
 
 Material twist rate at effective arc-length `s`.
 """
-function material_twist(path::Path, s::Real)
-    sf = Float64(s)
-    τ = 0.0
+function material_twist(path::Path, s)
+    τ = zero(s)
     for ov in path.resolved_overlays
         for r in ov.rates
-            if r.s_eff_start <= sf <= r.s_eff_end
-                τ += r.rate(sf)
+            if r.s_eff_start <= s <= r.s_eff_end
+                τ += r.rate(s)
             end
         end
     end
@@ -1486,49 +1496,3 @@ function sample_uniform(path::Path; n::Int = 256)
     return sample(path, ss)
 end
 
-# -----------------------------------------------------------------------
-# JSON I/O
-# -----------------------------------------------------------------------
-
-# JSON segment format (one entry per segment in order):
-#
-#   {"type": "straight",  "length": 1.0, "shrinkage": 1.0}
-#   {"type": "bend",      "radius": 0.05, "angle": 1.5708,
-#                         "axis_angle": 0.0, "shrinkage": 1.0}
-#   {"type": "catenary",  "a": 0.1, "length": 0.5,
-#                         "axis_angle": 0.0, "shrinkage": 1.0}
-#   {"type": "helix",     "radius": 0.03, "pitch": 0.01, "turns": 3.0,
-#                         "axis_angle": 0.0, "shrinkage": 1.0}
-#   {"type": "jumpby",    "delta": [0.5, 0.0, 0.3],
-#                         "tangent": null, "shrinkage": 1.0}
-#   {"type": "jumpto",    "destination": [1.0, 0.0, 0.5],
-#                         "tangent": [0.0, 1.0, 0.0], "shrinkage": 1.0}
-#
-# Twist overlays follow the segments:
-#
-#   {"type": "twist",  "s_start": 0.5, "length": 1.0, "turns": 3}
-#
-# Full file structure:
-#   { "path": [ ...segment dicts... ] }
-
-"""
-    path_from_json(filename) → PathSpec
-
-Load a PathSpec from a JSON file.  Requires the JSON3 package.
-
-TODO: add JSON3 to Project.toml and implement this function.
-"""
-function path_from_json(::AbstractString)
-    error("path_from_json: JSON3 not yet wired; add JSON3 to Project.toml")
-end
-
-"""
-    path_to_json(spec, filename)
-
-Save a PathSpec to a JSON file.  Requires the JSON3 package.
-
-TODO: add JSON3 to Project.toml and implement this function.
-"""
-function path_to_json(::PathSpec, ::AbstractString)
-    error("path_to_json: JSON3 not yet wired; add JSON3 to Project.toml")
-end

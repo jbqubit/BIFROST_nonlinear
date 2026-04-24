@@ -14,6 +14,12 @@ upcoming features. Agents should not start work on these without explicit author
       already a convention for this. In that case I'd use multiple dispatch to express
       the detailed intent for my fiber based application.
 
+- [x] The method uncovered_intervals in path-geometry.jl seems redundant since fiber segments 
+  are built piecewise. My construction it's not possible for there to be gaps. Don't do this.... they are needed. 
+
+- [ ] `HermiteConnector`, `JumpBy`, and `JumpTo` are presently
+  incompatible with MCM. 
+
 - [ ] implement for T in (JumpBy, JumpTo)
   - [ ] properly implement sample_path for these
 
