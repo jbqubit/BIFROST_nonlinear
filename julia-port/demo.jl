@@ -1,7 +1,11 @@
+using MonteCarloMeasurements
+
 include("material-properties.jl")
 include("fiber-cross-section.jl")
 include("path-geometry.jl")
 include("path-geometry-plot.jl")
+include("path-integral.jl")
+include("fiber-path-plot.jl")
 
 
 const DEMO_FIBER_CROSS_SECTION = FiberCrossSection(
@@ -395,6 +399,216 @@ function demo_fiber_path_jumps2(;
     return (; path, plot_path)
 end
 
+"""
+    demo_fiber_paddles_mcm(; μ_T = 297.15, σ_T = 2.0, N = 200, ...)
+
+Four-paddle polarization controller (Λ/4 – Λ/2 – Λ/2 – Λ/4) with paddle 2's
+temperature modeled as a normal random variable via MonteCarloMeasurements.
+Propagates a horizontal input state through the fiber in a single
+`propagate_fiber` call — the Particles-valued `T_K` on paddle 2 lifts through
+`bending_birefringence` and the Jones integrator so the output state carries
+an ensemble of `N` samples.
+
+Emits two HTML artefacts:
+
+1. `paddles-mcm-poincare.html` — Poincare sphere with the output-state point
+   cloud (one marker per temperature sample, colored by T₂) and the
+   ensemble-mean state vector drawn as an arrow.
+2. `paddles-mcm-fiber.html` — 3D fiber centerline rendered via
+   [`write_fiber_input_plot3d`](fiber-path-plot.jl) at the nominal temperature
+   (the MCM ensemble collapses to its mean for the centerline view — the
+   geometry is temperature-independent at this level; only the endpoint
+   polarization scatters).
+"""
+function demo_fiber_paddles_mcm(;
+    μ_T::Float64 = 297.15,
+    σ_T::Float64 = 10.0,
+    N::Int = 200,
+    poincare_output::AbstractString = joinpath(@__DIR__, "..", "output", "paddles-mcm-poincare.html"),
+    fiber_output::AbstractString = joinpath(@__DIR__, "..", "output", "paddles-mcm-fiber.html"),
+)
+    # Four-paddle controller: (turns, radius_m, axis_angle_rad).
+    # Geometry matches the Thorlabs FPC030 small-diameter polarization controller
+    # at 1550 nm with SMF-28-class fiber.
+    paddles = [
+        (turns = 1.0, radius = 0.030, axis = 0.0),
+        (turns = 2.0, radius = 0.030, axis =  π/4),
+        (turns = 2.0, radius = 0.030, axis = -π/4),
+        (turns = 1.0, radius = 0.030, axis = 0.0),
+    ]
+
+    # Paddle 2's temperature as Particles. Explicit N-sample ensemble from a
+    # normal distribution centered at μ_T with standard deviation σ_T.
+    T_paddle2 = Particles(N, MonteCarloMeasurements.Distributions.Normal(μ_T, σ_T))
+    paddle2_temperatures = T_paddle2.particles  # Vector{Float64}, length N
+
+    # Assemble fiber arc-length domain [0, L_total] with one low-level custom
+    # bend segment per paddle.
+    s = 0.0
+    segment_ranges = Tuple{Float64,Float64}[]
+    path_spec = PathSpec()
+    for p in paddles
+        L = 2π * p.radius * p.turns
+        push!(segment_ranges, (s, s + L))
+        bend!(path_spec; radius = p.radius, angle = 2π * p.turns, axis_angle = p.axis)
+        s += L
+    end
+    L_total = s
+
+    path = build(path_spec)
+    function T_profile(s)
+        for (i, (s0, s1)) in enumerate(segment_ranges)
+            if s0 <= s <= s1
+                return i == 2 ? T_paddle2 : μ_T
+            end
+        end
+        return μ_T
+    end
+    fiber = Fiber(path; cross_section = DEMO_FIBER_CROSS_SECTION)
+
+    # Propagate once with in-band MCM. unsafe_comparisons lets branching inside
+    # the adaptive integrator operate on Particles-valued scalars.
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    J = try
+        J_, _stats = propagate_fiber(fiber; λ_m = DEMO_λ_M, T_K = T_profile, rtol = 1e-9, atol = 1e-12, h_init = 0.1)
+        J_
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+
+    H_STATE = ComplexF64[1.0 + 0.0im, 0.0 + 0.0im]
+    ψ_out = J * H_STATE                                  # 2-vector of Complex{Particles}
+
+    # Extract the per-sample Jones vectors.
+    samples_re = [real(ψ_out[k]).particles for k in 1:2]
+    samples_im = [imag(ψ_out[k]).particles for k in 1:2]
+    ψ_samples = [ComplexF64[samples_re[1][j] + im * samples_im[1][j],
+                            samples_re[2][j] + im * samples_im[2][j]] for j in 1:N]
+    stokes_samples = [stokes_from_jones(ψ_samples[j]) for j in 1:N]
+
+    # Mean output state — normalize after averaging; Stokes of the mean is
+    # built directly from pmean so phase is consistent.
+    ψ_mean_unnorm = ComplexF64[
+        pmean(real(ψ_out[1])) + im * pmean(imag(ψ_out[1])),
+        pmean(real(ψ_out[2])) + im * pmean(imag(ψ_out[2])),
+    ]
+    ψ_mean = ψ_mean_unnorm / norm(ψ_mean_unnorm)
+    rep_mean = poincare_vector_representation(ψ_mean)
+
+    _write_poincare_cloud_plot(
+        rep_mean, stokes_samples, paddle2_temperatures;
+        output = poincare_output,
+        title = "Four-paddle controller — Poincare sphere MCM cloud (σ_T2 = $(σ_T) K, N = $(N))",
+    )
+
+    # Build a scalar-temperature fiber for the 3D centerline view.
+    fiber_mean = Fiber(path; cross_section = DEMO_FIBER_CROSS_SECTION)
+    plot_fiber = write_fiber_input_plot3d(
+        fiber_mean, 0.0, L_total;
+        λ_m = DEMO_λ_M,
+        T_K = μ_T,
+        n = 801,
+        output = fiber_output,
+        title = "Four-paddle controller — fiber centerline (nominal T)",
+        input_state = H_STATE,
+    )
+
+    println("Wrote Poincare MCM cloud to:    ", poincare_output)
+    println("Wrote fiber centerline plot to: ", plot_fiber)
+
+    return (
+        fiber = fiber,
+        J_mean_sample = ψ_mean,
+        ψ_samples = ψ_samples,
+        stokes_samples = stokes_samples,
+        paddle2_temperatures = paddle2_temperatures,
+        plot_poincare = poincare_output,
+        plot_fiber = plot_fiber,
+    )
+end
+
+# Minimal Plotly HTML writer for a Poincare sphere with a per-sample scatter
+# cloud. Uses `render_poincare_sphere` for the sphere/equator scaffolding and
+# adds the point-cloud trace on top.
+function _write_poincare_cloud_plot(
+    rep_mean::NamedTuple,
+    stokes_samples::Vector,
+    sample_colors::Vector{Float64};
+    output::AbstractString,
+    title::AbstractString,
+)
+    sphere = render_poincare_sphere(rep_mean)
+    xs = [s[1] for s in stokes_samples]
+    ys = [s[2] for s in stokes_samples]
+    zs = [s[3] for s in stokes_samples]
+
+    js_num(x) = isnan(x) ? "NaN" : string(Float64(x))
+    js_arr(xs) = "[" * join(js_num.(xs), ",") * "]"
+    js_surf(xss) = "[" * join([js_arr(r) for r in xss], ",") * "]"
+    js_strarr(xs) = "[" * join(["\"$(x)\"" for x in xs], ",") * "]"
+
+    html = """
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>$title</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>html,body{margin:0;padding:0;width:100%;height:100%;font-family:sans-serif;}#plot{width:100%;height:100%;}</style>
+</head><body><div id="plot"></div>
+<script>
+const sphU = $(js_surf(sphere.surface.x));
+const sphV = $(js_surf(sphere.surface.y));
+const sphW = $(js_surf(sphere.surface.z));
+const eqXYx = $(js_arr(sphere.circles.xy.x));
+const eqXYy = $(js_arr(sphere.circles.xy.y));
+const eqXYz = $(js_arr(sphere.circles.xy.z));
+const eqXZx = $(js_arr(sphere.circles.xz.x));
+const eqXZy = $(js_arr(sphere.circles.xz.y));
+const eqXZz = $(js_arr(sphere.circles.xz.z));
+const eqYZx = $(js_arr(sphere.circles.yz.x));
+const eqYZy = $(js_arr(sphere.circles.yz.y));
+const eqYZz = $(js_arr(sphere.circles.yz.z));
+const vecX = $(js_arr(sphere.vector.x));
+const vecY = $(js_arr(sphere.vector.y));
+const vecZ = $(js_arr(sphere.vector.z));
+const labX = $(js_arr(sphere.labels.x));
+const labY = $(js_arr(sphere.labels.y));
+const labZ = $(js_arr(sphere.labels.z));
+const labT = $(js_strarr(sphere.labels.text));
+const cloudX = $(js_arr(xs));
+const cloudY = $(js_arr(ys));
+const cloudZ = $(js_arr(zs));
+const cloudC = $(js_arr(sample_colors));
+
+const traces = [
+  {type:"surface", x:sphU, y:sphV, z:sphW, opacity:0.12, showscale:false,
+   colorscale:[[0,"#dddddd"],[1,"#dddddd"]], hoverinfo:"skip", contours:{x:{highlight:false},y:{highlight:false},z:{highlight:false}}},
+  {type:"scatter3d", mode:"lines", x:eqXYx, y:eqXYy, z:eqXYz, line:{width:2,color:"#888"}, hoverinfo:"skip", showlegend:false},
+  {type:"scatter3d", mode:"lines", x:eqXZx, y:eqXZy, z:eqXZz, line:{width:2,color:"#888"}, hoverinfo:"skip", showlegend:false},
+  {type:"scatter3d", mode:"lines", x:eqYZx, y:eqYZy, z:eqYZz, line:{width:2,color:"#888"}, hoverinfo:"skip", showlegend:false},
+  {type:"scatter3d", mode:"markers", x:cloudX, y:cloudY, z:cloudZ,
+   marker:{size:3, color:cloudC, colorscale:"Viridis", showscale:true, colorbar:{title:"T₂ (K)"}, opacity:0.85},
+   name:"samples"},
+  {type:"scatter3d", mode:"lines", x:vecX, y:vecY, z:vecZ, line:{width:6,color:"#c00"}, name:"mean state"},
+  {type:"scatter3d", mode:"markers", x:[vecX[1]], y:[vecY[1]], z:[vecZ[1]],
+   marker:{size:6, color:"#c00"}, showlegend:false},
+  {type:"scatter3d", mode:"text", x:labX, y:labY, z:labZ, text:labT, textfont:{size:14}, hoverinfo:"skip", showlegend:false}
+];
+const layout = {
+  title: "$title",
+  scene: {aspectmode:"cube",
+          xaxis:{title:"S1", range:[-1.3,1.3]},
+          yaxis:{title:"S2", range:[-1.3,1.3]},
+          zaxis:{title:"S3", range:[-1.3,1.3]}},
+  margin:{l:0,r:0,t:40,b:0}
+};
+Plotly.newPlot("plot", traces, layout, {responsive:true});
+</script></body></html>
+"""
+    open(output, "w") do io
+        write(io, html)
+    end
+    return output
+end
+
 const DEMO_INDEX = [
     (
         fn   = demo_fiber_path,
@@ -428,6 +642,15 @@ const DEMO_INDEX = [
                "and two JumpTo calls (one with, one without tangent_out) interleaved with " *
                "a helix, a circular bend, and straight spacers — exercises every " *
                "combination of jump type × tangent prescription.",
+    ),
+    (
+        fn   = demo_fiber_paddles_mcm,
+        kwargs = NamedTuple(),
+        desc = "Four-paddle polarization controller (Λ/4 – Λ/2 – Λ/2 – Λ/4) with paddle 2's " *
+               "temperature drawn from a normal distribution. Uses MonteCarloMeasurements to " *
+               "propagate the ensemble through the Jones integrator in one shot, then plots " *
+               "the output-state point cloud on the Poincaré sphere and the fiber centerline " *
+               "with the mean-temperature polarization trajectory.",
     ),
 ]
 

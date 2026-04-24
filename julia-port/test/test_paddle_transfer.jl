@@ -23,39 +23,37 @@ function state_phase_error(actual::Vector{ComplexF64}, expected::Vector{ComplexF
     return norm(actual_norm - ϕ * expected_norm)
 end
 
-function build_paddle_test_fiber(paddles)
+function paddle_breaks_and_values(paddles)
     @assert !isempty(paddles) "Need at least one paddle"
 
     breaks = Float64[0.0]
-    pieces_Rb = Function[]
-    pieces_theta = Function[]
+    values = Matrix{ComplexF64}[]
 
     for (radius_mm, turns, angle_deg) in paddles
-        push!(pieces_Rb, _ -> radius_mm)
         # The proposed unit-test vectors use the opposite sign convention from
-        # the internal bend-axis angle in generator_K_contribution.
-        push!(pieces_theta, _ -> -deg2rad(angle_deg))
+        # the internal bend-axis angle used by the fiber generator assembly.
+        θ = -deg2rad(angle_deg)
+        k2 = inv(radius_mm)^2
+        Δβ = PADDLE_BEND_SCALE * k2
+        c2φ = cos(2 * θ)
+        s2φ = sin(2 * θ)
+        push!(values, ComplexF64[
+             0.5im * Δβ * c2φ   0.5im * Δβ * s2φ
+             0.5im * Δβ * s2φ  -0.5im * Δβ * c2φ
+        ])
         push!(breaks, breaks[end] + 2π * radius_mm * turns)
     end
 
-    bend = BendSource(
-        PiecewiseProfile(copy(breaks), copy(pieces_Rb)),
-        PiecewiseProfile(copy(breaks), copy(pieces_theta)),
-        k2 -> PADDLE_BEND_SCALE * k2;
-        breakpoints = copy(breaks)
-    )
-    twist = TwistSource(
-        _ -> 0.0,
-        _ -> 0.0;
-        coverage = [(first(breaks), last(breaks))],
-        breakpoints = [first(breaks), last(breaks)]
-    )
-
-    return Fiber(first(breaks), last(breaks), AbstractBirefringenceSource[bend, twist])
+    return breaks, values
 end
 
-function propagate_test_state(fiber::Fiber, input_state::Vector{ComplexF64})
-    J, stats = propagate_fiber(fiber; rtol = 1e-11, atol = 1e-13, h_init = 0.1)
+function propagate_test_state(paddles, input_state::Vector{ComplexF64})
+    breaks, values = paddle_breaks_and_values(paddles)
+    K = function (s::Real)
+        idx = min(searchsortedlast(breaks, Float64(s)), length(values))
+        return values[idx]
+    end
+    J, stats = propagate_piecewise(K, breaks; rtol = 1e-11, atol = 1e-13, h_init = 0.1)
     return J * input_state, J, stats
 end
 
@@ -197,8 +195,7 @@ const PADDLE_TEST_CASES = [
 @testset "Paddle transfer cases" begin
     for case in PADDLE_TEST_CASES
         @testset "$(case.name)" begin
-            fiber = build_paddle_test_fiber(case.paddles)
-            output_state, J, stats = propagate_test_state(fiber, case.input_state)
+            output_state, J, stats = propagate_test_state(case.paddles, case.input_state)
 
             @test size(J) == (2, 2)
             @test !isempty(stats)

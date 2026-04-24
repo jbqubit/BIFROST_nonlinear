@@ -589,10 +589,17 @@ end
 
 function propagate_fiber(
     f::Fiber;
+    λ_m::Real,
+    T_K,
     jumps::AbstractDict = Dict{Float64, Matrix{ComplexF64}}(),
     kwargs...
 )
-    return propagate_piecewise(generator_K(f), fiber_breakpoints(f); jumps = jumps, kwargs...)
+    return propagate_piecewise(
+        generator_K(f, λ_m, T_K),
+        fiber_breakpoints(f);
+        jumps = jumps,
+        kwargs...,
+    )
 end
 
 """
@@ -646,13 +653,15 @@ end
 
 function propagate_fiber_sensitivity(
     f::Fiber;
+    λ_m::Real,
+    T_K,
     jumps::AbstractDict = Dict{Float64, Matrix{ComplexF64}}(),
     jump_omegas::AbstractDict = Dict{Float64, Matrix{ComplexF64}}(),
     kwargs...
 )
     return propagate_piecewise_sensitivity(
-        generator_K(f),
-        generator_Kω(f),
+        generator_K(f, λ_m, T_K),
+        generator_Kω(f, λ_m, T_K),
         fiber_breakpoints(f);
         jumps = jumps,
         jump_omegas = jump_omegas,

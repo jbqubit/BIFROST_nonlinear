@@ -11,6 +11,15 @@ const CENTERLINE_ATOL = 5e-8
 const TANGENT_ATOL = 5e-13
 const SAMPLE_COUNT = 8001
 
+function test_cross_section()
+    return FiberCrossSection(
+        GermaniaSilicaGlass(0.036),
+        GermaniaSilicaGlass(0.0),
+        8.2e-6,
+        125e-6
+    )
+end
+
 function canonical_bend_segment(seg)
     if length(seg) == 2
         R, θ = seg
@@ -40,6 +49,8 @@ end
 
 function exact_endpoint_and_tangent(segments)
     r = zeros(3)
+    N = [1.0, 0.0, 0.0]
+    B = [0.0, 1.0, 0.0]
     T = [0.0, 0.0, 1.0]
 
     for raw_seg in segments
@@ -48,16 +59,21 @@ function exact_endpoint_and_tangent(segments)
             continue
         end
 
-        u = [-sin(seg.α), cos(seg.α), 0.0]
-        U = skew_matrix(u)
-        A =
-            seg.R * seg.θ * Matrix{Float64}(I, 3, 3) +
-            seg.R * (1 - cos(seg.θ)) * U +
-            seg.R * (seg.θ - sin(seg.θ)) * (U * U)
+        n_local = [cos(seg.α), sin(seg.α), 0.0]
+        local_frame = hcat(N, B, T)
+        local_step = seg.R * (1 - cos(seg.θ)) * n_local + [0.0, 0.0, seg.R * sin(seg.θ)]
+        r .+= local_frame * local_step
 
-        r .+= A * T
-        T = rotate_vector_about_axis(T, u, seg.θ)
+        T_local = [sin(seg.θ) * cos(seg.α), sin(seg.θ) * sin(seg.α), cos(seg.θ)]
+        N_local = [cos(seg.θ) * cos(seg.α), cos(seg.θ) * sin(seg.α), -sin(seg.θ)]
+        B_local = [-sin(seg.α), cos(seg.α), 0.0]
+
+        T = local_frame * T_local
+        N = local_frame * N_local
+        B = local_frame * B_local
         T ./= norm(T)
+        N ./= norm(N)
+        B ./= norm(B)
     end
 
     return r, T
@@ -65,50 +81,20 @@ end
 
 function build_centerline_test_fiber(segments)
     @assert !isempty(segments) "Use build_straight_test_fiber for the straight case"
-
-    breaks = Float64[0.0]
-    pieces_Rb = Function[]
-    pieces_theta = Function[]
-
+    spec = PathSpec()
     for raw_seg in segments
         seg = canonical_bend_segment(raw_seg)
-        push!(pieces_Rb, _ -> seg.R)
-        push!(pieces_theta, _ -> seg.α)
-        push!(breaks, breaks[end] + seg.R * seg.θ)
+        bend!(spec; radius = seg.R, angle = seg.θ, axis_angle = seg.α)
     end
-
-    bend = BendSource(
-        PiecewiseProfile(copy(breaks), copy(pieces_Rb)),
-        PiecewiseProfile(copy(breaks), copy(pieces_theta)),
-        k2 -> 0.0;
-        breakpoints = copy(breaks)
-    )
-    twist = TwistSource(
-        _ -> 0.0,
-        _ -> 0.0;
-        coverage = [(first(breaks), last(breaks))],
-        breakpoints = [first(breaks), last(breaks)]
-    )
-
-    return Fiber(first(breaks), last(breaks), AbstractBirefringenceSource[bend, twist])
+    path = build(spec)
+    return Fiber(path; cross_section = test_cross_section())
 end
 
 function build_straight_test_fiber(length::Real)
-    L = Float64(length)
-    bend = BendSource(
-        _ -> Inf,
-        _ -> 0.0,
-        k2 -> 0.0;
-        coverage = [(0.0, L)],
-        breakpoints = [0.0, L]
-    )
-    twist = TwistSource(
-        _ -> 0.0,
-        _ -> 0.0;
-        coverage = [(0.0, L)],
-        breakpoints = [0.0, L]
-    )
-    return Fiber(0.0, L, AbstractBirefringenceSource[bend, twist])
+    spec = PathSpec()
+    straight!(spec; length = length)
+    path = build(spec)
+    return Fiber(path; cross_section = test_cross_section())
 end
 
 function sample_final_centerline_state(fiber::Fiber; n::Int = SAMPLE_COUNT)
@@ -164,15 +150,15 @@ const EXPLICIT_PATH_CASES = [
     (
         name = "orthogonal_quarters_lab_frame",
         segments = [(1.0, 0.0, π / 2), (1.0, π / 2, π / 2)],
-        xyz = [1.0 + π / 2, 0.0, 1.0],
-        tangent = [1.0, 0.0, 0.0],
+        xyz = [2.0, 1.0, 1.0],
+        tangent = [0.0, 1.0, 0.0],
         planar = false
     ),
     (
         name = "orthogonal_quarters_swapped_order",
         segments = [(1.0, π / 2, π / 2), (1.0, 0.0, π / 2)],
-        xyz = [0.0, 1.0 + π / 2, 1.0],
-        tangent = [0.0, 1.0, 0.0],
+        xyz = [0.0, 2.0, 0.0],
+        tangent = [0.0, 0.0, -1.0],
         planar = false
     )
 ]
@@ -258,52 +244,108 @@ const EXPLICIT_PATH_CASES = [
     end
 end
 
-@testset "FiberSpec temperature profile" begin
-    xs = FiberCrossSection(
-        GermaniaSilicaGlass(0.036),
-        GermaniaSilicaGlass(0.0),
-        8.2e-6,
-        125e-6
-    )
+@testset "Fiber reference temperature" begin
+    xs = test_cross_section()
 
-    function fiber_sources(spec)
-        return build(spec).sources
+    function straight_fiber(; T_ref_K = DEFAULT_T_REF_K, length = 10.0)
+        spec = PathSpec()
+        straight!(spec; length = length)
+        return Fiber(build(spec); cross_section = xs, T_ref_K = T_ref_K)
     end
 
-    @testset "default T_K is 297.15" begin
-        spec = FiberSpec(0.0, 10.0; cross_section = xs)
-        @test spec.T_K(0.0) ≈ 297.15
-        @test spec.T_K(5.0) ≈ 297.15
-        twist!(spec, 0.0, 10.0; rate = 0.1)
-        src = only(fiber_sources(spec))
-        @test src.T_K(3.0) ≈ 297.15
+    @testset "default T_ref_K is 297.15" begin
+        fiber = straight_fiber()
+        @test fiber.T_ref_K ≈ 297.15
     end
 
-    @testset "scalar global T_K override" begin
-        spec = FiberSpec(0.0, 10.0; cross_section = xs, T_K = 310.0)
-        @test spec.T_K(0.0) ≈ 310.0
-        twist!(spec, 0.0, 10.0; rate = 0.1)
-        src = only(fiber_sources(spec))
-        @test src.T_K(5.0) ≈ 310.0
+    @testset "T_ref_K round-trips" begin
+        fiber = straight_fiber(T_ref_K = 310.0)
+        @test fiber.T_ref_K == 310.0
+    end
+end
+
+@testset "Path-backed fiber assembly" begin
+    xs = test_cross_section()
+
+    @testset "T-GUARDRAIL: domain, coverage, and breakpoint derivation" begin
+        spec = PathSpec()
+        straight!(spec; length = 1.0)
+        bend!(spec; radius = 0.2, angle = π / 2)
+        twist!(spec; s_start = 0.25, length = 0.5, rate = 1.5)
+        path = build(spec)
+        fiber = Fiber(path; cross_section = xs)
+
+        @test fiber.s_start == 0.0
+        @test fiber.s_end ≈ Float64(path.s_end)
+        @test fiber.path === path
+        @test fiber.cross_section === xs
+
+        expected_breaks = sort(unique([
+            0.0,
+            0.25,
+            0.75,
+            1.0,
+            1.0 + 0.2 * (π / 2),
+        ]))
+        @test fiber_breakpoints(fiber) ≈ expected_breaks atol = 1e-12
+        @test breakpoints(fiber.path) ≈ expected_breaks atol = 1e-12
     end
 
-    @testset "function global T_K override" begin
-        spec = FiberSpec(0.0, 10.0; cross_section = xs, T_K = s -> 300.0 + s)
-        @test spec.T_K(0.0) ≈ 300.0
-        @test spec.T_K(4.0) ≈ 304.0
-        bend!(spec, 0.0, 10.0; angle = π / 4, axis = 0.0)
-        src = only(fiber_sources(spec))
-        @test src.T_K(4.0) ≈ 304.0
+    @testset "T-PHYSICS: straight path gives zero generators" begin
+        spec = PathSpec()
+        straight!(spec; length = 0.8)
+        fiber = Fiber(build(spec); cross_section = xs)
+
+        @test generator_K(fiber, 1550e-9, 297.15)(0.4) ≈ zeros(ComplexF64, 2, 2) atol = 1e-14
+        @test generator_Kω(fiber, 1550e-9, 297.15)(0.4) ≈ zeros(ComplexF64, 2, 2) atol = 1e-14
     end
 
-    @testset "per-segment T_K overrides spec T_K" begin
-        spec = FiberSpec(0.0, 20.0; cross_section = xs, T_K = 310.0)
-        twist!(spec, 0.0, 10.0; T_K = 280.0, rate = 0.1)   # explicit override
-        twist!(spec, 10.0, 20.0; rate = 0.1)                # inherits spec T_K
-        srcs = [s for s in fiber_sources(spec) if s isa TwistSource]
-        @test length(srcs) == 2
-        # Identify sources by their T_K value at an interior point
-        vals = sort([srcs[1].T_K(5.0), srcs[2].T_K(15.0)])
-        @test vals ≈ [280.0, 310.0]
+    @testset "T-PHYSICS: circular bend uses bending_birefringence" begin
+        λ = 1550e-9
+        T = 297.15
+        R = 0.04
+        spec = PathSpec()
+        bend!(spec; radius = R, angle = π / 3)
+        fiber = Fiber(build(spec); cross_section = xs)
+        K = generator_K(fiber, λ, T)(0.5 * fiber.s_end)
+        Δβ = bending_birefringence(xs, λ, T; bend_radius_m = R)
+
+        @test K[1, 1] ≈ 0.5im * Δβ atol = 1e-12
+        @test K[2, 2] ≈ -0.5im * Δβ atol = 1e-12
+        @test K[1, 2] ≈ 0.0 atol = 1e-12
+        @test K[2, 1] ≈ 0.0 atol = 1e-12
+    end
+
+    @testset "T-PHYSICS: twist overlay uses twisting_birefringence" begin
+        λ = 1550e-9
+        T = 297.15
+        τ = 12.0
+        spec = PathSpec()
+        straight!(spec; length = 1.0)
+        twist!(spec; s_start = 0.0, length = 1.0, rate = τ)
+        fiber = Fiber(build(spec); cross_section = xs)
+        K = generator_K(fiber, λ, T)(0.5)
+        Δβ = twisting_birefringence(xs, λ, T; twist_rate_rad_per_m = τ)
+
+        @test K[1, 1] ≈ 0.0 atol = 1e-12
+        @test K[2, 2] ≈ 0.0 atol = 1e-12
+        @test K[1, 2] ≈ -0.5 * Δβ atol = 1e-12
+        @test K[2, 1] ≈ 0.5 * Δβ atol = 1e-12
+    end
+
+    @testset "generator_K accepts function T_K" begin
+        spec = PathSpec()
+        straight!(spec; length = 0.4)
+        bend!(spec; radius = 0.1, angle = π / 4)
+        path = build(spec)
+        fiber = Fiber(path; cross_section = xs)
+        T_profile = s -> 300.0 + 2s
+
+        # Smoke test: function T_K should produce the same K as a scalar T_K
+        # evaluated at the same s.
+        s_eval = 0.6
+        K_fn = generator_K(fiber, 1550e-9, T_profile)(s_eval)
+        K_sc = generator_K(fiber, 1550e-9, T_profile(s_eval))(s_eval)
+        @test K_fn ≈ K_sc atol = 1e-14
     end
 end

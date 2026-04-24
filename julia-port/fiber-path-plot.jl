@@ -422,6 +422,40 @@ module PlotRuntime
         @assert s2 > s1 "Require s2 > s1"
         @assert n >= 2 "Require at least two sample points"
 
+        path_geometry = Main.fiber_path(f)
+        if !isnothing(path_geometry)
+            ss = collect(range(Float64(s1), Float64(s2), length = n))
+            frames = [Main.frame(path_geometry, s) for s in ss]
+
+            x = [Float64(fr.position[1]) for fr in frames]
+            y = [Float64(fr.position[2]) for fr in frames]
+            zc = [Float64(fr.position[3]) for fr in frames]
+            tx = [Float64(fr.tangent[1]) for fr in frames]
+            ty = [Float64(fr.tangent[2]) for fr in frames]
+            tz = [Float64(fr.tangent[3]) for fr in frames]
+            nx = [Float64(fr.normal[1]) for fr in frames]
+            ny = [Float64(fr.normal[2]) for fr in frames]
+            nz = [Float64(fr.normal[3]) for fr in frames]
+            bx = [Float64(fr.binormal[1]) for fr in frames]
+            by = [Float64(fr.binormal[2]) for fr in frames]
+            bz = [Float64(fr.binormal[3]) for fr in frames]
+            e1x = copy(nx)
+            e1y = copy(ny)
+            e1z = copy(nz)
+            e2x = copy(bx)
+            e2y = copy(by)
+            e2z = copy(bz)
+            kx = [Float64(fr.curvature) for fr in frames]
+            ky = zeros(Float64, n)
+            k2 = [κ^2 for κ in kx]
+            Rb = [iszero(fr.curvature) ? Inf : Float64(inv(fr.curvature)) for fr in frames]
+            theta_b = zeros(Float64, n)
+            dtwist = [Float64(fr.geometric_torsion + fr.material_twist) for fr in frames]
+
+            return (; s = ss, x, y, zc, tx, ty, tz, e1x, e1y, e1z, e2x, e2y, e2z,
+                      Rb, theta_b, dtwist, kx, ky, k2, nx, ny, nz, bx, by, bz)
+        end
+
         ss = collect(range(Float64(s1), Float64(s2), length = n))
         x = zeros(Float64, n)
         y = zeros(Float64, n)
@@ -524,6 +558,8 @@ module PlotRuntime
         f::Main.Fiber,
         s1::Real,
         s2::Real;
+        λ_m::Real,
+        T_K,
         n::Int = 1001,
         input_state::AbstractVector{ComplexF64} = ComplexF64[1.0 + 0.0im, 0.0 + 0.0im],
         jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}()
@@ -538,7 +574,7 @@ module PlotRuntime
         linear_angle_rad = zeros(Float64, n)
         linear_radius = zeros(Float64, n)
 
-        K = Main.generator_K(f)
+        K = Main.generator_K(f, λ_m, T_K)
         ψ = ComplexF64[input_state[1], input_state[2]]
         ψ ./= norm(ψ)
 
@@ -565,6 +601,8 @@ module PlotRuntime
         f::Main.Fiber,
         s1::Real,
         s2::Real;
+        λ_m::Real,
+        T_K,
         n::Int = 1001,
         jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
         jump_omegas::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}()
@@ -572,8 +610,8 @@ module PlotRuntime
         ss = collect(range(Float64(s1), Float64(s2), length = n))
         dgds = zeros(Float64, n)
 
-        K = Main.generator_K(f)
-        Kω = Main.generator_Kω(f)
+        K = Main.generator_K(f, λ_m, T_K)
+        Kω = Main.generator_Kω(f, λ_m, T_K)
         J = Matrix{ComplexF64}(I, 2, 2)
         G = zeros(ComplexF64, 2, 2)
         dgds[1] = Main.output_dgd(J, G)
@@ -612,6 +650,8 @@ module PlotRuntime
         f::Main.Fiber,
         s1::Real,
         s2::Real;
+        λ_m::Real,
+        T_K,
         n::Int = 1001,
         output::AbstractString = "fiberinput_3d.html",
         title::AbstractString = "Fiber 3D centerline",
@@ -624,6 +664,8 @@ module PlotRuntime
             f,
             s1,
             s2;
+            λ_m = λ_m,
+            T_K = T_K,
             n = n,
             input_state = ComplexF64[input_state[1], input_state[2]],
             jumps = jumps
@@ -632,6 +674,8 @@ module PlotRuntime
             f,
             s1,
             s2;
+            λ_m = λ_m,
+            T_K = T_K,
             n = n,
             jumps = jumps,
             jump_omegas = jump_omegas

@@ -341,3 +341,46 @@ end
         MonteCarloMeasurements.unsafe_comparisons(false)
     end
 end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ▓▓▓  fiber-path.jl  ▓▓▓
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@testset "MCM :: fiber-path.jl (path-backed fiber)" begin
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        xs = FiberCrossSection(
+            GermaniaSilicaGlass(0.036),
+            GermaniaSilicaGlass(0.0),
+            8.2e-6,
+            125e-6,
+        )
+        λ = 1550e-9
+        T_nom = 297.15
+        T_profile = s -> T_nom ± 2.0
+
+        spec = PathSpec()
+        bend!(spec; radius = 0.05, angle = π / 2, axis_angle = 0.1)
+        twist!(spec; s_start = 0.0, length = 0.05 * (π / 2), rate = 10.0)
+        path = build(spec)
+        fiber = Fiber(path; cross_section = xs)
+
+        @test fiber.s_end isa Float64
+        @test fiber.path === path
+        @test fiber.cross_section === xs
+        @test T_profile(0.02) isa Particles
+
+        K = generator_K(fiber, λ, T_profile)(0.02)
+        Kω = generator_Kω(fiber, λ, T_profile)(0.02)
+        @test eltype(K) <: Complex
+        @test real(K[1, 1]) isa Particles || imag(K[1, 1]) isa Particles
+        @test real(Kω[1, 2]) isa Particles || imag(Kω[1, 2]) isa Particles
+
+        # T-GUARDRAIL: breakpoints include the path segment edges and twist overlay edges.
+        @test first(fiber_breakpoints(fiber)) == 0.0
+        @test last(fiber_breakpoints(fiber)) == fiber.s_end
+        @test length(fiber_breakpoints(fiber)) >= 2
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end

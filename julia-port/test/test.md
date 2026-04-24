@@ -143,8 +143,6 @@ The actual infrastructure under test is built with:
 
 and ultimately exercises:
 
-- `BendSource`
-- `TwistSource`
 - `Fiber`
 - `bend_geometry`
 - `twist_rate`
@@ -326,29 +324,13 @@ $$
 K_\omega(s)=K_{\omega,\mathrm{bend}}(s)+K_{\omega,\mathrm{twist}}(s),
 $$
 
-via the subroutines `generator_K`, `generator_Kω`, `generator_K_contribution`, and `generator_Kω_contribution`.
+via the subroutines `generator_K` and `generator_Kω`.
 
 Why this matters:
 the entire fiber architecture assumes linear superposition of source contributions at the generator level.
 
 Subroutines exercised:
-`generator_K`, `generator_Kω`, `generator_K_contribution`, `generator_Kω_contribution`
-
-#### Coverage-gap rejection
-
-The `bad_twist` construction leaves part of the interval uncovered, and the `Fiber` constructor is required to throw.
-
-The model assumption is:
-if a source is inactive on some interval, it should still be present and return zero there. It should not simply disappear from the domain.
-
-Mathematically, if the fiber domain is $[s_0,s_1]$, then each source must be defined for all
-
-$$
-s\in[s_0,s_1].
-$$
-
-Subroutines exercised:
-`Fiber`, `validate_source_coverage`
+`generator_K`, `generator_Kω`
 
 #### Zero generator gives zero DGD
 
@@ -893,7 +875,7 @@ and therefore the two propagations should give identical $(J,G)$ and identical D
 This is the most direct test of the fiber-level convenience wrapper for DGD propagation.
 
 Subroutines exercised:
-`BendSource`, `TwistSource`, `Fiber`, `fiber_breakpoints`, `generator_K`, `generator_Kω`, `propagate_fiber_sensitivity`, `propagate_piecewise_sensitivity`
+`Fiber`, `fiber_breakpoints`, `generator_K`, `generator_Kω`, `propagate_fiber_sensitivity`, `propagate_piecewise_sensitivity`
 
 ## What these tests establish, and what they do not
 

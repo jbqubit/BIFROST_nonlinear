@@ -13,6 +13,15 @@ const MATRIX_ATOL = 1e-9
 
 pauli_axis(axis::AbstractVector{<:Real}) = axis[1] .* SIGMA_X + axis[2] .* SIGMA_Y + axis[3] .* SIGMA_Z
 
+function piecewise_function(breaks::Vector{Float64}, pieces)
+    @assert issorted(breaks)
+    @assert length(pieces) == length(breaks) - 1
+    return function (s::Real)
+        idx = min(searchsortedlast(breaks, Float64(s)), length(pieces))
+        return pieces[idx](s)
+    end
+end
+
 function piecewise_constant_matrix(breaks::Vector{Float64}, values::Vector{Matrix{ComplexF64}})
     @assert issorted(breaks)
     @assert length(values) == length(breaks) - 1
@@ -203,31 +212,27 @@ end
 end
 
 @testset "DGD fiber integration" begin
-    bend_breaks = [0.0, 1.0, 3.0]
-    twist_breaks = [0.0, 2.0, 3.0]
     explicit_union = [0.0, 1.0, 2.0, 3.0]
-
-    bend = BendSource(
-        PiecewiseProfile(bend_breaks, [s -> 1.0, s -> 2.0]),
-        PiecewiseProfile(bend_breaks, [s -> 0.0, s -> pi / 4]),
-        k2 -> 0.9 * k2,
-        k2 -> -0.35 * k2;
-        breakpoints = copy(bend_breaks)
+    xs = FiberCrossSection(
+        GermaniaSilicaGlass(0.036),
+        GermaniaSilicaGlass(0.0),
+        8.2e-6,
+        125e-6
     )
-    twist = TwistSource(
-        PiecewiseProfile(twist_breaks, [s -> 0.2, s -> -0.5]),
-        tau -> 0.6 * tau,
-        tau -> -0.8 * tau;
-        breakpoints = copy(twist_breaks)
-    )
-
-    fiber = Fiber(0.0, 3.0, AbstractBirefringenceSource[bend, twist])
+    path_spec = PathSpec()
+    straight!(path_spec; length = 1.0)
+    bend!(path_spec; radius = 4 / π, angle = π / 2)
+    twist!(path_spec; s_start = 0.0, length = 2.0, rate = 0.35)
+    path = build(path_spec)
+    λ_m_test = 1550e-9
+    T_K_test = 297.15
+    fiber = Fiber(path; cross_section = xs)
 
     @testset "Automatic breakpoint union matches explicit partition" begin
-        J_auto, G_auto, stats_auto = propagate_fiber_sensitivity(fiber; rtol = 1e-11, atol = 1e-13, h_init = 0.05)
+        J_auto, G_auto, stats_auto = propagate_fiber_sensitivity(fiber; λ_m = λ_m_test, T_K = T_K_test, rtol = 1e-11, atol = 1e-13, h_init = 0.05)
         J_explicit, G_explicit, stats_explicit = propagate_piecewise_sensitivity(
-            generator_K(fiber),
-            generator_Kω(fiber),
+            generator_K(fiber, λ_m_test, T_K_test),
+            generator_Kω(fiber, λ_m_test, T_K_test),
             explicit_union;
             rtol = 1e-11,
             atol = 1e-13,

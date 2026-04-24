@@ -151,36 +151,36 @@ refractive_index(::WithDerivative, glass::FluorinatedSilicaGlass, λ_meters::Rea
 
 ## Fiber specification layer
 
-`fiber-path.jl` defines how a fiber is described before any propagation happens.
+`fiber-path.jl` defines the compiled optical object that sits on top of a built
+geometric `Path`.
 
-- `PiecewiseProfile` is still the basic helper for piecewise-parametric scalar functions of $s$.
-- `BendSource` and `TwistSource` are concrete birefringence-source types.
-- `Fiber` is an assembled object with a domain $[s_{\mathrm{start}},s_{\mathrm{end}}]$ and a list of sources.
-- Each source provides:
-  - a local contribution to $K(s)$,
-  - a local contribution to $K_\omega(s)$,
-  - a declared breakpoint set,
-  - explicit coverage intervals in $s$.
+- `Fiber` owns the immutable built `Path`.
+- `Fiber` stores the optical metadata needed to interpret that path:
+  `cross_section`, `λ_m`, and `T_K`.
+- `Fiber` caches the global breakpoint set derived from the path segment
+  boundaries and resolved twist overlays.
 
-The explicit coverage is important. A source is not allowed to be undefined on part of the fiber and silently treated as zero there. Instead, every source must cover the full fiber domain. If a source is physically inactive on some interval, it must still be defined there and return a zero contribution. The `Fiber` constructor checks this and throws an error if any source has a gap in its coverage.
+At the fiber level, the local Jones generator is assembled from two path-derived
+mechanisms:
 
-At the assembled-fiber level,
+$$K(s)=K_{\mathrm{bend}}(s)+K_{\mathrm{twist}}(s),$$
 
-$$K(s)=\sum_m K_m(s), \qquad K_\omega(s)=\sum_m K_{\omega,m}(s).$$
-
-The fiber also computes the global breakpoint set automatically from its sources.
+with the same decomposition for $K_\omega(s)$.
 
 ### Propagation layer
 
 `path-integral.jl` sits on top of that specification layer and implements the actual propagators.
 
-- `generator_K(f)` assembles the total local generator $K(s)$ from the sources stored in a `Fiber`.
-- `generator_Kω(f)` assembles the total frequency derivative $K_\omega(s)$ from the same sources.
+- `generator_K(f)` assembles the total local generator $K(s)$ from the path and
+  optical metadata stored in a `Fiber`.
+- `generator_Kω(f)` assembles the total frequency derivative $K_\omega(s)$ from
+  the same `Fiber`.
 - `exp_jones_generator(A)` computes $\exp(A)$ for a $2\times2$ generator using the closed-form Cayley-Hamilton formula.
 - `exp_midpoint_step(K, s, h, J)` is one exponential-midpoint step for the Jones propagator.
 - `propagate_interval!()` is the adaptive controller on one smooth interval. It takes one full step and two half steps, compares them with `phase_insensitive_error`, accepts or rejects the step, and updates $h$ with the cubic-root rule $(\text{tol}/\text{err})^{1/3}$.
 - `propagate_piecewise()` performs the same propagation on a prescribed breakpoint partition.
-- `propagate_fiber()` is the fiber-level convenience wrapper: it computes the breakpoints from the `Fiber` automatically and then calls the piecewise propagator.
+- `propagate_fiber()` is the fiber-level convenience wrapper: it reads the
+  breakpoints cached in the `Fiber` and then calls the piecewise propagator.
 
 ### DGD extension
 The original code was built around a very specialized solver for one 2x2 matrix ODE.
@@ -192,10 +192,16 @@ Once you add the pair of equations (2)-(3), this becomes a coupled block system.
 - `pmd_generator(J, G)` forms -im * J^{-1}G
 - `output_dgd(J, G)` extracts the DGD 
 
-At the API level, the important change is that $K_\omega(s)$ is now part of the source abstraction. Each source has a method for its $K(s)$ contribution and a second method for its $K_\omega(s)$ contribution. In code, those are `generator_K_contribution` and `generator_Kω_contribution`. Right now some source types may legitimately return the zero matrix for $K_\omega$ when their frequency dependence has not yet been modeled, but the interface is there and the DGD propagator always has a well-defined assembled $K_\omega(s)$ to use.
+At the API level, the important change is that $K_\omega(s)$ is part of the
+compiled `Fiber` view, alongside $K(s)$. The DGD propagator always has both
+derived operators available from the same stored path and optical metadata.
 
 # Example demo.jl
-`demo.jl` is just a thin driver on top of that stack. It builds a `Fiber` from a bend source and a twist source, then calls `propagate_fiber()` to get the final Jones matrix and per-interval stats. The demo no longer carries a separate manually maintained `breaks` array through the propagation API; the breakpoints are derived automatically from the fiber's sources.
+`demo.jl` is just a thin driver on top of that stack. It builds a `Path`,
+binds it into a `Fiber`, then calls `propagate_fiber()` to get the final Jones
+matrix and per-interval stats. The demo no longer carries a separate manually
+maintained `breaks` array through the propagation API; the breakpoints are
+derived automatically from the compiled path stored in the `Fiber`.
 
 
 ## Simplified physics encoded in the generator K(s)
@@ -229,11 +235,10 @@ $[K_{\text{bend}}(s),K_{\text{twist}}(s)]\neq 0$. That noncommutation is why one
 
 The adaptive solver evaluates the fiber at arbitrary points such as $s+h/2$, $s+h/4$, and so on. Therefore the physical inputs must be available as functions, not just a coarse sampled grid.
 
-The clean representation is now source-based rather than one large input struct.
+The clean representation is now path-based rather than one large input struct.
 
-- A `BendSource` owns the bend-specific parametrization and strength law.
-- A `TwistSource` owns the twist-specific parametrization and strength law.
-- A `Fiber` assembles those sources into one physical fiber model over a specified interval in $s$.
+- A `PathSpec` / `Path` owns the centerline geometry and material twist.
+- A `Fiber` binds that path to a cross section, wavelength, and temperature profile.
 
 For the present bend/twist model, the bend source is naturally described by
 

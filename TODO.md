@@ -8,6 +8,8 @@ upcoming features. Agents should not start work on these without explicit author
 
 - [ ] Finish ensuring MCM compatability across the rest of the codebase.
 
+- [ ] Add unit tests for fiber paddles that reproduce Thorlabs website. 
+
 - [x] Update AGENT.md to provide guidance on how to structure unit tests. Focus on
       clearly deliniating high-value physics motivated tests, test involving validation
       data, tests that accompany select simulation test runs and finally tests that help
@@ -68,3 +70,6 @@ upcoming features. Agents should not start work on these without explicit author
     - [ ] Show how the orientation of the prior segment influences the orientation of a helix and the helix exit path.
     - [ ] Devise examples that illustrate how segments respond to shrinkage and
     contrast it with 
+
+
+- [ ] TODO fix the MCM demo in demo.jl
