@@ -31,13 +31,9 @@ Two approaches are supported to build a PathSpec and can be freely mixed:
 
 # Shrinkage
 
-Each segment carries a `shrinkage` scalar (default 1.0) that uniformly rescales its
-metric: arc lengths scale by α, curvature scales by 1/α, angles are preserved.
-Shrinkage can be overridden at build time for parametric studies.
-
-Twist overlays conserve turn count under shrinkage: if a nominal length L contains
-N turns, an effective length α·L still contains N turns, so the effective twist rate
-changes as τ(s) = 2π·N·α(s) / ∫α ds over the overlay interval.
+`path-geometry.jl` is intentionally free of shrinkage. A `Path` represents pure,
+temperature-independent geometry. Thermal contraction and related length-scaling
+are applied by `fiber-path-shrinkage.jl` as a `shrink(path, α) → Path` transform.
 
 # Interface
 
@@ -77,7 +73,6 @@ abstract type AbstractPathSegment end
 # Return element type T follows the segment's own type parameter (Float64 for
 # deterministic segments, Particles for MCM-valued fields):
 #   arc_length(seg)                   → T
-#   nominal_arc_length(seg)           → T          (arc length at shrinkage = 1)
 #   curvature(seg, s)                 → T          (κ, 1/m)
 #   geometric_torsion(seg, s)         → T          (τ_geom, rad/m)
 #   position_local(seg, s)            → Vector{T} length 3
@@ -89,7 +84,6 @@ abstract type AbstractPathSegment end
 # HermiteConnector (and its JumpBy/JumpTo precursors) is Float64-only; see its
 # docstring.
 
-segment_shrinkage(seg::AbstractPathSegment) = seg.shrinkage
 segment_nickname(seg::AbstractPathSegment)  = :nickname ∈ fieldnames(typeof(seg)) ? seg.nickname : nothing
 
 # -----------------------------------------------------------------------
@@ -99,11 +93,10 @@ segment_nickname(seg::AbstractPathSegment)  = :nickname ∈ fieldnames(typeof(se
 """
     TwistOverlay(s_start, length, rate)
 
-Material twist applied over a nominal arc-length interval.
-`s_start` and `length` are in nominal (shrinkage = 1) arc-length coordinates.
-`rate` is a function `rate(s_eff) → Float64` giving the twist rate in rad/m
-of effective arc-length.  Use `twist!` to construct overlays — it handles
-conversion from scalar or function inputs.
+Material twist applied over an arc-length interval `[s_start, s_start + length]`.
+`rate` is a function `rate(s) → Float64` giving the twist rate in rad/m of
+arc-length. Use `twist!` to construct overlays — it handles conversion from
+scalar or function inputs.
 """
 struct TwistOverlay
     s_start::Float64
@@ -117,17 +110,14 @@ end
 
 struct StraightSegment{T} <: AbstractPathSegment
     length::T
-    shrinkage::T
     nickname::Union{Nothing,String}
 end
 
-function StraightSegment(length; shrinkage = 1.0, nickname = nothing)
-    L, α = promote(length, shrinkage)
-    StraightSegment{typeof(L)}(L, α, isnothing(nickname) ? nothing : String(nickname))
+function StraightSegment(length; nickname = nothing)
+    StraightSegment{typeof(length)}(length, isnothing(nickname) ? nothing : String(nickname))
 end
 
-arc_length(seg::StraightSegment)         = seg.length * seg.shrinkage
-nominal_arc_length(seg::StraightSegment) = seg.length
+arc_length(seg::StraightSegment)         = seg.length
 curvature(seg::StraightSegment, _)       = zero(seg.length)
 geometric_torsion(seg::StraightSegment, _) = zero(seg.length)
 
@@ -145,7 +135,7 @@ end_frame_local(seg::StraightSegment) = ([zero(seg.length), zero(seg.length), on
 # -----------------------------------------------------------------------
 
 """
-    BendSegment(radius, angle, axis_angle; shrinkage)
+    BendSegment(radius, angle, axis_angle)
 
 Circular arc of radius `radius` (m) sweeping `angle` (rad) in the plane whose
 inward normal is at `axis_angle` (rad) from the local N-axis.
@@ -154,31 +144,28 @@ In the local frame (local z = incoming tangent, local x = incoming normal,
 local y = incoming binormal), the inward normal direction is:
     n̂ = cos(axis_angle)·x̂ + sin(axis_angle)·ŷ
 
-Shrinkage scales the radius and arc length but preserves the swept angle.
-Curvature κ = 1 / (shrinkage · radius).
+Curvature κ = 1 / radius.
 """
 struct BendSegment{T} <: AbstractPathSegment
     radius::T
-    angle::T       # total angle swept (rad), preserved under shrinkage
+    angle::T       # total angle swept (rad)
     axis_angle::T  # orientation of inward normal in transverse plane (rad)
-    shrinkage::T
     nickname::Union{Nothing,String}
 
     function BendSegment(radius, angle, axis_angle = 0.0;
-                         shrinkage = 1.0, nickname = nothing)
+                         nickname = nothing)
         @assert radius > 0 "BendSegment: radius must be positive"
-        r, a, x, α = promote(radius, angle, axis_angle, shrinkage)
-        new{typeof(r)}(r, a, x, α, isnothing(nickname) ? nothing : String(nickname))
+        r, a, x = promote(radius, angle, axis_angle)
+        new{typeof(r)}(r, a, x, isnothing(nickname) ? nothing : String(nickname))
     end
 end
 
-arc_length(seg::BendSegment)         = seg.shrinkage * seg.radius * abs(seg.angle)
-nominal_arc_length(seg::BendSegment) = seg.radius * abs(seg.angle)
-curvature(seg::BendSegment, _)       = one(seg.radius) / (seg.shrinkage * seg.radius)
+arc_length(seg::BendSegment)         = seg.radius * abs(seg.angle)
+curvature(seg::BendSegment, _)       = one(seg.radius) / seg.radius
 geometric_torsion(seg::BendSegment, _) = zero(seg.radius)
 
 function position_local(seg::BendSegment, s)
-    R   = seg.shrinkage * seg.radius
+    R   = seg.radius
     θ   = s / R
     φ   = seg.axis_angle
     n̂   = [cos(φ), sin(φ), zero(φ)]
@@ -186,14 +173,14 @@ function position_local(seg::BendSegment, s)
 end
 
 function tangent_local(seg::BendSegment, s)
-    R = seg.shrinkage * seg.radius
+    R = seg.radius
     θ = s / R
     φ = seg.axis_angle
     return [sin(θ) * cos(φ), sin(θ) * sin(φ), cos(θ)]
 end
 
 function normal_local(seg::BendSegment, s)
-    R = seg.shrinkage * seg.radius
+    R = seg.radius
     θ = s / R
     φ = seg.axis_angle
     return [cos(θ) * cos(φ), cos(θ) * sin(φ), -sin(θ)]
@@ -205,7 +192,7 @@ function binormal_local(seg::BendSegment, _)
 end
 
 function end_position_local(seg::BendSegment)
-    R = seg.shrinkage * seg.radius
+    R = seg.radius
     θ = seg.angle
     φ = seg.axis_angle
     n̂ = [cos(φ), sin(φ), zero(φ)]
@@ -226,44 +213,39 @@ end
 # -----------------------------------------------------------------------
 
 """
-    CatenarySegment(a, length, axis_angle; shrinkage)
+    CatenarySegment(a, length, axis_angle)
 
 A catenary curve in the plane whose horizontal direction is at `axis_angle`
 from the local N-axis.  `a` (m) is the catenary parameter (a = T₀/(ρg),
 the ratio of horizontal tension to weight per unit length).  The curve
 starts with tangent along the local z-axis (vertical catenary vertex) and
-curves horizontally.
-
-Under shrinkage α: effective parameter a → α·a, arc length → α·length,
-curvature κ(s) = a_eff / (a_eff² + s²).  Angles are preserved.
+curves horizontally.  Curvature κ(s) = a / (a² + s²).
 """
 struct CatenarySegment{T} <: AbstractPathSegment
     a::T
     length::T
     axis_angle::T
-    shrinkage::T
     nickname::Union{Nothing,String}
 
     function CatenarySegment(a, length, axis_angle = 0.0;
-                             shrinkage = 1.0, nickname = nothing)
+                             nickname = nothing)
         @assert a > 0      "CatenarySegment: a must be positive"
         @assert length > 0 "CatenarySegment: length must be positive"
-        av, L, x, α = promote(a, length, axis_angle, shrinkage)
-        new{typeof(av)}(av, L, x, α, isnothing(nickname) ? nothing : String(nickname))
+        av, L, x = promote(a, length, axis_angle)
+        new{typeof(av)}(av, L, x, isnothing(nickname) ? nothing : String(nickname))
     end
 end
 
-arc_length(seg::CatenarySegment)         = seg.length * seg.shrinkage
-nominal_arc_length(seg::CatenarySegment) = seg.length
+arc_length(seg::CatenarySegment)         = seg.length
 geometric_torsion(seg::CatenarySegment, _) = zero(seg.a)
 
 function curvature(seg::CatenarySegment, s)
-    a = seg.a * seg.shrinkage
+    a = seg.a
     return a / (a^2 + s^2)
 end
 
 function position_local(seg::CatenarySegment, s)
-    a = seg.a * seg.shrinkage
+    a = seg.a
     φ = seg.axis_angle
     n̂ = [cos(φ), sin(φ), zero(φ)]
     horiz = a * (sqrt(1 + (s / a)^2) - 1)
@@ -272,7 +254,7 @@ function position_local(seg::CatenarySegment, s)
 end
 
 function tangent_local(seg::CatenarySegment, s)
-    a = seg.a * seg.shrinkage
+    a = seg.a
     φ = seg.axis_angle
     q = sqrt(1 + (s / a)^2)
     return [(s / a) / q * cos(φ), (s / a) / q * sin(φ), one(q) / q]
@@ -280,7 +262,7 @@ end
 
 function normal_local(seg::CatenarySegment, s)
     # N = dT/ds / |dT/ds|, derived analytically: N = [n̂_horiz/q, -s/a/q] normalised
-    a = seg.a * seg.shrinkage
+    a = seg.a
     φ = seg.axis_angle
     q = sqrt(1 + (s / a)^2)
     return [cos(φ) / q, sin(φ) / q, -(s / a) / q]
@@ -304,7 +286,7 @@ end
 # -----------------------------------------------------------------------
 
 """
-    HelixSegment(radius, pitch, turns, axis_angle; shrinkage)
+    HelixSegment(radius, pitch, turns, axis_angle)
 
 A helix whose entry tangent is ẑ (the incoming sliding-frame tangent), ensuring
 continuity with the prior segment.  `axis_angle` (rad) selects which transverse
@@ -317,7 +299,7 @@ reduces to a circular arc (BendSegment) in the n̂ direction.
 
     κ(s) = R / (R² + h²)          (constant)
     τ_geom(s) = h / (R² + h²)     (constant)
-    arc_length = turns · 2π · √(R² + h²) · shrinkage
+    arc_length = turns · 2π · √(R² + h²)
 
 Local-frame basis vectors:
     n̂  = [cos(axis_angle), sin(axis_angle), 0]     (toward helix axis)
@@ -329,15 +311,14 @@ struct HelixSegment{T} <: AbstractPathSegment
     pitch::T
     turns::T
     axis_angle::T
-    shrinkage::T
     nickname::Union{Nothing,String}
 
     function HelixSegment(radius, pitch, turns,
-                          axis_angle = 0.0; shrinkage = 1.0, nickname = nothing)
+                          axis_angle = 0.0; nickname = nothing)
         @assert radius > 0 "HelixSegment: radius must be positive"
         @assert turns  > 0 "HelixSegment: turns must be positive"
-        r, p, n, x, α = promote(radius, pitch, turns, axis_angle, shrinkage)
-        new{typeof(r)}(r, p, n, x, α, isnothing(nickname) ? nothing : String(nickname))
+        r, p, n, x = promote(radius, pitch, turns, axis_angle)
+        new{typeof(r)}(r, p, n, x, isnothing(nickname) ? nothing : String(nickname))
     end
 end
 
@@ -347,26 +328,24 @@ end
 
 function arc_length(seg::HelixSegment)
     h = _helix_h(seg)
-    return seg.turns * 2π * sqrt(seg.radius^2 + h^2) * seg.shrinkage
+    return seg.turns * 2π * sqrt(seg.radius^2 + h^2)
 end
 
-nominal_arc_length(seg::HelixSegment) = arc_length(seg) / seg.shrinkage
-
 function curvature(seg::HelixSegment, _)
-    R = seg.radius * seg.shrinkage
-    h = _helix_h(seg) * seg.shrinkage
+    R = seg.radius
+    h = _helix_h(seg)
     return R / (R^2 + h^2)
 end
 
 function geometric_torsion(seg::HelixSegment, _)
-    R = seg.radius * seg.shrinkage
-    h = _helix_h(seg) * seg.shrinkage
+    R = seg.radius
+    h = _helix_h(seg)
     return h / (R^2 + h^2)
 end
 
 function _helix_basis(seg::HelixSegment)
-    R  = seg.radius * seg.shrinkage
-    h  = _helix_h(seg) * seg.shrinkage
+    R  = seg.radius
+    h  = _helix_h(seg)
     φ_a = seg.axis_angle
     ℓ′  = sqrt(R^2 + h^2)
     z0 = zero(R); z1 = one(R)
@@ -418,62 +397,56 @@ end
 # -----------------------------------------------------------------------
 
 """
-    JumpBy(delta, tangent_out, shrinkage, min_bend_radius)
+    JumpBy(delta, tangent_out, min_bend_radius)
 
-Connects the current position to current_position + shrinkage·delta using an
-smooth function.  The incoming tangent is the current sliding frame
-tangent.  `tangent_out` is the desired outgoing tangent direction; if nothing,
-the connector computes an implicit tangent that minimizes curvature variation
-(requires a nonlinear solve).
+Connects the current position to current_position + delta using a smooth function.
+The incoming tangent is the current sliding frame tangent.  `tangent_out` is the
+desired outgoing tangent direction; if nothing, the connector computes an implicit
+tangent that minimizes curvature variation (requires a nonlinear solve).
 
 `min_bend_radius` (metres, nothing = unconstrained) sets a lower bound on the
 radius of curvature of the Hermite connector.  The tangent handle length is
 extended beyond the chord default when necessary to keep κ ≤ 1/R_min.
-Currently a stub. 
+Currently a stub.
 
 """
 struct JumpBy <: AbstractPathSegment
     delta::NTuple{3, Float64}
     tangent_out::Union{Nothing, NTuple{3, Float64}}
-    shrinkage::Float64
     min_bend_radius::Union{Nothing, Float64}
 end
 
-function JumpBy(delta; tangent_out = nothing, shrinkage::Real = 1.0,
-                min_bend_radius = nothing)
+function JumpBy(delta; tangent_out = nothing, min_bend_radius = nothing)
     d = (Float64(delta[1]), Float64(delta[2]), Float64(delta[3]))
     t = isnothing(tangent_out) ? nothing :
         (Float64(tangent_out[1]), Float64(tangent_out[2]), Float64(tangent_out[3]))
     r = isnothing(min_bend_radius) ? nothing : Float64(min_bend_radius)
-    JumpBy(d, t, Float64(shrinkage), r)
+    JumpBy(d, t, r)
 end
 
 """
-    JumpTo(destination, tangent_out, shrinkage, min_bend_radius)
+    JumpTo(destination, tangent_out, min_bend_radius)
 
-Connects the current position to the fixed lab-frame `destination` using smooth
-function.  Shrinkage changes the arc length of the connector (the
-connector absorbs the geometry change) but does not move the destination.
+Connects the current position to the fixed lab-frame `destination` using a smooth
+function.
 
 `min_bend_radius` (metres, nothing = unconstrained) sets a lower bound on the
 radius of curvature of the Hermite connector.  The tangent handle length is
 extended beyond the chord default when necessary to keep κ ≤ 1/R_min.
-Currently a stub. 
+Currently a stub.
 """
 struct JumpTo <: AbstractPathSegment
     destination::NTuple{3, Float64}
     tangent_out::Union{Nothing, NTuple{3, Float64}}
-    shrinkage::Float64
     min_bend_radius::Union{Nothing, Float64}
 end
 
-function JumpTo(destination; tangent_out = nothing, shrinkage::Real = 1.0,
-                min_bend_radius = nothing)
+function JumpTo(destination; tangent_out = nothing, min_bend_radius = nothing)
     d = (Float64(destination[1]), Float64(destination[2]), Float64(destination[3]))
     t = isnothing(tangent_out) ? nothing :
         (Float64(tangent_out[1]), Float64(tangent_out[2]), Float64(tangent_out[3]))
     r = isnothing(min_bend_radius) ? nothing : Float64(min_bend_radius)
-    JumpTo(d, t, Float64(shrinkage), r)
+    JumpTo(d, t, r)
 end
 
 # JumpBy and JumpTo are context-dependent: geometry is resolved at build() time
@@ -481,7 +454,6 @@ end
 for T in (JumpBy, JumpTo)
     @eval begin
         arc_length(::$T)             = error($(string(T)) * ": call build() to resolve jump geometry")
-        nominal_arc_length(::$T)     = error($(string(T)) * ": call build() to resolve jump geometry")
         curvature(::$T, ::Real)      = error($(string(T)) * ": call build() to resolve jump geometry")
         geometric_torsion(::$T, ::Real) = 0.0
         position_local(::$T, ::Real) = error($(string(T)) * ": call build() to resolve jump geometry")
@@ -530,7 +502,6 @@ struct HermiteConnector <: AbstractPathSegment
     a2        :: NTuple{3,Float64}
     a3        :: NTuple{3,Float64}
     s_table   :: Vector{Float64}     # s_table[i] = arc-length at t = (i-1)/(n-1)
-    shrinkage :: Float64             # always 1.0; stored for interface uniformity
 end
 
 const _HC_GAUSS4_NODES   = (-0.8611363115940526, -0.3399810435848563,
@@ -693,11 +664,10 @@ function _build_hermite_connector(p1_local::Vector{Float64}, t_hat_out::Vector{F
 
     a1, a2, a3 = _hc_coeffs(p1_local, t_hat_out, h)
     a0 = (0.0, 0.0, 0.0)
-    return HermiteConnector(a0, a1, a2, a3, _hc_build_table(a1, a2, a3, n_table), 1.0)
+    return HermiteConnector(a0, a1, a2, a3, _hc_build_table(a1, a2, a3, n_table))
 end
 
-arc_length(seg::HermiteConnector)         = seg.s_table[end]
-nominal_arc_length(seg::HermiteConnector) = arc_length(seg)
+arc_length(seg::HermiteConnector) = seg.s_table[end]
 
 function curvature(seg::HermiteConnector, s::Real)
     t      = _hc_t_from_s(seg, Float64(s))
@@ -776,7 +746,7 @@ end
 # Resolve JumpBy / JumpTo to a HermiteConnector at build() time.
 
 function _resolve_at_placement(seg::JumpBy, pos::Vector{Float64}, frame_mat::Matrix{Float64})
-    p1_local  = collect(seg.delta) .* seg.shrinkage
+    p1_local  = collect(seg.delta)
     chord     = norm(p1_local)
     t_hat_out = isnothing(seg.tangent_out) ?
         (chord > 1e-15 ? p1_local ./ chord : [0.0, 0.0, 1.0]) :
@@ -809,50 +779,47 @@ mutable struct PathSpec
     PathSpec() = new(AbstractPathSegment[], TwistOverlay[])
 end
 
-function straight!(spec::PathSpec; length::Real, shrinkage::Real = 1.0, nickname = nothing)
-    push!(spec.segments, StraightSegment(length; shrinkage, nickname))
+function straight!(spec::PathSpec; length, nickname = nothing)
+    push!(spec.segments, StraightSegment(length; nickname))
     return spec
 end
 
 function bend!(spec::PathSpec; radius::Real, angle::Real, axis_angle::Real = 0.0,
-               shrinkage::Real = 1.0, nickname = nothing)
-    push!(spec.segments, BendSegment(radius, angle, axis_angle; shrinkage, nickname))
+               nickname = nothing)
+    push!(spec.segments, BendSegment(radius, angle, axis_angle; nickname))
     return spec
 end
 
 function helix!(spec::PathSpec; radius::Real, pitch::Real, turns::Real,
-                axis_angle::Real = 0.0, shrinkage::Real = 1.0, nickname = nothing)
-    push!(spec.segments, HelixSegment(radius, pitch, turns, axis_angle; shrinkage, nickname))
+                axis_angle::Real = 0.0, nickname = nothing)
+    push!(spec.segments, HelixSegment(radius, pitch, turns, axis_angle; nickname))
     return spec
 end
 
 function catenary!(spec::PathSpec; a::Real, length::Real, axis_angle::Real = 0.0,
-                   shrinkage::Real = 1.0, nickname = nothing)
-    push!(spec.segments, CatenarySegment(a, length, axis_angle; shrinkage, nickname))
+                   nickname = nothing)
+    push!(spec.segments, CatenarySegment(a, length, axis_angle; nickname))
     return spec
 end
 
-function jumpby!(spec::PathSpec; delta, tangent = nothing, shrinkage::Real = 1.0,
-                 min_bend_radius = nothing)
-    push!(spec.segments, JumpBy(delta; tangent_out = tangent, shrinkage, min_bend_radius))
+function jumpby!(spec::PathSpec; delta, tangent = nothing, min_bend_radius = nothing)
+    push!(spec.segments, JumpBy(delta; tangent_out = tangent, min_bend_radius))
     return spec
 end
 
-function jumpto!(spec::PathSpec; destination, tangent = nothing, shrinkage::Real = 1.0,
-                 min_bend_radius = nothing)
-    push!(spec.segments, JumpTo(destination; tangent_out = tangent, shrinkage, min_bend_radius))
+function jumpto!(spec::PathSpec; destination, tangent = nothing, min_bend_radius = nothing)
+    push!(spec.segments, JumpTo(destination; tangent_out = tangent, min_bend_radius))
     return spec
 end
 
 """
     twist!(spec; s_start, length, rate)
 
-Add a material twist overlay.  `s_start` and `length` are in nominal
-(shrinkage = 1) arc-length coordinates.
+Add a material twist overlay covering arc-length `[s_start, s_start + length]`.
 
-`rate` is the material twist rate in rad/m of effective arc-length:
+`rate` is the material twist rate in rad/m of arc-length:
 - `Real` — converted to a constant-rate function `_ -> rate`
-- `Function` — `rate(s_eff)` evaluated at effective arc-length `s_eff`
+- `Function` — `rate(s)` evaluated at arc-length `s`
 """
 function twist!(spec::PathSpec; s_start::Real, length::Real, rate)
     r = rate isa Function ? rate : let τ = Float64(rate); _ -> τ; end
@@ -866,8 +833,7 @@ end
 
 struct PlacedSegment
     segment::AbstractPathSegment
-    s_offset_eff::Real          # cumulative effective arc-length at segment start
-    s_offset_nom::Real          # cumulative nominal arc-length at segment start
+    s_offset_eff::Real          # cumulative arc-length at segment start
     origin::AbstractVector      # global start position (length 3)
     frame::AbstractMatrix       # 3×3, columns [N_global | B_global | T_global]
                                 # transforms local vectors → global: v_g = frame * v_l
@@ -898,54 +864,34 @@ end
 # build()
 # -----------------------------------------------------------------------
 
-function _apply_shrinkage_override(seg::S, override) where {S <: AbstractPathSegment}
-    isnothing(override) && return seg
-    # shrinkage and nickname are keyword arguments in the outer constructors.
-    excluded = (:shrinkage, :nickname)
-    flds = fieldnames(S)
-    vals = [getfield(seg, f) for f in flds if f ∉ excluded]
-    nick = :nickname ∈ flds ? getfield(seg, :nickname) : nothing
-    # Use the UnionAll (unparameterized) name so the outer keyword constructor dispatches.
-    return S.name.wrapper(vals...; shrinkage = override, nickname = nick)
-end
-
 function _resolve_overlay(overlay::TwistOverlay,
                           placed::Vector{PlacedSegment})
-    nom_start = overlay.s_start
-    nom_end   = overlay.s_start + overlay.length
+    s_start = overlay.s_start
+    s_end   = overlay.s_start + overlay.length
 
     rates = ResolvedTwistRate[]
     for ps in placed
         seg = ps.segment
-        seg_nom_start = ps.s_offset_nom
-        seg_nom_end   = ps.s_offset_nom + nominal_arc_length(seg)
-        overlap_nom_start = max(nom_start, seg_nom_start)
-        overlap_nom_end   = min(nom_end,   seg_nom_end)
-        overlap_nom_end <= overlap_nom_start && continue
+        seg_start = ps.s_offset_eff
+        seg_end   = ps.s_offset_eff + arc_length(seg)
+        overlap_start = max(s_start, seg_start)
+        overlap_end   = min(s_end,   seg_end)
+        overlap_end <= overlap_start && continue
 
-        α = seg.shrinkage
-        eff_in_seg_start = (overlap_nom_start - seg_nom_start) * α
-        eff_in_seg_end   = (overlap_nom_end   - seg_nom_start) * α
-        s_eff_start = ps.s_offset_eff + eff_in_seg_start
-        s_eff_end   = ps.s_offset_eff + eff_in_seg_end
-
-        push!(rates, ResolvedTwistRate(s_eff_start, s_eff_end, overlay.rate))
+        push!(rates, ResolvedTwistRate(overlap_start, overlap_end, overlay.rate))
     end
 
     return ResolvedTwistOverlay(rates)
 end
 
 """
-    build(spec; shrinkage = nothing) → Path
+    build(spec) → Path
 
-Compile a `PathSpec` into an immutable `Path`.  Optional `shrinkage` argument:
-- `nothing`  — use each segment's authored shrinkage value (default)
-- `Float64`  — uniform override applied to all segments
-- `Dict{Int,Float64}` — override by segment index (1-based)
+Compile a `PathSpec` into an immutable `Path`.
 """
 _safe_normalize(v::AbstractVector) = v ./ sqrt(sum(abs2, v))
 
-function build(spec::PathSpec; shrinkage = nothing)
+function build(spec::PathSpec)
     pos     = zeros(3)
     N_frame = [1.0, 0.0, 0.0]
     B_frame = [0.0, 1.0, 0.0]
@@ -954,24 +900,12 @@ function build(spec::PathSpec; shrinkage = nothing)
     isempty(spec.segments) && error("build: PathSpec contains no segments")
 
     s_eff = 0.0
-    s_nom = 0.0
     placed = PlacedSegment[]
 
-    for (i, seg_orig) in enumerate(spec.segments)
-        # Apply build-time shrinkage override
-        seg = if isnothing(shrinkage)
-            seg_orig
-        elseif shrinkage isa Real
-            _apply_shrinkage_override(seg_orig, shrinkage)
-        elseif shrinkage isa Dict && haskey(shrinkage, i)
-            _apply_shrinkage_override(seg_orig, shrinkage[i])
-        else
-            seg_orig
-        end
-
+    for seg_orig in spec.segments
         frame      = hcat(N_frame, B_frame, T_frame)   # columns: [N | B | T]
-        seg_placed = _resolve_at_placement(seg, pos, frame)
-        push!(placed, PlacedSegment(seg_placed, s_eff, s_nom, copy(pos), copy(frame)))
+        seg_placed = _resolve_at_placement(seg_orig, pos, frame)
+        push!(placed, PlacedSegment(seg_placed, s_eff, copy(pos), copy(frame)))
 
         # Advance position and frame
         pos_end_local         = end_position_local(seg_placed)
@@ -985,7 +919,6 @@ function build(spec::PathSpec; shrinkage = nothing)
         B_frame = cross(T_frame, N_frame)
 
         s_eff += arc_length(seg_placed)
-        s_nom += nominal_arc_length(seg_placed)
     end
 
     resolved = [_resolve_overlay(ov, placed) for ov in spec.twist_overlays]
@@ -1347,9 +1280,7 @@ function _segment_total_angle(seg::BendSegment)
 end
 
 function _segment_total_angle(seg::CatenarySegment)
-    L_eff = arc_length(seg)
-    a_eff = seg.a * seg.shrinkage
-    return atan(L_eff / a_eff)
+    return atan(arc_length(seg) / seg.a)
 end
 
 function _segment_total_angle(seg::HelixSegment)

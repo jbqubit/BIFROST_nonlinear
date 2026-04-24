@@ -264,11 +264,6 @@ end
         @test pmean(curvature(bend, 0.01)) ≈ 1 / R_nom rtol=5e-2
         @test tangent_local(bend, 0.01) isa Vector{<:Particles}
 
-        # ---- BendSegment with uncertain shrinkage
-        bend2 = BendSegment(0.05, π/2; shrinkage = 1.0 ± 0.01)
-        @test arc_length(bend2) isa Particles
-        @test pmean(arc_length(bend2)) ≈ 0.05 * (π/2) rtol=1e-3
-
         # ---- HelixSegment with uncertain radius and pitch
         helix = HelixSegment(0.03 ± 0.003, 0.01 ± 0.001, 2.0)
         @test arc_length(helix) isa Particles
@@ -279,8 +274,8 @@ end
         cat_seg = CatenarySegment(0.1, 0.05, 0.2 ± 0.02)
         @test position_local(cat_seg, 0.025) isa Vector{<:Particles}
 
-        # ---- StraightSegment with uncertain shrinkage
-        straight = StraightSegment(0.1; shrinkage = 1.0 ± 0.005)
+        # ---- StraightSegment with uncertain length
+        straight = StraightSegment(0.1 ± 0.005)
         @test arc_length(straight) isa Particles
         @test pmean(arc_length(straight)) ≈ 0.1 rtol=1e-3
 
@@ -321,19 +316,11 @@ end
         # Query in the uncertain bend
         @test curvature(path2, 0.03) isa Particles
 
-        # ---- Build-time shrinkage override with Particles
-        spec3 = PathSpec()
-        bend!(spec3; radius = 0.05, angle = π/2)
-        path3 = build(spec3; shrinkage = 1.0 ± 0.01)
-        @test arc_length(path3) isa Particles
-        @test pmean(arc_length(path3)) ≈ 0.05 * (π/2) rtol=1e-3
-
-        # ---- T-PHYSICS: straight fiber → zero curvature everywhere (no ensemble bias)
+        # ---- T-PHYSICS: straight fiber with uncertain length → zero curvature everywhere
         spec4 = PathSpec()
-        straight!(spec4; length = 0.1, shrinkage = 1.0 ± 0.005)
+        straight!(spec4; length = 0.1 ± 0.005)
         path4 = build(spec4)
         for s in (0.01, 0.05, 0.09)
-            # curvature should be identically zero (not Particles), but our ruleset promotes it.
             c = curvature(path4, s)
             @test pmean(c) ≈ 0.0 atol=1e-12
         end

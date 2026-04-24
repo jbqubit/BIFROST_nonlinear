@@ -21,12 +21,9 @@ is_orthonormal(T, N, B) = is_unit(T) && is_unit(N) && is_unit(B) &&
 # -----------------------------------------------------------------------
 
 @testset "StraightSegment — arc length" begin
-    # T-PHYSICS: arc length of a straight segment is length * shrinkage
-    seg = StraightSegment(3.0; shrinkage = 1.0)
+    # T-PHYSICS: arc length of a straight segment equals its length
+    seg = StraightSegment(3.0)
     @test arc_length(seg) ≈ 3.0
-
-    seg2 = StraightSegment(3.0; shrinkage = 1.02)
-    @test arc_length(seg2) ≈ 3.06
 end
 
 @testset "StraightSegment — geometry" begin
@@ -51,27 +48,15 @@ end
     @test is_orthonormal(T, N, B)
 end
 
-@testset "StraightSegment — shrinkage scales arc length, not curvature" begin
-    # T-PHYSICS: shrinkage is a metric rescaling; curvature (1/length) is unchanged
-    # for a straight segment (κ = 0 regardless)
-    seg = StraightSegment(2.0; shrinkage = 0.9)
-    @test arc_length(seg) ≈ 1.8
-    @test curvature(seg, 0.0) == 0.0
-end
-
 # -----------------------------------------------------------------------
 # BendSegment
 # -----------------------------------------------------------------------
 
 @testset "BendSegment — arc length and curvature" begin
-    # T-PHYSICS: arc_length = shrinkage * radius * |angle|, κ = 1 / (shrinkage * radius)
+    # T-PHYSICS: arc_length = radius * |angle|, κ = 1 / radius
     seg = BendSegment(0.1, π / 2)
     @test arc_length(seg) ≈ 0.1 * π / 2
     @test curvature(seg, 0.0) ≈ 1.0 / 0.1
-
-    seg2 = BendSegment(0.1, π / 2; shrinkage = 1.05)
-    @test arc_length(seg2) ≈ 1.05 * 0.1 * π / 2
-    @test curvature(seg2, 0.0) ≈ 1.0 / (1.05 * 0.1)
 end
 
 @testset "BendSegment — zero torsion (planar curve)" begin
@@ -132,21 +117,6 @@ end
     end
 end
 
-@testset "BendSegment — shrinkage preserves angle, scales radius" begin
-    # T-PHYSICS: shrinkage α scales R_eff = α*R; swept angle is preserved.
-    # Two segments with same angle but different shrinkage should have the same
-    # end tangent direction but different end positions.
-    R = 0.1; θ = π / 3
-    seg1 = BendSegment(R, θ, 0.0; shrinkage = 1.0)
-    seg2 = BendSegment(R, θ, 0.0; shrinkage = 1.1)
-
-    (T1, _, _) = end_frame_local(seg1)
-    (T2, _, _) = end_frame_local(seg2)
-    @test T1 ≈ T2 atol = 1e-12   # same angle → same end tangent
-
-    @test arc_length(seg2) ≈ arc_length(seg1) * 1.1
-end
-
 # -----------------------------------------------------------------------
 # CatenarySegment
 # -----------------------------------------------------------------------
@@ -165,12 +135,11 @@ end
 end
 
 @testset "CatenarySegment — curvature formula" begin
-    # T-PHYSICS: κ(s) = a / (a² + s²) for effective parameter a_eff = shrinkage * a
-    a = 0.4; α = 1.05
-    seg = CatenarySegment(a, 2.0; shrinkage = α)
-    a_eff = α * a
+    # T-PHYSICS: κ(s) = a / (a² + s²)
+    a = 0.4
+    seg = CatenarySegment(a, 2.0)
     for s in [0.0, 0.3, 0.7, 1.2]
-        @test curvature(seg, s) ≈ a_eff / (a_eff^2 + s^2) atol = 1e-12
+        @test curvature(seg, s) ≈ a / (a^2 + s^2) atol = 1e-12
     end
 end
 
@@ -190,14 +159,6 @@ end
         B = binormal_local(seg, s)
         @test is_orthonormal(T, N, B)
     end
-end
-
-@testset "CatenarySegment — shrinkage scales arc length" begin
-    # T-PHYSICS
-    a = 0.2; L = 1.0; α = 0.95
-    seg = CatenarySegment(a, L; shrinkage = α)
-    @test arc_length(seg) ≈ α * L
-    @test nominal_arc_length(seg) ≈ L
 end
 
 # -----------------------------------------------------------------------
@@ -313,37 +274,6 @@ end
         p = position(path, s)
         @test all(p .>= bb.lo .- 1e-10)
         @test all(p .<= bb.hi .+ 1e-10)
-    end
-end
-
-# -----------------------------------------------------------------------
-# Shrinkage on assembled path
-# -----------------------------------------------------------------------
-
-@testset "Path — shrinkage uniform override scales path length" begin
-    # T-PHYSICS: uniform shrinkage α scales total arc length by α
-    spec = PathSpec()
-    straight!(spec; length = 1.0)
-    bend!(spec; radius = 0.1, angle = π / 2)
-    path1 = build(spec)
-    path2 = build(spec; shrinkage = 1.05)
-
-    @test path_length(path2) ≈ path_length(path1) * 1.05 atol = 1e-10
-end
-
-@testset "Path — shrinkage preserves joint tangent continuity" begin
-    # T-GUARDRAIL
-    spec = PathSpec()
-    straight!(spec; length = 0.5)
-    bend!(spec; radius = 0.1, angle = π / 3)
-    path = build(spec; shrinkage = 0.98)
-
-    ps = path.placed_segments
-    for i in 1:(length(ps) - 1)
-        s_joint = ps[i + 1].s_offset_eff
-        T_before = tangent(path, s_joint - 1e-9)
-        T_after  = tangent(path, s_joint + 1e-9)
-        @test norm(T_before - T_after) < 1e-6
     end
 end
 
@@ -520,14 +450,6 @@ end
         B = binormal(path, s)
         @test is_orthonormal(T, N, B)
     end
-end
-
-@testset "JumpBy — shrinkage scales endpoint" begin
-    # T-PHYSICS: shrinkage α scales the displacement by α
-    spec = PathSpec()
-    jumpby!(spec; delta = (0.0, 0.0, 1.0), shrinkage = 0.8)
-    path = build(spec)
-    @test end_point(path) ≈ [0.0, 0.0, 0.8] atol = 1e-10
 end
 
 @testset "JumpBy — after straight, delta is in rotated local frame" begin
