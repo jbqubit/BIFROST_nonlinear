@@ -96,6 +96,15 @@ Do not break these without explicit user discussion:
   raw matrix difference. This is intentional.
 - **Function-valued inputs**: Physical profiles (bend radius, twist rate, temperature,
   axis angle) must be callable at arbitrary `s`, not just on a fixed grid.
+- **MCM compatibility**: `material-properties.jl`, `fiber-cross-section.jl`, and
+  `path-geometry.jl` accept `MonteCarloMeasurements.Particles` on the uncertain
+  inputs (`T_K`, bend/twist/tension/axis-ratio properties, segment shrinkage). Keep
+  these files `::Real`-free on uncertain-input slots and avoid `Float64(·)`
+  coercions on those paths. Test files using MCM must wrap blocks in
+  `MonteCarloMeasurements.unsafe_comparisons(true)`; under unsafe comparisons,
+  invariants like "breakpoints are sorted and deduplicated" reduce via `pmean`
+  rather than failing. Hermite connectors (`JumpBy`/`JumpTo`), `cutoff_wavelength`,
+  and `path-integral.jl` are explicit Float64-only exceptions today.
 
 ## Adding a New Birefringence Source
 
