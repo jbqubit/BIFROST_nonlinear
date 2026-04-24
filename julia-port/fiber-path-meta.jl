@@ -13,7 +13,9 @@ what annotations mean.
 - `MCMadd(symbol, distribution)` — an **additive** MCM perturbation:
   consumers apply `baseline + sample` (e.g. `T_K = T_ref + ΔT`).
 - `MCMmul(symbol, distribution)` — a **multiplicative** MCM perturbation:
-  consumers apply `baseline * (1 + sample)` (fractional perturbation).
+  consumers apply `baseline * sample` (direct scale factor, so e.g.
+  `MCMmul(:length, 0.5)` halves `length`; `MCMmul(:length, -0.4)` flips the
+  sign and shortens).
 
 `symbol` is a `Symbol` (e.g. `:T_K`). `distribution` is any object a consumer
 knows how to sample from (scalar, `Particles`, `Distributions.*`). The
@@ -61,10 +63,10 @@ end
 Combine every `MCMmul(sym, d)` and `MCMadd(sym, d)` on segment `seg` and
 apply them to `baseline` in a uniform order:
 
-    perturbed = baseline * Π(1 + d_mul) + Σ d_add
+    perturbed = baseline * Π(d_mul) + Σ d_add
 
-All multiplicative factors are applied first (as fractional perturbations),
-then all additive offsets are summed on top. Non-matching-symbol entries are
+All multiplicative factors are applied first (as direct scale factors), then
+all additive offsets are summed on top. Non-matching-symbol entries are
 ignored. When no matching entries are present, `baseline` is returned
 unchanged (same object, no arithmetic performed).
 
@@ -76,7 +78,7 @@ function MCMcombine(baseline, seg, sym::Symbol)
     add = nothing
     for m in segment_meta(seg)
         if m isa MCMmul && m.symbol === sym
-            mul = isnothing(mul) ? (1 + m.distribution) : mul * (1 + m.distribution)
+            mul = isnothing(mul) ? m.distribution : mul * m.distribution
         elseif m isa MCMadd && m.symbol === sym
             add = isnothing(add) ? m.distribution : add + m.distribution
         end

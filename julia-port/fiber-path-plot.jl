@@ -559,7 +559,6 @@ module PlotRuntime
         s1::Real,
         s2::Real;
         λ_m::Real,
-        T_K,
         n::Int = 1001,
         input_state::AbstractVector{ComplexF64} = ComplexF64[1.0 + 0.0im, 0.0 + 0.0im],
         jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}()
@@ -574,7 +573,7 @@ module PlotRuntime
         linear_angle_rad = zeros(Float64, n)
         linear_radius = zeros(Float64, n)
 
-        K = Main.generator_K(f, λ_m, T_K)
+        K = Main.generator_K(f, λ_m)
         ψ = ComplexF64[input_state[1], input_state[2]]
         ψ ./= norm(ψ)
 
@@ -602,7 +601,6 @@ module PlotRuntime
         s1::Real,
         s2::Real;
         λ_m::Real,
-        T_K,
         n::Int = 1001,
         jumps::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}(),
         jump_omegas::Dict{Float64, Matrix{ComplexF64}} = Dict{Float64, Matrix{ComplexF64}}()
@@ -610,8 +608,8 @@ module PlotRuntime
         ss = collect(range(Float64(s1), Float64(s2), length = n))
         dgds = zeros(Float64, n)
 
-        K = Main.generator_K(f, λ_m, T_K)
-        Kω = Main.generator_Kω(f, λ_m, T_K)
+        K = Main.generator_K(f, λ_m)
+        Kω = Main.generator_Kω(f, λ_m)
         J = Matrix{ComplexF64}(I, 2, 2)
         G = zeros(ComplexF64, 2, 2)
         dgds[1] = Main.output_dgd(J, G)
@@ -651,7 +649,6 @@ module PlotRuntime
         s1::Real,
         s2::Real;
         λ_m::Real,
-        T_K,
         n::Int = 1001,
         output::AbstractString = "fiberinput_3d.html",
         title::AbstractString = "Fiber 3D centerline",
@@ -665,7 +662,6 @@ module PlotRuntime
             s1,
             s2;
             λ_m = λ_m,
-            T_K = T_K,
             n = n,
             input_state = ComplexF64[input_state[1], input_state[2]],
             jumps = jumps
@@ -675,7 +671,6 @@ module PlotRuntime
             s1,
             s2;
             λ_m = λ_m,
-            T_K = T_K,
             n = n,
             jumps = jumps,
             jump_omegas = jump_omegas

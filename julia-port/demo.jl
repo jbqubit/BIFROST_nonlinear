@@ -6,6 +6,7 @@ include("path-geometry.jl")
 include("path-geometry-plot.jl")
 include("path-integral.jl")
 include("fiber-path-plot.jl")
+include("fiber-path-modify.jl")
 
 
 const DEMO_FIBER_CROSS_SECTION = FiberCrossSection(
@@ -238,13 +239,14 @@ function demo_fiber_path_segment_labels(;
     title::AbstractString = "Path geometry: segment nicknames",
 )
     PG = PathGeometry
+    _nick(s) = PG.AbstractMeta[PG.Nickname(s)]
     spec = PG.PathSpec()
-    PG.straight!(spec; length = 0.08, nickname = "lead-in")
-    PG.bend!(spec; radius = 0.06, angle = π / 2, nickname = "90° bend")
-    PG.straight!(spec; length = 0.06, nickname = "spacer")
-    PG.catenary!(spec; a = 0.04, length = 0.08, axis_angle = 0.0, nickname = "sag")
-    PG.helix!(spec; radius = 0.025, pitch = 0.015, turns = 1.2, axis_angle = 0.0, nickname = "twist section")
-    PG.straight!(spec; length = 0.06, nickname = "lead-out")
+    PG.straight!(spec; length = 0.08, meta = _nick("lead-in"))
+    PG.bend!(spec; radius = 0.06, angle = π / 2, meta = _nick("90° bend"))
+    PG.straight!(spec; length = 0.06, meta = _nick("spacer"))
+    PG.catenary!(spec; a = 0.04, length = 0.08, axis_angle = 0.0, meta = _nick("sag"))
+    PG.helix!(spec; radius = 0.025, pitch = 0.015, turns = 1.2, axis_angle = 0.0, meta = _nick("twist section"))
+    PG.straight!(spec; length = 0.06, meta = _nick("lead-out"))
     path = PG.build(spec)
     println("Arc length (effective): ", PG.path_length(path), " m")
     plot_path = write_path_geometry_plot3d(
@@ -400,14 +402,377 @@ function demo_fiber_path_jumps2(;
 end
 
 """
+    demo_fiber_path_modify(; output_dir)
+
+Exercise [`modify`](fiber-path-modify.jl) on a common inverted-U baseline path
+(straight up → bend π → straight down) by attaching MCM annotations to a
+single target segment and comparing the modified paths against the
+unperturbed baseline. Produces HTML files (one per experiment):
+
+1. `modify-straight-length.html` — shortens the first straight via
+   `MCMadd(:length, −0.4)`.
+2. `modify-bend-radius.html` — halves and doubles the bend radius via
+   `MCMmul(:radius, −0.5)` / `MCMmul(:radius, 1.0)`.
+3. `modify-bend-angle.html` — reduces and extends the bend angle via
+   `MCMadd(:angle, −π/2)` / `MCMadd(:angle, π/4)`.
+
+In every figure the unmodified segments of a variant are drawn in green and
+the modified segment in red; variants are offset along *x* so the baseline
+and each perturbation appear side-by-side in a single 3D scene.
+"""
+function demo_fiber_path_modify(;
+    output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
+)
+    L, R = 1.0, 0.5
+
+    row1 = _modify_row_html(
+        joinpath(output_dir, "modify-straight-length.html"),
+        "modify(:length) on the first straight segment";
+        L = L, R = R,
+        variants = [
+            ("baseline",                      1, AbstractMeta[]),
+            ("MCMadd(:length, -0.4)",         1, AbstractMeta[MCMadd(:length, -0.4)]),
+        ],
+    )
+
+    row2 = _modify_row_html(
+        joinpath(output_dir, "modify-bend-radius.html"),
+        "modify(:radius) on the bend segment";
+        L = L, R = R,
+        variants = [
+            ("baseline",                      2, AbstractMeta[]),
+            ("MCMadd(:radius, -0.25)",        2, AbstractMeta[MCMadd(:radius, -0.25)]),
+            ("MCMadd(:radius, +0.50)",        2, AbstractMeta[MCMadd(:radius,  0.50)]),
+        ],
+    )
+
+    row3 = _modify_row_html(
+        joinpath(output_dir, "modify-bend-angle.html"),
+        "modify(:angle) on the bend segment";
+        L = L, R = R,
+        variants = [
+            ("baseline",                      2, AbstractMeta[]),
+            ("MCMadd(:angle, -π/2)",          2, AbstractMeta[MCMadd(:angle, -π/2)]),
+            ("MCMadd(:angle, +π/4)",          2, AbstractMeta[MCMadd(:angle,  π/4)]),
+            ("MCMadd(:angle, +π)",          2, AbstractMeta[MCMadd(:angle,  π)]),
+        ],
+    )
+
+    row4 = _modify_row_html(
+        joinpath(output_dir, "modify-straight-length-mul.html"),
+        "modify(:length) on the first straight segment — MCMmul";
+        L = L, R = R,
+        variants = [
+            ("baseline",                      1, AbstractMeta[]),
+            ("MCMmul(:length, -0.4)",         1, AbstractMeta[MCMmul(:length, -0.4)]),
+            ("MCMmul(:length, +0.5)",         1, AbstractMeta[MCMmul(:length,  0.5)]),
+        ],
+    )
+
+    row5 = _modify_row_html(
+        joinpath(output_dir, "modify-bend-radius-mul.html"),
+        "modify(:radius) on the bend segment — MCMmul";
+        L = L, R = R,
+        variants = [
+            ("baseline",                      2, AbstractMeta[]),
+            ("MCMmul(:radius, 0.5)",          2, AbstractMeta[MCMmul(:radius, 0.5)]),
+#            ("MCMmul(:radius, -0.5)",         2, AbstractMeta[MCMmul(:radius, -0.5)]), # neg radius not supported, throws @assertion error
+            ("MCMmul(:radius, 2.0)",          2, AbstractMeta[MCMmul(:radius, 2.0)]),
+        ],
+    )
+
+    row6 = _modify_row_html(
+        joinpath(output_dir, "modify-bend-angle-mul.html"),
+        "modify(:angle) on the bend segment — MCMmul";
+        L = L, R = R,
+        variants = [
+            ("baseline",                      2, AbstractMeta[]),
+            ("MCMmul(:angle, 0.5)",           2, AbstractMeta[MCMmul(:angle, 0.5)]),
+            ("MCMmul(:angle, 1.25)",          2, AbstractMeta[MCMmul(:angle, 1.25)]),
+        ],
+    )
+
+    # -------------------------------------------------------------------
+    # Rows 7–12: helix-baseline (straight · bend · helix · straight).
+    # Rows 7–9 use MCMadd on the helix's scalar fields; rows 10–12 are the
+    # MCMmul counterparts. Target index 3 = helix segment.
+    # -------------------------------------------------------------------
+
+    row7 = _modify_row_html(
+        joinpath(output_dir, "modify-helix-radius.html"),
+        "modify(:radius) on the helix segment — MCMadd";
+        L = L, R = R,
+        variant_spacing = 3.5,
+        builder = _build_modify_variant_helix,
+        variants = [
+            ("baseline",                      3, AbstractMeta[]),
+            ("MCMadd(:radius, -0.05)",        3, AbstractMeta[MCMadd(:radius, -0.05)]),
+            ("MCMadd(:radius, +0.10)",        3, AbstractMeta[MCMadd(:radius,  0.10)]),
+        ],
+    )
+
+    row8 = _modify_row_html(
+        joinpath(output_dir, "modify-helix-pitch.html"),
+        "modify(:pitch) on the helix segment — MCMadd";
+        L = L, R = R,
+        variant_spacing = 3.5,
+        builder = _build_modify_variant_helix,
+        variants = [
+            ("baseline",                      3, AbstractMeta[]),
+            ("MCMadd(:pitch, -0.10)",         3, AbstractMeta[MCMadd(:pitch, -0.10)]),
+            ("MCMadd(:pitch, +0.20)",         3, AbstractMeta[MCMadd(:pitch,  0.20)]),
+        ],
+    )
+
+    row9 = _modify_row_html(
+        joinpath(output_dir, "modify-helix-turns.html"),
+        "modify(:turns) on the helix segment — MCMadd";
+        L = L, R = R,
+        variant_spacing = 3.5,
+        builder = _build_modify_variant_helix,
+        variants = [
+            ("baseline",                      3, AbstractMeta[]),
+            ("MCMadd(:turns, -0.5)",          3, AbstractMeta[MCMadd(:turns, -0.5)]),
+            ("MCMadd(:turns, +0.5)",          3, AbstractMeta[MCMadd(:turns,  0.5)]),
+        ],
+    )
+
+    row10 = _modify_row_html(
+        joinpath(output_dir, "modify-helix-radius-mul.html"),
+        "modify(:radius) on the helix segment — MCMmul";
+        L = L, R = R,
+        variant_spacing = 3.5,
+        builder = _build_modify_variant_helix,
+        variants = [
+            ("baseline",                      3, AbstractMeta[]),
+            ("MCMmul(:radius, 0.5)",          3, AbstractMeta[MCMmul(:radius, 0.5)]),
+            ("MCMmul(:radius, 2.0)",          3, AbstractMeta[MCMmul(:radius, 2.0)]),
+        ],
+    )
+
+    row11 = _modify_row_html(
+        joinpath(output_dir, "modify-helix-pitch-mul.html"),
+        "modify(:pitch) on the helix segment — MCMmul";
+        L = L, R = R,
+        variant_spacing = 3.5,
+        builder = _build_modify_variant_helix,
+        variants = [
+            ("baseline",                      3, AbstractMeta[]),
+            ("MCMmul(:pitch, 0.5)",           3, AbstractMeta[MCMmul(:pitch, 0.5)]),
+            ("MCMmul(:pitch, 2.0)",           3, AbstractMeta[MCMmul(:pitch, 2.0)]),
+        ],
+    )
+
+    row12 = _modify_row_html(
+        joinpath(output_dir, "modify-helix-turns-mul.html"),
+        "modify(:turns) on the helix segment — MCMmul";
+        L = L, R = R,
+        variant_spacing = 3.5,
+        builder = _build_modify_variant_helix,
+        variants = [
+            ("baseline",                      3, AbstractMeta[]),
+            ("MCMmul(:turns, 0.67)",          3, AbstractMeta[MCMmul(:turns, 0.67)]),
+            ("MCMmul(:turns, 1.5)",           3, AbstractMeta[MCMmul(:turns, 1.5)]),
+        ],
+    )
+
+    return (
+        plot_length            = row1,
+        plot_radius            = row2,
+        plot_angle             = row3,
+        plot_length_mul        = row4,
+        plot_radius_mul        = row5,
+        plot_angle_mul         = row6,
+        plot_helix_radius      = row7,
+        plot_helix_pitch       = row8,
+        plot_helix_turns       = row9,
+        plot_helix_radius_mul  = row10,
+        plot_helix_pitch_mul   = row11,
+        plot_helix_turns_mul   = row12,
+    )
+end
+
+# Build the baseline 3-segment inverted-U and attach `target_meta` to the
+# segment indexed by `target_idx` (1 = first straight, 2 = bend, 3 = second
+# straight). Returns the modified path and the target segment index.
+function _build_modify_variant(L::Float64, R::Float64,
+                               target_idx::Int, target_meta::Vector{AbstractMeta})
+    spec = PathSpec()
+    straight!(spec; length = L, meta = target_idx == 1 ? target_meta : AbstractMeta[])
+    bend!(spec; radius = R, angle = π, axis_angle = 0.0,
+          meta = target_idx == 2 ? target_meta : AbstractMeta[])
+    straight!(spec; length = L, meta = target_idx == 3 ? target_meta : AbstractMeta[])
+    path  = build(spec)
+    fiber = Fiber(path; cross_section = DEMO_FIBER_CROSS_SECTION, T_ref_K = DEMO_T_K)
+    return modify(fiber)
+end
+
+# Baseline helix parameters for the 4-segment variant (inverted-U plus a helix
+# between the bend and the second straight). `axis_angle = 0` tilts the helix
+# axis into the x–z plane so the coil projects recognisably onto the viewer's
+# plane.
+const _MODIFY_HELIX_RADIUS = 0.15
+const _MODIFY_HELIX_PITCH  = 0.25
+const _MODIFY_HELIX_TURNS  = 1.5
+
+# Build a 4-segment baseline (straight · bend π · helix · straight) and attach
+# `target_meta` to the segment indexed by `target_idx`:
+#   1 = first straight, 2 = bend, 3 = helix, 4 = second straight.
+function _build_modify_variant_helix(L::Float64, R::Float64,
+                                     target_idx::Int, target_meta::Vector{AbstractMeta})
+    spec = PathSpec()
+    straight!(spec; length = L, meta = target_idx == 1 ? target_meta : AbstractMeta[])
+    bend!(spec; radius = R, angle = π, axis_angle = 0.0,
+          meta = target_idx == 2 ? target_meta : AbstractMeta[])
+    helix!(spec; radius = _MODIFY_HELIX_RADIUS,
+                 pitch  = _MODIFY_HELIX_PITCH,
+                 turns  = _MODIFY_HELIX_TURNS,
+                 axis_angle = 0.0,
+                 meta = target_idx == 3 ? target_meta : AbstractMeta[])
+    straight!(spec; length = L, meta = target_idx == 4 ? target_meta : AbstractMeta[])
+    path  = build(spec)
+    fiber = Fiber(path; cross_section = DEMO_FIBER_CROSS_SECTION, T_ref_K = DEMO_T_K)
+    return modify(fiber)
+end
+
+# Sample a single placed segment's centerline in the global frame.
+function _sample_segment_xyz(path::Path, seg_index::Int; n::Int = 128)
+    ps = path.placed_segments[seg_index]
+    s0 = ps.s_offset_eff
+    s1 = s0 + arc_length(ps.segment)
+    ss = range(s0, s1; length = n)
+    xs = Float64[]; ys = Float64[]; zs = Float64[]
+    for s in ss
+        p = position(path, s)
+        push!(xs, Float64(p[1]))
+        push!(ys, Float64(p[2]))
+        push!(zs, Float64(p[3]))
+    end
+    return (x = xs, y = ys, z = zs)
+end
+
+# Render one experiment row: each variant's 3-segment path laid out side-by-
+# side along x, with the target segment drawn in red and the others in green.
+function _modify_row_html(output::AbstractString, title::AbstractString;
+                          L::Float64, R::Float64,
+                          variants::Vector,
+                          variant_spacing::Float64 = 2.5,
+                          builder = _build_modify_variant)
+    js_num(x)   = isnan(x) ? "NaN" : string(Float64(x))
+    js_arr(xs)  = "[" * join(js_num.(xs), ",") * "]"
+    js_strarr(xs) = "[" * join(("\"" * replace(string(x), "\"" => "\\\"") * "\"" for x in xs), ",") * "]"
+
+    trace_strs  = String[]
+    label_xs    = Float64[]; label_ys = Float64[]; label_zs = Float64[]
+    label_texts = String[]
+    start_xs    = Float64[]; start_ys = Float64[]; start_zs = Float64[]
+
+    for (k, (label, target_idx, target_meta)) in enumerate(variants)
+        path = builder(L, R, target_idx, target_meta)
+        dx = (k - 1) * variant_spacing
+        n_segs = length(path.placed_segments)
+        for i in 1:n_segs
+            s     = _sample_segment_xyz(path, i)
+            xs    = s.x .+ dx
+            color = (i == target_idx && !isempty(target_meta)) ? "#e55" : "#6c6"
+            name  = "$(label) — seg $(i)"
+            push!(trace_strs, """
+{
+  type: 'scatter3d',
+  mode: 'lines',
+  x: $(js_arr(xs)),
+  y: $(js_arr(s.y)),
+  z: $(js_arr(s.z)),
+  line: {color: '$(color)', width: 6},
+  name: $(repr(name)),
+  showlegend: $(i == 1)
+}""")
+        end
+        # Green marker at the path start (origin of this variant).
+        p0 = position(path, path.s_start)
+        push!(start_xs, Float64(p0[1]) + dx)
+        push!(start_ys, Float64(p0[2]))
+        push!(start_zs, Float64(p0[3]))
+
+        # Label above each variant at the top of the inverted U.
+        push!(label_xs, dx + R)
+        push!(label_ys, 0.0)
+        push!(label_zs, L + R + 0.15)
+        push!(label_texts, label)
+    end
+
+    start_trace = """
+{
+  type: 'scatter3d',
+  mode: 'markers',
+  x: $(js_arr(start_xs)),
+  y: $(js_arr(start_ys)),
+  z: $(js_arr(start_zs)),
+  marker: {color: '#6c6', size: 6, symbol: 'circle'},
+  name: 'start',
+  showlegend: false
+}"""
+
+    labels_trace = """
+{
+  type: 'scatter3d',
+  mode: 'text',
+  x: $(js_arr(label_xs)),
+  y: $(js_arr(label_ys)),
+  z: $(js_arr(label_zs)),
+  text: $(js_strarr(label_texts)),
+  textfont: {color: '#ddd', size: 13},
+  showlegend: false
+}"""
+
+    html = """<!DOCTYPE html>
+<html lang=\"en\"><head><meta charset=\"utf-8\"><title>$(title)</title>
+<script src=\"https://cdn.plot.ly/plotly-2.35.2.min.js\"></script>
+<style>html,body{margin:0;padding:0;width:100%;height:100%;background:#111;color:#eee;font-family:sans-serif;}#plot{width:100%;height:100%;}</style>
+</head><body><div id=\"plot\"></div>
+<script>
+const traces = [$(join(trace_strs, ",\n")),
+$(start_trace)$(isempty(label_texts) ? "" : ",\n")$(labels_trace)];
+const layout = {
+  title: {text: $(repr(title)), font: {color: '#eee'}},
+  paper_bgcolor: '#111',
+  plot_bgcolor:  '#111',
+  scene: {
+    bgcolor: '#111',
+    xaxis: {gridcolor: '#333', color: '#aaa'},
+    yaxis: {gridcolor: '#333', color: '#aaa'},
+    zaxis: {gridcolor: '#333', color: '#aaa'},
+    aspectmode: 'data',
+    camera: {eye: {x: 0.0, y: -2.5, z: 0.5}}
+  },
+  margin: {l:0, r:0, t:40, b:0},
+  legend: {font: {color: '#eee'}}
+};
+Plotly.newPlot('plot', traces, layout);
+</script>
+</body></html>
+"""
+    open(output, "w") do io
+        write(io, html)
+    end
+    return output
+end
+
+
+
+"""
     demo_fiber_paddles_mcm(; μ_T = 297.15, σ_T = 2.0, N = 200, ...)
 
-Four-paddle polarization controller (Λ/4 – Λ/2 – Λ/2 – Λ/4) with paddle 2's
-temperature modeled as a normal random variable via MonteCarloMeasurements.
-Propagates a horizontal input state through the fiber in a single
-`propagate_fiber` call — the Particles-valued `T_K` on paddle 2 lifts through
-`bending_birefringence` and the Jones integrator so the output state carries
-an ensemble of `N` samples.
+Four-paddle polarization controller (Λ/4 – Λ/2 – Λ/2 – Λ/4) with the fiber
+reference temperature modeled as a normal random variable via
+MonteCarloMeasurements. Propagates a horizontal input state through the fiber
+in a single `propagate_fiber` call — the Particles-valued `T_ref_K` lifts
+through `bending_birefringence` and the Jones integrator so the output state
+carries an ensemble of `N` samples.
+
+Note: per-segment temperature variation (e.g., only paddle 2 uncertain) will
+return once path-geometry gains segment-level metadata (MetaList/MCM). For now
+the whole fiber shares one Particles-valued T.
 
 Emits two HTML artefacts:
 
@@ -437,40 +802,30 @@ function demo_fiber_paddles_mcm(;
         (turns = 1.0, radius = 0.030, axis = 0.0),
     ]
 
-    # Paddle 2's temperature as Particles. Explicit N-sample ensemble from a
-    # normal distribution centered at μ_T with standard deviation σ_T.
-    T_paddle2 = Particles(N, MonteCarloMeasurements.Distributions.Normal(μ_T, σ_T))
-    paddle2_temperatures = T_paddle2.particles  # Vector{Float64}, length N
+    # Fiber reference temperature as Particles. Explicit N-sample ensemble from
+    # a normal distribution centered at μ_T with standard deviation σ_T.
+    T_ensemble = Particles(N, MonteCarloMeasurements.Distributions.Normal(μ_T, σ_T))
+    paddle2_temperatures = T_ensemble.particles  # Vector{Float64}, length N
 
     # Assemble fiber arc-length domain [0, L_total] with one low-level custom
     # bend segment per paddle.
     s = 0.0
-    segment_ranges = Tuple{Float64,Float64}[]
     path_spec = PathSpec()
     for p in paddles
         L = 2π * p.radius * p.turns
-        push!(segment_ranges, (s, s + L))
         bend!(path_spec; radius = p.radius, angle = 2π * p.turns, axis_angle = p.axis)
         s += L
     end
     L_total = s
 
     path = build(path_spec)
-    function T_profile(s)
-        for (i, (s0, s1)) in enumerate(segment_ranges)
-            if s0 <= s <= s1
-                return i == 2 ? T_paddle2 : μ_T
-            end
-        end
-        return μ_T
-    end
-    fiber = Fiber(path; cross_section = DEMO_FIBER_CROSS_SECTION)
+    fiber = Fiber(path; cross_section = DEMO_FIBER_CROSS_SECTION, T_ref_K = T_ensemble)
 
     # Propagate once with in-band MCM. unsafe_comparisons lets branching inside
     # the adaptive integrator operate on Particles-valued scalars.
     MonteCarloMeasurements.unsafe_comparisons(true)
     J = try
-        J_, _stats = propagate_fiber(fiber; λ_m = DEMO_λ_M, T_K = T_profile, rtol = 1e-9, atol = 1e-12, h_init = 0.1)
+        J_, _stats = propagate_fiber(fiber; λ_m = DEMO_λ_M, rtol = 1e-9, atol = 1e-12, h_init = 0.1)
         J_
     finally
         MonteCarloMeasurements.unsafe_comparisons(false)
@@ -506,7 +861,6 @@ function demo_fiber_paddles_mcm(;
     plot_fiber = write_fiber_input_plot3d(
         fiber_mean, 0.0, L_total;
         λ_m = DEMO_λ_M,
-        T_K = μ_T,
         n = 801,
         output = fiber_output,
         title = "Four-paddle controller — fiber centerline (nominal T)",
@@ -651,6 +1005,13 @@ const DEMO_INDEX = [
                "propagate the ensemble through the Jones integrator in one shot, then plots " *
                "the output-state point cloud on the Poincaré sphere and the fiber centerline " *
                "with the mean-temperature polarization trajectory.",
+    ),
+    (
+        fn   = demo_fiber_path_modify,
+        kwargs = NamedTuple(),
+        desc = "Exercises `modify` on a shared inverted-U baseline path. Three HTML outputs " *
+               "show how `MCMadd(:length, …)`, `MCMmul(:radius, …)`, and `MCMadd(:angle, …)` " *
+               "perturb a single target segment (red) against the unmodified baseline (green)."
     ),
 ]
 

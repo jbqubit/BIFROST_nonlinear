@@ -33,8 +33,7 @@ Two approaches are supported to build a PathSpec and can be freely mixed:
 
 `path-geometry.jl` is intentionally free of shrinkage. A `Path` represents pure,
 temperature-independent geometry. Thermal contraction and related length-scaling
-are applied by `fiber-path-modify.jl` as a `modify(fiber) → Path` transform
-driven by per-segment `MCMadd` / `MCMmul` annotations.
+are applied by `fiber-path-shrinkage.jl` as a `shrink(path, α) → Path` transform.
 
 # Interface
 
@@ -129,18 +128,30 @@ function StraightSegment(length; meta = AbstractMeta[])
     StraightSegment{typeof(length)}(length, Vector{AbstractMeta}(meta))
 end
 
-arc_length(seg::StraightSegment)         = seg.length
+# A StraightSegment with negative `length` is treated as walking backward
+# along the local tangent: `arc_length` is `|length|`, position advances as
+# `sign(length)·s`, and the end-frame tangent/normal carry the same sign so
+# downstream segments inherit a consistent, right-handed frame matching the
+# direction of motion. Using `sign` (not a conditional) keeps this branch-
+# free and MCM/Particles-compatible — `sign` broadcasts elementwise over a
+# Particles length.
+
+arc_length(seg::StraightSegment)         = abs(seg.length)
 curvature(seg::StraightSegment, _)       = zero(seg.length)
 geometric_torsion(seg::StraightSegment, _) = zero(seg.length)
 
-position_local(seg::StraightSegment, s)   = [zero(s), zero(s), s]
-tangent_local(seg::StraightSegment, _)    = [zero(seg.length), zero(seg.length), one(seg.length)]
-normal_local(seg::StraightSegment, _)     = [one(seg.length), zero(seg.length), zero(seg.length)]
+position_local(seg::StraightSegment, s)   = [zero(s), zero(s), sign(seg.length) * s]
+tangent_local(seg::StraightSegment, _)    = [zero(seg.length), zero(seg.length), sign(seg.length)]
+normal_local(seg::StraightSegment, _)     = [sign(seg.length), zero(seg.length), zero(seg.length)]
 binormal_local(seg::StraightSegment, _)   = [zero(seg.length), one(seg.length), zero(seg.length)]
-end_position_local(seg::StraightSegment)  = [zero(seg.length), zero(seg.length), arc_length(seg)]
-end_frame_local(seg::StraightSegment) = ([zero(seg.length), zero(seg.length), one(seg.length)],
-                                          [one(seg.length), zero(seg.length), zero(seg.length)],
-                                          [zero(seg.length), one(seg.length), zero(seg.length)])
+end_position_local(seg::StraightSegment)  = [zero(seg.length), zero(seg.length), seg.length]
+function end_frame_local(seg::StraightSegment)
+    sgn = sign(seg.length)
+    T = [zero(seg.length), zero(seg.length), sgn]
+    N = [sgn, zero(seg.length), zero(seg.length)]
+    B = [zero(seg.length), one(seg.length), zero(seg.length)]
+    return (T, N, B)
+end
 
 # -----------------------------------------------------------------------
 # BendSegment  (circular arc)

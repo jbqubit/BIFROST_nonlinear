@@ -188,7 +188,7 @@ end
 @testset "modify — direct field :pitch on HelixSegment (MCMmul)" begin
     spec = PathSpec()
     helix!(spec; radius = 0.03, pitch = 0.01, turns = 2.0,
-           meta = AbstractMeta[MCMmul(:pitch, 0.1)])
+           meta = AbstractMeta[MCMmul(:pitch, 1.1)])
     path = build(spec)
     seg = _modify_fiber_path(path).placed_segments[1].segment
     @test seg.pitch ≈ 0.01 * 1.1 atol = 1e-14
