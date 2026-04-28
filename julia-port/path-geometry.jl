@@ -762,11 +762,15 @@ function build(spec::PathSpec)
         s_eff += L_seg
     end
 
-    # Skip twist resolution when no segment carries a Twist. This also keeps
-    # MCM-valued (Particles) paths working: _resolve_twists requires a Float64
-    # s_end which is incompatible with Particles-typed cumulative arc length.
+    # Twist runs are anchored at the *nominal* arc-length boundaries. Twist
+    # data (rate, phi_0) is deterministic by design; nominalizing the anchors
+    # via _qc_nominalize lets MCM-typed segments (Particles s_eff) coexist
+    # with Twist meta on the same path. _qc_nominalize is identity on Real
+    # and uses MonteCarloMeasurements.pmean when Particles are present.
     has_twist = any(ps -> any(m -> m isa Twist, segment_meta(ps.segment)), placed)
-    resolved_twists = has_twist ? _resolve_twists(placed, Float64(s_eff)) : ResolvedTwistRate[]
+    resolved_twists = has_twist ?
+        _resolve_twists(placed, Float64(_qc_nominalize(s_eff))) :
+        ResolvedTwistRate[]
     return PathSpecCached(spec, placed, s_eff, resolved_twists)
 end
 
@@ -793,7 +797,7 @@ function _resolve_twists(placed::Vector{PlacedSegment}, s_end::Float64)
                 "$(length(twists_here)) Twist meta entries; at most one is permitted"))
         end
         if !isempty(twists_here)
-            push!(anchors, (Float64(ps.s_offset_eff), twists_here[1]))
+            push!(anchors, (Float64(_qc_nominalize(ps.s_offset_eff)), twists_here[1]))
         end
     end
 
@@ -941,7 +945,9 @@ function cartesian_distance(path::PathSpecCached, s1::Real, s2::Real)
 end
 
 function bounding_box(path::PathSpecCached; n::Int = 512)
-    ss = range(path.spec.s_start, path.s_end; length = n)
+    s0 = Float64(_qc_nominalize(path.spec.s_start))
+    s1 = Float64(_qc_nominalize(path.s_end))
+    ss = range(s0, s1; length = n)
     pts = [position(path, s) for s in ss]
     lo = minimum(reduce(hcat, pts); dims = 2) |> vec
     hi = maximum(reduce(hcat, pts); dims = 2) |> vec
@@ -1005,14 +1011,14 @@ function total_material_twist(
     rtol::Real    = 1e-8,
     atol::Real    = 0.0,
 )
-    s_lo = Float64(s_start)
-    s_hi = Float64(s_end)
+    s_lo = Float64(_qc_nominalize(s_start))
+    s_hi = Float64(_qc_nominalize(s_end))
     if s_lo > s_hi
         throw(ArgumentError(
             "total_material_twist: require s_start ≤ s_end; got s_start=$(s_lo), s_end=$(s_hi)"))
     end
-    ps0 = Float64(path.spec.s_start)
-    ps1 = Float64(path.s_end)
+    ps0 = Float64(_qc_nominalize(path.spec.s_start))
+    ps1 = Float64(_qc_nominalize(path.s_end))
     if !(ps0 - 1e-12 <= s_lo <= ps1 + 1e-12) || !(ps0 - 1e-12 <= s_hi <= ps1 + 1e-12)
         throw(ArgumentError(
             "total_material_twist: require path.s_start ≤ s ≤ path.s_end for both endpoints; " *
@@ -1055,14 +1061,14 @@ function total_frame_rotation(
     rtol::Real    = 1e-8,
     atol::Real    = 0.0,
 )
-    s_lo = Float64(s_start)
-    s_hi = Float64(s_end)
+    s_lo = Float64(_qc_nominalize(s_start))
+    s_hi = Float64(_qc_nominalize(s_end))
     if s_lo > s_hi
         throw(ArgumentError(
             "total_frame_rotation: require s_start ≤ s_end; got s_start=$(s_lo), s_end=$(s_hi)"))
     end
-    ps0 = Float64(path.spec.s_start)
-    ps1 = Float64(path.s_end)
+    ps0 = Float64(_qc_nominalize(path.spec.s_start))
+    ps1 = Float64(_qc_nominalize(path.s_end))
     if !(ps0 - 1e-12 <= s_lo <= ps1 + 1e-12) || !(ps0 - 1e-12 <= s_hi <= ps1 + 1e-12)
         throw(ArgumentError(
             "total_frame_rotation: require path.s_start ≤ s ≤ path.s_end for both endpoints; " *
@@ -1072,22 +1078,42 @@ function total_frame_rotation(
 
     # Geometric torsion: integrate segment-by-segment, with closed-form
     # shortcuts where available.
+    #
+    # The endpoints/clipping bounds (s_lo, s_hi, seg_s_*_nom) use nominalized
+    # arc lengths — they're deterministic interval delimiters. The
+    # *integration weight* (b_loc - a_loc) is computed from the segment's
+    # full Particles arc_length so length-uncertainty propagates through the
+    # τ_geom contribution. For full-path queries frac_a=0, frac_b=1 so
+    # b_loc - a_loc == L_seg exactly.
+    #
+    # The QuadGK fallback branch passes Particles bounds when the segment is
+    # MCM-typed; this requires `MonteCarloMeasurements.unsafe_comparisons(true)`
+    # in the calling scope. Currently only `QuinticConnector` falls through
+    # here (Helix/Straight/Bend/Catenary all hit closed-form branches).
     τ_total = 0.0
     rtolf = Float64(rtol)
     atolf = Float64(atol)
     for ps in path.placed_segments
         seg = ps.segment
-        seg_s_start = Float64(ps.s_offset_eff)
-        seg_s_end   = seg_s_start + Float64(arc_length(seg))
-        a = max(seg_s_start, s_lo)
-        b = min(seg_s_end,   s_hi)
-        b <= a && continue
-        a_loc = a - seg_s_start
-        b_loc = b - seg_s_start
+        seg_s_start_nom = Float64(_qc_nominalize(ps.s_offset_eff))
+        seg_s_end_nom   = seg_s_start_nom +
+                          Float64(_qc_nominalize(arc_length(seg)))
+        a_nom = max(seg_s_start_nom, s_lo)
+        b_nom = min(seg_s_end_nom,   s_hi)
+        b_nom <= a_nom && continue
+
+        L_seg  = arc_length(seg)
+        seg_span_nom = seg_s_end_nom - seg_s_start_nom
+        # Avoid 0/0 for zero-length segments (skipped above by b <= a).
+        frac_a = (a_nom - seg_s_start_nom) / seg_span_nom
+        frac_b = (b_nom - seg_s_start_nom) / seg_span_nom
+        a_loc = frac_a * L_seg
+        b_loc = frac_b * L_seg
+
         if seg isa StraightSegment || seg isa BendSegment || seg isa CatenarySegment
             # τ_geom = 0
         elseif seg isa HelixSegment
-            τ_total += geometric_torsion(seg, 0.0) * (b_loc - a_loc)
+            τ_total += geometric_torsion(seg, zero(L_seg)) * (b_loc - a_loc)
         else
             val, _ = QuadGK.quadgk(s -> geometric_torsion(seg, s), a_loc, b_loc;
                                    rtol = rtolf, atol = atolf)
@@ -1117,17 +1143,19 @@ fiber optics context.  This contribution should be added to the output of the
 polarization propagator in path-integral.jl whenever the fiber forms a loop.
 """
 function writhe(path::PathSpecCached; n::Int = 256)
-    ss = collect(range(path.spec.s_start, path.s_end; length = n))
+    s0 = Float64(_qc_nominalize(path.spec.s_start))
+    s1 = Float64(_qc_nominalize(path.s_end))
+    ss = collect(range(s0, s1; length = n))
     rs = [position(path, s) for s in ss]
     ts = [tangent(path, s)  for s in ss]
-    ds = (path.s_end - path.spec.s_start) / (n - 1)
+    ds = (s1 - s0) / (n - 1)
 
     Wr = 0.0
     for i in 1:n, j in 1:n
         i == j && continue
         r_ij = rs[i] - rs[j]
         d = norm(r_ij)
-        d < 1e-14 * (path.s_end - path.spec.s_start) && continue
+        d < 1e-14 * (s1 - s0) && continue
         Wr += dot(cross(ts[i], ts[j]), r_ij) / d^3
     end
     return Wr * ds^2 / (4π)
@@ -1289,14 +1317,16 @@ function sample_path(path::PathSpecCached, s1::Real, s2::Real; fidelity::Float64
     @assert s2 > s1    "sample_path: require s2 > s1"
     @assert fidelity > 0.0 "sample_path: fidelity must be positive"
 
-    s_lo = Float64(s1)
-    s_hi = Float64(s2)
+    s_lo = Float64(_qc_nominalize(s1))
+    s_hi = Float64(_qc_nominalize(s2))
 
     # Collect arc-length stations segment by segment, sharing junction points.
+    # Segment edges are deterministic — nominalize Particles cumulative offsets
+    # so range() and clipping comparisons stay Float64.
     all_s = Float64[]
     for ps in path.placed_segments
-        seg_s_start = ps.s_offset_eff
-        seg_s_end   = ps.s_offset_eff + arc_length(ps.segment)
+        seg_s_start = Float64(_qc_nominalize(ps.s_offset_eff))
+        seg_s_end   = seg_s_start + Float64(_qc_nominalize(arc_length(ps.segment)))
 
         a = max(s_lo, seg_s_start)
         b = min(s_hi, seg_s_end)
@@ -1344,17 +1374,19 @@ function normalize_breakpoints(breakpoints::AbstractVector{<:Real})
 end
 
 function path_segment_breakpoints(path::PathSpecCached)
-    points = Real[path.spec.s_start]
+    points = Float64[Float64(_qc_nominalize(path.spec.s_start))]
     for ps in path.placed_segments
-        push!(points, ps.s_offset_eff)
-        push!(points, ps.s_offset_eff + arc_length(ps.segment))
+        push!(points, Float64(_qc_nominalize(ps.s_offset_eff)))
+        push!(points, Float64(_qc_nominalize(
+            ps.s_offset_eff + arc_length(ps.segment))))
     end
-    push!(points, path.s_end)
+    push!(points, Float64(_qc_nominalize(path.s_end)))
     return normalize_breakpoints(points)
 end
 
 function path_twist_breakpoints(path::PathSpecCached)
-    points = Real[path.spec.s_start, path.s_end]
+    points = Float64[Float64(_qc_nominalize(path.spec.s_start)),
+                     Float64(_qc_nominalize(path.s_end))]
     for r in path.resolved_twists
         push!(points, r.s_eff_start)
         push!(points, r.s_eff_end)

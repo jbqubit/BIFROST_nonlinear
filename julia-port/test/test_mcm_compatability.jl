@@ -402,3 +402,129 @@ end
         MonteCarloMeasurements.unsafe_comparisons(false)
     end
 end
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ▓▓▓  MCM path with Twist overlay — gating + propagator end-to-end  ▓▓▓
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# These tests exercise the *primary* MCM consumer (propagate_fiber) on a fiber
+# whose centerline geometry carries Particles uncertainty AND whose meta
+# carries a deterministic Twist. Tier 1 makes build() succeed for this combo;
+# Tier 2 hardens accumulators and visualization-layer queries.
+
+@testset "MCM :: build() succeeds for MCM segment + Twist meta" begin
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        spec = PathSpecBuilder()
+        bend!(spec; radius = 0.05 ± 0.005, angle = π/2,
+              meta = AbstractMeta[Twist(; rate = 1.0)])
+        path = build(spec)   # was a hard crash before Tier 1.1
+        @test arc_length(path) isa Particles
+        @test length(path.resolved_twists) == 1
+        @test path.resolved_twists[1].rate == 1.0
+        # Twist anchor positions are nominalized Float64 by design.
+        @test path.resolved_twists[1].s_eff_start isa Float64
+        @test path.resolved_twists[1].s_eff_end   isa Float64
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end
+
+@testset "MCM :: breakpoints are Float64 even for MCM paths" begin
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        spec = PathSpecBuilder()
+        bend!(spec; radius = 0.05 ± 0.005, angle = π/2)
+        bend!(spec; radius = 0.04, angle = π/4,
+              meta = AbstractMeta[Twist(; rate = 2.0)])
+        path = build(spec)
+        bps = breakpoints(path)
+        @test eltype(bps) == Float64
+        @test issorted(bps)
+        @test first(bps) ≈ 0.0
+        # last breakpoint should match nominal path end.
+        @test last(bps) ≈ pmean(arc_length(path)) rtol=1e-3
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end
+
+@testset "MCM :: propagate_fiber lifts Particles into Jones matrix on MCM + Twist path" begin
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        xs = FiberCrossSection(
+            GermaniaSilicaGlass(0.036),
+            GermaniaSilicaGlass(0.0),
+            8.2e-6,
+            125e-6,
+        )
+        λ = 1550e-9
+        T_ref = 297.15 ± 2.0   # uncertain reference temperature
+
+        spec = PathSpecBuilder()
+        bend!(spec; radius = 0.05 ± 0.005, angle = π/2,
+              meta = AbstractMeta[Twist(; rate = 1.0)])
+        path = build(spec)   # gated by Tier 1.1
+        fiber = Fiber(path; cross_section = xs, T_ref_K = T_ref)
+
+        # End-to-end: propagator returns a Particles-bearing Jones matrix.
+        J, _ = propagate_fiber(fiber; λ_m = λ, rtol = 1e-7, atol = 1e-10)
+        @test eltype(J) <: Complex
+        # At least one entry must carry Particles (MCM bend radius + uncertain
+        # T_ref must propagate through to J).
+        has_particles = any(real(J[i, j]) isa Particles || imag(J[i, j]) isa Particles
+                            for i in 1:2, j in 1:2)
+        @test has_particles
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end
+
+@testset "MCM :: total_frame_rotation propagates length-uncertainty (Tier 2.2)" begin
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        # HelixSegment with uncertain pitch → arc_length is Particles, τ_geom
+        # is Particles. total_frame_rotation should return Particles with
+        # non-degenerate spread.
+        spec = PathSpecBuilder()
+        helix!(spec; radius = 0.03, pitch = 0.01 ± 0.001, turns = 2.0)
+        path = build(spec)
+        ψ = total_frame_rotation(path)
+        @test ψ isa Particles
+        @test pstd(ψ) > 0.0
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end
+
+@testset "MCM :: total_material_twist returns Float64 with default endpoints (Tier 2.1)" begin
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        spec = PathSpecBuilder()
+        bend!(spec; radius = 0.05 ± 0.005, angle = π/2,
+              meta = AbstractMeta[Twist(; rate = 1.0)])
+        path = build(spec)   # path.s_end is Particles
+        # Default endpoints used to crash on Float64(::Particles); now nominalize.
+        Ω = total_material_twist(path)
+        @test Ω isa Float64
+        # Twist rate * nominal arc length.
+        @test Ω ≈ 1.0 * pmean(arc_length(path)) rtol=1e-6
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end
+
+@testset "MCM :: visualization-layer queries don't crash on MCM paths (Tier 2.3)" begin
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        spec = PathSpecBuilder()
+        bend!(spec; radius = 0.05 ± 0.005, angle = π/2)
+        path = build(spec)
+        @test_nowarn bounding_box(path; n = 32)
+        @test_nowarn writhe(path; n = 16)
+        @test_nowarn sample_path(path, 0.0, pmean(arc_length(path)) - 1e-9)
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end

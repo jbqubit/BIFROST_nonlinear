@@ -21,8 +21,14 @@ uses `AbstractPathSegment` and `AbstractMeta` from there.
 # Nominalization (deterministic branching under MCM)
 # ---------------------------------------------------------------------------
 
-_qc_nominalize(x::Real) = x
-function _qc_nominalize(x)
+# `Particles{T,N} <: Real` (but not <: AbstractFloat). Dispatch the identity
+# branch on the concrete already-nominal types so Particles falls through to
+# the pmean lookup below. Listing AbstractFloat first covers Float64/BigFloat;
+# Integer covers Int*; the generic Real method catches Particles and other
+# custom Real subtypes that need pmean reduction.
+_qc_nominalize(x::AbstractFloat) = x
+_qc_nominalize(x::Integer) = x
+function _qc_nominalize(x::Real)
     if isdefined(Main, :MonteCarloMeasurements)
         M = getfield(Main, :MonteCarloMeasurements)
         if isdefined(M, :pmean)
@@ -32,6 +38,9 @@ function _qc_nominalize(x)
     end
     return x
 end
+# Fallback for anything that isn't a Real (shouldn't normally happen but
+# preserves the prior catch-all behavior).
+_qc_nominalize(x) = x
 
 # ---------------------------------------------------------------------------
 # Gauss–Legendre 4-point nodes/weights for arc-length quadrature
