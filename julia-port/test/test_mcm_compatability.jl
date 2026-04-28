@@ -293,7 +293,7 @@ end
     try
         # ---- Single uncertain bend, queried through the Path interface
         R_nom = 0.05
-        spec = PathSpec()
+        spec = PathSpecBuilder()
         bend!(spec; radius = R_nom ± 0.005, angle = π/2)
         path = build(spec)
 
@@ -306,7 +306,7 @@ end
         @test tangent(path, 0.01) isa Vector{<:Particles}
 
         # ---- Mixed certain/uncertain: straight (Float64) + bend (Particles)
-        spec2 = PathSpec()
+        spec2 = PathSpecBuilder()
         straight!(spec2; length = 0.02)
         bend!(spec2; radius = 0.05 ± 0.005, angle = π/2)
         path2 = build(spec2)
@@ -316,8 +316,39 @@ end
         # Query in the uncertain bend
         @test curvature(path2, 0.03) isa Particles
 
+        # ---- T-GUARDRAIL: segment creation helpers preserve Particles inputs
+        spec_straight = PathSpecBuilder()
+        straight!(spec_straight; length = 0.1 ± 0.005)
+        path_straight = build(spec_straight)
+        @test arc_length(path_straight) isa Particles
+        @test pmean(arc_length(path_straight)) ≈ 0.1 rtol=1e-3
+
+        spec_bend = PathSpecBuilder()
+        bend!(spec_bend; radius = R_nom ± 0.005, angle = π/2,
+              axis_angle = 0.1 ± 0.01)
+        path_bend = build(spec_bend)
+        @test curvature(path_bend, 0.01) isa Particles
+        @test tangent(path_bend, 0.01) isa Vector{<:Particles}
+
+        spec_helix = PathSpecBuilder()
+        helix!(spec_helix; radius = 0.03 ± 0.003, pitch = 0.01 ± 0.001,
+               turns = 2.0)
+        path_helix = build(spec_helix)
+        @test arc_length(path_helix) isa Particles
+        @test curvature(path_helix, 0.01) isa Particles
+        @test geometric_torsion(path_helix, 0.01) isa Particles
+
+        spec_catenary = PathSpecBuilder()
+        catenary!(spec_catenary; a = 0.1 ± 0.005, length = 0.05,
+                  axis_angle = 0.2 ± 0.02)
+        path_catenary = build(spec_catenary)
+        @test position(path_catenary, 0.025) isa Vector{<:Particles}
+
+        # TODO: twist refactor — pending per-segment-meta twist subsystem.
+        @test_skip true
+
         # ---- T-PHYSICS: straight fiber with uncertain length → zero curvature everywhere
-        spec4 = PathSpec()
+        spec4 = PathSpecBuilder()
         straight!(spec4; length = 0.1 ± 0.005)
         path4 = build(spec4)
         for s in (0.01, 0.05, 0.09)
@@ -346,9 +377,9 @@ end
         T_nom = 297.15
         T_ref = T_nom ± 2.0
 
-        spec = PathSpec()
+        spec = PathSpecBuilder()
         bend!(spec; radius = 0.05, angle = π / 2, axis_angle = 0.1)
-        twist!(spec; s_start = 0.0, length = 0.05 * (π / 2), rate = 10.0)
+        # TODO: twist refactor — twist!(spec; s_start = 0.0, length = 0.05 * (π / 2), rate = 10.0)
         path = build(spec)
         fiber = Fiber(path; cross_section = xs, T_ref_K = T_ref)
 

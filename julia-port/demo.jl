@@ -195,7 +195,7 @@ function demo_fiber_path(;
     title::AbstractString = "Fiber path geometry: bends, catenary, twist",
 )
     PG = PathGeometry
-    spec = PG.PathSpec()
+    spec = PG.PathSpecBuilder()
     L_lead = 0.10
     R1 = 0.05
     θ1 = π / 2
@@ -207,13 +207,13 @@ function demo_fiber_path(;
     PG.bend!(spec; radius = 0.06, angle = π / 3)
     PG.straight!(spec; length = 0.08)
     s_twist = L_lead + R1 * abs(θ1)
-    PG.twist!(spec; s_start = s_twist, length = L_spacer, rate = 35.0)
+    # TODO: twist refactor —     PG.twist!(spec; s_start = s_twist, length = L_spacer, rate = 35.0)
     path = PG.build(spec)
     println("Arc length (effective): ", PG.path_length(path))
     println("Writhe: ", PG.writhe(path))
     plot_path = write_path_geometry_plot3d(
         path,
-        path.s_start,
+        path.spec.s_start,
         path.s_end;
         fidelity = fidelity,
         output = output,
@@ -240,7 +240,7 @@ function demo_fiber_path_segment_labels(;
 )
     PG = PathGeometry
     _nick(s) = PG.AbstractMeta[PG.Nickname(s)]
-    spec = PG.PathSpec()
+    spec = PG.PathSpecBuilder()
     PG.straight!(spec; length = 0.08, meta = _nick("lead-in"))
     PG.bend!(spec; radius = 0.06, angle = π / 2, meta = _nick("90° bend"))
     PG.straight!(spec; length = 0.06, meta = _nick("spacer"))
@@ -251,7 +251,7 @@ function demo_fiber_path_segment_labels(;
     println("Arc length (effective): ", PG.path_length(path), " m")
     plot_path = write_path_geometry_plot3d(
         path,
-        path.s_start,
+        path.spec.s_start,
         path.s_end;
         fidelity = fidelity,
         output = output,
@@ -277,7 +277,7 @@ function demo_fiber_path_helix(;
 )
     PG = PathGeometry
     paths = map([0.0, π/3, 2π/3]) do axis_angle
-        spec = PG.PathSpec()
+        spec = PG.PathSpecBuilder()
         PG.straight!(spec; length = 0.05)
         PG.helix!(spec; radius = 0.03, pitch = 0.02, turns = 2.0, axis_angle)
         PG.straight!(spec; length = 0.05)
@@ -292,7 +292,7 @@ function demo_fiber_path_helix(;
         angle_label = ["0", "pi_3", "2pi_3"][i]
         out = "$(base)_$(angle_label)$(ext)"
         write_path_geometry_plot3d(
-            path, path.s_start, path.s_end;
+            path, path.spec.s_start, path.s_end;
             fidelity = fidelity,
             output = out,
             title = "$(title) — axis_angle=$(["0", "π/3", "2π/3"][i])",
@@ -315,7 +315,7 @@ function demo_fiber_path_jumps_min_radius(;
     title::AbstractString = "JumpBy and JumpTo: Hermite connectors, min_bend_radius",
 )
     PG = PathGeometry
-    spec = PG.PathSpec()
+    spec = PG.PathSpecBuilder()
 
     PG.straight!(spec; length = 1)
     PG.jumpto!(spec; destination = (1, 0.0, 1), tangent = (0.0, 0.0, -1.0),
@@ -334,7 +334,7 @@ function demo_fiber_path_jumps_min_radius(;
     path = PG.build(spec)
 
     plot_path = write_path_geometry_plot3d(
-        path, path.s_start, path.s_end;
+        path, path.spec.s_start, path.s_end;
         fidelity = fidelity, output   = output, title    = title )
     return (; path, plot_path)
 end
@@ -364,7 +364,7 @@ function demo_fiber_path_jumps2(;
     title::AbstractString = "Multi-jump routing: JumpBy (with/without tangent_out) + JumpTo",
 )
     PG = PathGeometry
-    spec = PG.PathSpec()
+    spec = PG.PathSpecBuilder()
 
     PG.straight!(spec; length = 0.05)
 
@@ -392,7 +392,7 @@ function demo_fiber_path_jumps2(;
     println("Writhe     : ", round(PG.writhe(path); digits = 6))
 
     plot_path = write_path_geometry_plot3d(
-        path, path.s_start, path.s_end;
+        path, path.spec.s_start, path.s_end;
         fidelity = fidelity,
         output   = output,
         title    = title,
@@ -597,7 +597,7 @@ end
 # straight). Returns the modified path and the target segment index.
 function _build_modify_variant(L::Float64, R::Float64,
                                target_idx::Int, target_meta::Vector{AbstractMeta})
-    spec = PathSpec()
+    spec = PathSpecBuilder()
     straight!(spec; length = L, meta = target_idx == 1 ? target_meta : AbstractMeta[])
     bend!(spec; radius = R, angle = π, axis_angle = 0.0,
           meta = target_idx == 2 ? target_meta : AbstractMeta[])
@@ -620,7 +620,7 @@ const _MODIFY_HELIX_TURNS  = 1.5
 #   1 = first straight, 2 = bend, 3 = helix, 4 = second straight.
 function _build_modify_variant_helix(L::Float64, R::Float64,
                                      target_idx::Int, target_meta::Vector{AbstractMeta})
-    spec = PathSpec()
+    spec = PathSpecBuilder()
     straight!(spec; length = L, meta = target_idx == 1 ? target_meta : AbstractMeta[])
     bend!(spec; radius = R, angle = π, axis_angle = 0.0,
           meta = target_idx == 2 ? target_meta : AbstractMeta[])
@@ -636,7 +636,7 @@ function _build_modify_variant_helix(L::Float64, R::Float64,
 end
 
 # Sample a single placed segment's centerline in the global frame.
-function _sample_segment_xyz(path::Path, seg_index::Int; n::Int = 128)
+function _sample_segment_xyz(path::PathSpecCached, seg_index::Int; n::Int = 128)
     ps = path.placed_segments[seg_index]
     s0 = ps.s_offset_eff
     s1 = s0 + arc_length(ps.segment)
@@ -689,7 +689,7 @@ function _modify_row_html(output::AbstractString, title::AbstractString;
 }""")
         end
         # Green marker at the path start (origin of this variant).
-        p0 = position(path, path.s_start)
+        p0 = position(path, path.spec.s_start)
         push!(start_xs, Float64(p0[1]) + dx)
         push!(start_ys, Float64(p0[2]))
         push!(start_zs, Float64(p0[3]))
@@ -810,7 +810,7 @@ function demo_fiber_paddles_mcm(;
     # Assemble fiber arc-length domain [0, L_total] with one low-level custom
     # bend segment per paddle.
     s = 0.0
-    path_spec = PathSpec()
+    path_spec = PathSpecBuilder()
     for p in paddles
         L = 2π * p.radius * p.turns
         bend!(path_spec; radius = p.radius, angle = 2π * p.turns, axis_angle = p.axis)
@@ -880,6 +880,166 @@ function demo_fiber_paddles_mcm(;
         plot_fiber = plot_fiber,
     )
 end
+
+"""
+    demo_seven_segment_mcm_temperature(; ΔT_K, N, ...)
+
+End-to-end MCM stack test: a 7-segment fiber whose middle segment (1000 m
+straight, with a constant material-twist overlay) carries a per-segment
+`MCMadd(:T_K, ΔT)` annotation drawn from `Uniform(-ΔT_K, +ΔT_K)`.
+
+This demo's purpose is to surface problems in the full meta → modify →
+propagate stack. As of writing it has surfaced three:
+
+1. (FIXED) `path_segment_breakpoints` / `path_twist_breakpoints` in
+   `path-geometry.jl` previously coerced every breakpoint to `Float64`,
+   crashing as soon as a perturbed segment's `s_offset_eff` or
+   `arc_length` carried `Particles`. Now both functions accept `<:Real`.
+
+2. (OPEN) `_find_segment_index` in `fiber-path-modify.jl` returns the
+   first segment whose `seg_old_end >= s_eff_start - 1e-12`, so a twist
+   overlay whose `s_start` exactly equals a segment boundary is mapped
+   onto the *earlier* segment (with αi = 1) and the temperature signal
+   on the twist window is silently dropped. Workaround in this demo:
+   start the overlay 0.5 m into the middle segment.
+
+3. (OPEN) `propagate_piecewise` reduces interval bounds to `Float64` via
+   `scalar_reduce` before calling `propagate_interval!`. For a constant-K
+   interval, this discards the interval-length Particles factor entirely
+   — a uniform-rate twist over an uncertain-length straight produces
+   zero output spread even though the optical path length is uncertain.
+   Surfacing the ΔT signal on this demo's geometry would require either
+   a non-constant K(s) on the middle segment (e.g. a bend) or a change
+   to how length-uncertainty composes with constant generators.
+"""
+function demo_seven_segment_mcm_temperature(;
+    ΔT_K::Float64 = 5.0,
+    N::Int = 200,
+    twist_rate::Float64 = 0.05,        # rad / m on the middle segment
+    poincare_output::AbstractString =
+        joinpath(@__DIR__, "..", "output", "seven-seg-mcm-temperature-poincare.html"),
+    title::AbstractString = "Seven-segment fiber — middle-segment ΔT MCM (±$(ΔT_K) K, N=$(N))",
+)
+    # TODO: twist refactor — this demo depends on a material-twist overlay
+    # to surface segment-length uncertainty as polarization spread. Pending
+    # the per-segment-meta twist subsystem, the demo is skipped.
+    @info "demo_seven_segment_mcm_temperature: skipped pending twist refactor"
+    return (; poincare = "")
+    L_lead   = 10.0
+    L_spacer =  5.0
+    L_mid    = 1000.0
+    R_bend   =  5.0
+    angle    = π / 12
+
+    ΔT_ensemble = Particles(N, MonteCarloMeasurements.Distributions.Uniform(-ΔT_K, ΔT_K))
+    ΔT_samples  = ΔT_ensemble.particles
+
+    spec = PathSpecBuilder()
+    straight!(spec; length = L_lead,   meta = AbstractMeta[Nickname("lead-in")])
+    bend!(spec; radius = R_bend, angle = angle, axis_angle = 0.0,
+                meta = AbstractMeta[Nickname("bend-1")])
+    straight!(spec; length = L_spacer, meta = AbstractMeta[Nickname("spacer-1")])
+    # Segment 4: the long middle straight with per-segment ΔT MCM.
+    straight!(spec; length = L_mid,
+              meta = AbstractMeta[Nickname("middle"),
+                                  MCMadd(:T_K, ΔT_ensemble)])
+    straight!(spec; length = L_spacer, meta = AbstractMeta[Nickname("spacer-2")])
+    bend!(spec; radius = R_bend, angle = -angle, axis_angle = 0.0,
+                meta = AbstractMeta[Nickname("bend-2")])
+    straight!(spec; length = L_lead,   meta = AbstractMeta[Nickname("lead-out")])
+
+    # Constant material twist sitting strictly inside the middle segment so
+    # `_find_segment_index` in fiber-path-modify.jl picks segment 4 (it
+    # otherwise returns the earlier segment for boundary-touching s values,
+    # which leaves αi = 1.0 and discards the temperature signal on the
+    # twist overlay).
+    s_mid_start = L_lead + R_bend * angle + L_spacer + 0.5
+    # TODO: twist refactor —     twist!(spec; s_start = s_mid_start, length = L_mid - 1.0, rate = twist_rate)
+
+    path = build(spec)
+    fiber_baseline = Fiber(path;
+        cross_section = DEMO_FIBER_CROSS_SECTION, T_ref_K = DEMO_T_K)
+
+    # Apply per-segment :T_K MCM by thermally rescaling segment geometries.
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    result = try
+        path_mod  = modify(fiber_baseline)
+        fiber_mod = Fiber(path_mod;
+            cross_section = DEMO_FIBER_CROSS_SECTION, T_ref_K = DEMO_T_K)
+        J_, stats_ = propagate_fiber(fiber_mod;
+            λ_m  = DEMO_λ_M,
+            rtol = 1e-7,
+            atol = 1e-10,
+            h_init = 0.5)
+        (J = J_, stats = stats_, fiber = fiber_mod)
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+    J = result.J
+
+    H_STATE = ComplexF64[1.0 + 0.0im, 0.0 + 0.0im]
+    ψ_out   = J * H_STATE
+
+    samples_re = [real(ψ_out[k]).particles for k in 1:2]
+    samples_im = [imag(ψ_out[k]).particles for k in 1:2]
+    ψ_samples = [ComplexF64[samples_re[1][j] + im * samples_im[1][j],
+                            samples_re[2][j] + im * samples_im[2][j]] for j in 1:N]
+    stokes_samples = [stokes_from_jones(ψ_samples[j]) for j in 1:N]
+
+    ψ_mean_unnorm = ComplexF64[
+        pmean(real(ψ_out[1])) + im * pmean(imag(ψ_out[1])),
+        pmean(real(ψ_out[2])) + im * pmean(imag(ψ_out[2])),
+    ]
+    ψ_mean   = ψ_mean_unnorm / norm(ψ_mean_unnorm)
+    rep_mean = poincare_vector_representation(ψ_mean)
+
+    _write_poincare_cloud_plot(
+        rep_mean, stokes_samples, ΔT_samples;
+        output = poincare_output,
+        title  = title,
+    )
+
+    println("Wrote Poincaré cloud to: ", poincare_output)
+
+    return (
+        fiber          = result.fiber,
+        ΔT_samples     = ΔT_samples,
+        ψ_samples      = ψ_samples,
+        stokes_samples = stokes_samples,
+        plot_poincare  = poincare_output,
+    )
+end
+
+"""
+    demo_fiber_helix_mcm_twist(; output, fidelity, title)
+
+Illustrate application of MCM twist to fiber segment with a helical twist at the center. MCM is used
+to wobble the twist in the fiber before the helix to mimic vibration/air flow in the lab. 
+"""
+function demo_fiber_helix_mcm_twist(;
+    output::AbstractString = joinpath(@__DIR__, "..", "output", "demo_fiber_helix_mcm_twist.html"),
+    fidelity::Float64 = 1.0,
+    title::AbstractString = "demo_fiber_helix_mcm_twist()",
+)
+    PG = PathGeometry
+    _nick(s) = PG.AbstractMeta[PG.Nickname(s)]
+    spec = PG.PathSpecBuilder()
+    PG.straight!(spec; length = 1, meta = _nick("lead-in"))
+    # TODO: twist refactor —     PG.twist!(spec; s_start = 0, length = 1, rate = 1 ± 0.1) # MCM twist with mean 1 turn/unit length and ±0.1 uncertainty
+    PG.helix!(spec; radius = 0.5, pitch = 0.05, turns = 4, axis_angle = 0.0, meta = _nick("helix"))
+    PG.straight!(spec; length = 1, meta = _nick("lead-out"))
+    path = PG.build(spec)
+    plot_path = write_path_geometry_plot3d(
+        path,
+        path.spec.s_start,
+        path.s_end;
+        fidelity = fidelity,
+        output = output,
+        title = title,
+    )
+    return (; path, plot_path)
+end
+
 
 # Minimal Plotly HTML writer for a Poincare sphere with a per-sample scatter
 # cloud. Uses `render_poincare_sphere` for the sphere/equator scaffolding and
@@ -1013,6 +1173,21 @@ const DEMO_INDEX = [
                "show how `MCMadd(:length, …)`, `MCMmul(:radius, …)`, and `MCMadd(:angle, …)` " *
                "perturb a single target segment (red) against the unmodified baseline (green)."
     ),
+    (
+        fn   = demo_seven_segment_mcm_temperature,
+        kwargs = NamedTuple(),
+        desc = "Seven-segment fiber (lead · bend · spacer · 1000 m middle straight w/ twist · " *
+               "spacer · bend · lead). Middle segment carries `MCMadd(:T_K, Uniform(-5,5))` " *
+               "via meta; `modify` rescales its length, then `propagate_fiber` lifts the " *
+               "Particles ensemble through the Jones integrator. End-to-end MCM stack test."
+    ),
+    (
+        fn   = demo_fiber_helix_mcm_twist,
+        kwargs = NamedTuple(),
+        desc = "Illustrate application of MCM twist to fiber segment with a helical twist at the " *
+            "center. MCM is used to wobble the twist in the fiber before the helix to mimic" * 
+            "vibration/air flow in the lab."
+    )
 ]
 
 """

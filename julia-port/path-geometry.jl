@@ -1,26 +1,29 @@
 """
 path-geometry.jl
 
-Three-dimensional path geometry for smooth space curves. 
+Three-dimensional path geometry for smooth space curves.
 
 
-# Assembly of a Path
+# Three layers
 
-struct Path is the immutable built struct that represents a compiled, 
-ready-to-query geometric path. It's the counterpart to the mutable 
-authoring struct PathSpec.
+- `PathSpecBuilder` (mutable) — authoring target for the bang-DSL below.
+- `PathSpec` (immutable) — frozen snapshot: `segments` + `s_start`.
+- `PathSpecCached` (immutable) — derived layout: `spec` + `placed_segments` + `s_end`.
 
-Two approaches are supported to build a PathSpec and can be freely mixed:
+`build(builder_or_spec) → PathSpecCached` runs the placement loop. Queries
+(`position`, `tangent`, etc.) take a `PathSpecCached`.
+
+# Assembly
+
+Two approaches are supported and can be freely mixed on a `PathSpecBuilder`:
 
 (1) Sliding-frame approach: each segment is specified relative to the frame left by
     the previous segment. The tangent direction at the start of each new segment is
     exactly the tangent at the end of the previous one, so continuity is structural.
 
-        spec = PathSpec()
+        spec = PathSpecBuilder()
         straight!(spec; length=1.0)
-        bend!(spec; radius=0.05, angle=π/2) [ASK1]
-        twist!(spec; s_start=0.3, length=0.8, rate=2π)          # constant
-        twist!(spec; s_start=0.3, length=0.8, rate=s->sin(s))  # function
+        bend!(spec; radius=0.05, angle=π/2)
 
 (2) Endpoint approach: specify the displacement (jumpby!) or absolute destination
     (jumpto!) and an optional outgoing tangent. The connecting segment is an Euler
@@ -28,6 +31,14 @@ Two approaches are supported to build a PathSpec and can be freely mixed:
 
         jumpby!(spec; delta=(0.0, 0.0, 0.5))
         jumpto!(spec; destination=(1.0, 0.0, 0.5), tangent=(0.0, 1.0, 0.0))
+
+# Twist subsystem (STUB)
+
+`TwistOverlay`, `ResolvedTwistOverlay`, `ResolvedTwistRate`, `twist!`,
+`material_twist`, `total_material_twist`, and the material-twist branch of
+`total_frame_rotation` are pending a planned refactor that moves twist into
+per-segment meta. They remain defined but are orphaned from
+`PathSpecCached`; calling them errors with a "pending refactor" message.
 
 # Shrinkage
 
@@ -41,7 +52,7 @@ are applied by `fiber-path-shrinkage.jl` as a `shrink(path, α) → Path` transf
     arc_length(path, s1, s2)
     curvature(seg_or_path, s)
     geometric_torsion(seg_or_path, s)
-    material_twist(path, s)
+    material_twist(path, s)              # STUB — errors
     position(path, s)
     tangent(path, s)
     normal(path, s)
@@ -54,8 +65,8 @@ are applied by `fiber-path-shrinkage.jl` as a `shrink(path, α) → Path` transf
     bounding_box(path)
     total_turning_angle(path)
     total_torsion(path)
-    total_material_twist(path; s_start, s_end, n_quad)
-    total_frame_rotation(path; s_start, s_end, n_quad)
+    total_material_twist(path; s_start, s_end, n_quad)   # STUB — errors
+    total_frame_rotation(path; s_start, s_end, n_quad)   # STUB — errors
     writhe(path)
     sample(path, s_values)
     sample_uniform(path; n)
@@ -98,21 +109,42 @@ segment_meta(seg::AbstractPathSegment) =
     :meta ∈ fieldnames(typeof(seg)) ? seg.meta : AbstractMeta[]
 
 # -----------------------------------------------------------------------
-# TwistOverlay
+# TwistOverlay  (STUB — see twist subsystem stub region below)
 # -----------------------------------------------------------------------
 
 """
     TwistOverlay(s_start, length, rate)
 
 Material twist applied over an arc-length interval `[s_start, s_start + length]`.
-`rate` is a function `rate(s) → Float64` giving the twist rate in rad/m of
-arc-length. Use `twist!` to construct overlays — it handles conversion from
-scalar or function inputs.
+`rate` is a function giving the twist rate in rad/m of arc-length.
+
+STUB: orphaned from `PathSpecCached` pending the twist → per-segment-meta refactor.
 """
 struct TwistOverlay
     s_start::Float64
     length::Float64
     rate::Function
+end
+
+# Resolved twist data — defined for namespace continuity but not produced
+# by `build()` under the current refactor. Pending twist → per-segment-meta.
+struct ResolvedTwistRate
+    s_eff_start::Real
+    s_eff_end::Real
+    rate::Function
+end
+
+struct ResolvedTwistOverlay
+    rates::Vector{ResolvedTwistRate}
+end
+
+"""
+    twist!(spec; s_start, length, rate)  (STUB)
+
+Pending twist → per-segment-meta refactor; calling errors loudly.
+"""
+function twist!(::Any; s_start::Real = 0.0, length::Real = 0.0, rate = 0.0)
+    error("twist!: twist subsystem pending refactor (per-segment meta)")
 end
 
 # -----------------------------------------------------------------------
@@ -519,8 +551,8 @@ from the polynomial derivatives.
 !!! note "MCM compatibility"
     `HermiteConnector`, `JumpBy`, and `JumpTo` are Float64-only. Their internals
     (Newton inversion of the arc-length table, `_perp_unit` fallback, tuple
-    arithmetic) are not lifted to `Particles`. A `PathSpec` that mixes an
-    uncertain `BendSegment`/`HelixSegment`/etc. with a `jumpby!`/`jumpto!`
+    arithmetic) are not lifted to `Particles`. A `PathSpecBuilder` that mixes
+    an uncertain `BendSegment`/`HelixSegment`/etc. with a `jumpby!`/`jumpto!`
     will fail at `build()`.
 """
 struct HermiteConnector <: AbstractPathSegment
@@ -805,67 +837,7 @@ end
 _resolve_at_placement(seg::AbstractPathSegment, ::AbstractVector, ::AbstractMatrix) = seg
 
 # -----------------------------------------------------------------------
-# PathSpec  (mutable authoring struct)
-# -----------------------------------------------------------------------
-
-mutable struct PathSpec
-    segments::Vector{AbstractPathSegment}
-    twist_overlays::Vector{TwistOverlay}
-    PathSpec() = new(AbstractPathSegment[], TwistOverlay[])
-end
-
-function straight!(spec::PathSpec; length, meta = AbstractMeta[])
-    push!(spec.segments, StraightSegment(length; meta))
-    return spec
-end
-
-function bend!(spec::PathSpec; radius::Real, angle::Real, axis_angle::Real = 0.0,
-               meta = AbstractMeta[])
-    push!(spec.segments, BendSegment(radius, angle, axis_angle; meta))
-    return spec
-end
-
-function helix!(spec::PathSpec; radius::Real, pitch::Real, turns::Real,
-                axis_angle::Real = 0.0, meta = AbstractMeta[])
-    push!(spec.segments, HelixSegment(radius, pitch, turns, axis_angle; meta))
-    return spec
-end
-
-function catenary!(spec::PathSpec; a::Real, length::Real, axis_angle::Real = 0.0,
-                   meta = AbstractMeta[])
-    push!(spec.segments, CatenarySegment(a, length, axis_angle; meta))
-    return spec
-end
-
-function jumpby!(spec::PathSpec; delta, tangent = nothing, min_bend_radius = nothing,
-                 meta = AbstractMeta[])
-    push!(spec.segments, JumpBy(delta; tangent_out = tangent, min_bend_radius, meta))
-    return spec
-end
-
-function jumpto!(spec::PathSpec; destination, tangent = nothing, min_bend_radius = nothing,
-                 meta = AbstractMeta[])
-    push!(spec.segments, JumpTo(destination; tangent_out = tangent, min_bend_radius, meta))
-    return spec
-end
-
-"""
-    twist!(spec; s_start, length, rate)
-
-Add a material twist overlay covering arc-length `[s_start, s_start + length]`.
-
-`rate` is the material twist rate in rad/m of arc-length:
-- `Real` — converted to a constant-rate function `_ -> rate`
-- `Function` — `rate(s)` evaluated at arc-length `s`
-"""
-function twist!(spec::PathSpec; s_start::Real, length::Real, rate)
-    r = rate isa Function ? rate : let τ = Float64(rate); _ -> τ; end
-    push!(spec.twist_overlays, TwistOverlay(Float64(s_start), Float64(length), r))
-    return spec
-end
-
-# -----------------------------------------------------------------------
-# PlacedSegment and resolved twist data used by Path
+# PlacedSegment  (derived layout — lives inside PathSpecCached)
 # -----------------------------------------------------------------------
 
 struct PlacedSegment
@@ -876,57 +848,91 @@ struct PlacedSegment
                                 # transforms local vectors → global: v_g = frame * v_l
 end
 
-struct ResolvedTwistRate
-    s_eff_start::Real
-    s_eff_end::Real
-    rate::Function                     # τ_mat(s_eff) in rad/m
-end
-
-struct ResolvedTwistOverlay
-    rates::Vector{ResolvedTwistRate}
-end
-
 # -----------------------------------------------------------------------
-# Path  (immutable built struct)
+# PathSpecBuilder (mutable authoring) → PathSpec (immutable spec)
 # -----------------------------------------------------------------------
 
-struct Path
+mutable struct PathSpecBuilder
+    segments::Vector{AbstractPathSegment}
     s_start::Real
-    s_end::Real
-    placed_segments::Vector{PlacedSegment}
-    resolved_overlays::Vector{ResolvedTwistOverlay}
+    PathSpecBuilder() = new(AbstractPathSegment[], 0.0)
 end
+
+struct PathSpec
+    segments::Vector{AbstractPathSegment}
+    s_start::Real
+end
+
+"""
+    freeze(builder::PathSpecBuilder) → PathSpec
+
+Snapshot a builder into an immutable `PathSpec`. The segment vector is
+deep-copied so subsequent mutation of `builder` does not affect the spec.
+"""
+freeze(b::PathSpecBuilder) = PathSpec(deepcopy(b.segments), b.s_start)
+
+function straight!(spec::PathSpecBuilder; length, meta = AbstractMeta[])
+    push!(spec.segments, StraightSegment(length; meta))
+    return spec
+end
+
+function bend!(spec::PathSpecBuilder; radius::Real, angle::Real, axis_angle::Real = 0.0,
+               meta = AbstractMeta[])
+    push!(spec.segments, BendSegment(radius, angle, axis_angle; meta))
+    return spec
+end
+
+function helix!(spec::PathSpecBuilder; radius::Real, pitch::Real, turns::Real,
+                axis_angle::Real = 0.0, meta = AbstractMeta[])
+    push!(spec.segments, HelixSegment(radius, pitch, turns, axis_angle; meta))
+    return spec
+end
+
+function catenary!(spec::PathSpecBuilder; a::Real, length::Real, axis_angle::Real = 0.0,
+                   meta = AbstractMeta[])
+    push!(spec.segments, CatenarySegment(a, length, axis_angle; meta))
+    return spec
+end
+
+function jumpby!(spec::PathSpecBuilder; delta, tangent = nothing, min_bend_radius = nothing,
+                 meta = AbstractMeta[])
+    push!(spec.segments, JumpBy(delta; tangent_out = tangent, min_bend_radius, meta))
+    return spec
+end
+
+function jumpto!(spec::PathSpecBuilder; destination, tangent = nothing, min_bend_radius = nothing,
+                 meta = AbstractMeta[])
+    push!(spec.segments, JumpTo(destination; tangent_out = tangent, min_bend_radius, meta))
+    return spec
+end
+
+# -----------------------------------------------------------------------
+# PathSpecCached  (immutable derived layout)
+# -----------------------------------------------------------------------
+
+struct PathSpecCached
+    spec::PathSpec
+    placed_segments::Vector{PlacedSegment}
+    s_end::Real
+end
+
+# Convenience accessor: callers historically read `path.spec.s_start`. Provided
+# as a function so external code can be retyped without reaching into
+# `path.spec.s_start` everywhere.
+s_start(path::PathSpecCached) = path.spec.s_start
 
 # -----------------------------------------------------------------------
 # build()
 # -----------------------------------------------------------------------
 
-function _resolve_overlay(overlay::TwistOverlay,
-                          placed::Vector{PlacedSegment})
-    s_start = overlay.s_start
-    s_end   = overlay.s_start + overlay.length
-
-    rates = ResolvedTwistRate[]
-    for ps in placed
-        seg = ps.segment
-        seg_start = ps.s_offset_eff
-        seg_end   = ps.s_offset_eff + arc_length(seg)
-        overlap_start = max(s_start, seg_start)
-        overlap_end   = min(s_end,   seg_end)
-        overlap_end <= overlap_start && continue
-
-        push!(rates, ResolvedTwistRate(overlap_start, overlap_end, overlay.rate))
-    end
-
-    return ResolvedTwistOverlay(rates)
-end
-
 """
-    build(spec) → Path
+    build(builder_or_spec) → PathSpecCached
 
-Compile a `PathSpec` into an immutable `Path`.
+Compile a `PathSpecBuilder` or `PathSpec` into an immutable `PathSpecCached`.
 """
 _safe_normalize(v::AbstractVector) = v ./ sqrt(sum(abs2, v))
+
+build(b::PathSpecBuilder) = build(freeze(b))
 
 function build(spec::PathSpec)
     pos     = zeros(3)
@@ -936,7 +942,7 @@ function build(spec::PathSpec)
 
     isempty(spec.segments) && error("build: PathSpec contains no segments")
 
-    s_eff = 0.0
+    s_eff  = Float64(spec.s_start)
     placed = PlacedSegment[]
 
     for seg_orig in spec.segments
@@ -958,16 +964,14 @@ function build(spec::PathSpec)
         s_eff += arc_length(seg_placed)
     end
 
-    resolved = [_resolve_overlay(ov, placed) for ov in spec.twist_overlays]
-
-    return Path(0.0, s_eff, placed, resolved)
+    return PathSpecCached(spec, placed, s_eff)
 end
 
 # -----------------------------------------------------------------------
 # Segment lookup helpers
 # -----------------------------------------------------------------------
 
-function _find_placed_segment(path::Path, s)
+function _find_placed_segment(path::PathSpecCached, s)
     n = length(path.placed_segments)
     for i in 1:n
         ps = path.placed_segments[i]
@@ -978,7 +982,7 @@ function _find_placed_segment(path::Path, s)
             return ps, s_local
         end
     end
-    error("s = $s out of path bounds [$(path.s_start), $(path.s_end)]")
+    error("s = $s out of path bounds [$(path.spec.s_start), $(path.s_end)]")
 end
 
 function _local_to_global(ps::PlacedSegment, v_local::AbstractVector)
@@ -989,67 +993,60 @@ end
 # Differential geometry interface on Path
 # -----------------------------------------------------------------------
 
-arc_length(path::Path) = path.s_end - path.s_start
+arc_length(path::PathSpecCached) = path.s_end - path.spec.s_start
 
-function arc_length(::Path, s1, s2)
+function arc_length(::PathSpecCached, s1, s2)
     @assert s2 >= s1 "arc_length: require s2 >= s1"
     return s2 - s1
 end
 
-function curvature(path::Path, s::Real)
+function curvature(path::PathSpecCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return curvature(ps.segment, s_local)
 end
 
-function geometric_torsion(path::Path, s::Real)
+function geometric_torsion(path::PathSpecCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return geometric_torsion(ps.segment, s_local)
 end
 
 """
-    material_twist
+    material_twist  (STUB)
 
-Material twist rate at effective arc-length `s`.
+Material twist rate at effective arc-length `s`. Currently returns zero
+(no overlays carried) pending the twist → per-segment-meta refactor.
 """
-function material_twist(path::Path, s)
-    τ = zero(s)
-    for ov in path.resolved_overlays
-        for r in ov.rates
-            if r.s_eff_start <= s <= r.s_eff_end
-                τ += r.rate(s)
-            end
-        end
-    end
-    return τ
-end
+material_twist(::PathSpecCached, s) = zero(s isa AbstractFloat ? s : Float64(s))
 
-function position(path::Path, s::Real)
+function position(path::PathSpecCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return ps.origin + _local_to_global(ps, position_local(ps.segment, s_local))
 end
 
-function tangent(path::Path, s::Real)
+function tangent(path::PathSpecCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return _local_to_global(ps, tangent_local(ps.segment, s_local))
 end
 
-function normal(path::Path, s::Real)
+function normal(path::PathSpecCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return _local_to_global(ps, normal_local(ps.segment, s_local))
 end
 
-function binormal(path::Path, s::Real)
+function binormal(path::PathSpecCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return _local_to_global(ps, binormal_local(ps.segment, s_local))
 end
 
-function frame(path::Path, s::Real)
+function frame(path::PathSpecCached, s::Real)
     T = tangent(path, s)
     N = normal(path, s)
     B = binormal(path, s)
     κ = curvature(path, s)
     τ = geometric_torsion(path, s)
-    m = material_twist(path, s)
+    # material_twist intentionally zero pending twist refactor; field preserved
+    # so downstream Sample/PathSample callers continue to type-check.
+    m = 0.0
     return (; position = position(path, s), tangent = T, normal = N, binormal = B,
               curvature = κ, geometric_torsion = τ, material_twist = m)
 end
@@ -1058,30 +1055,30 @@ end
 # Endpoint access
 # -----------------------------------------------------------------------
 
-start_point(path::Path)   = position(path, path.s_start)
-end_point(path::Path)     = position(path, path.s_end)
-start_tangent(path::Path) = tangent(path, path.s_start)
-end_tangent(path::Path)   = tangent(path, path.s_end)
+start_point(path::PathSpecCached)   = position(path, path.spec.s_start)
+end_point(path::PathSpecCached)     = position(path, path.s_end)
+start_tangent(path::PathSpecCached) = tangent(path, path.spec.s_start)
+end_tangent(path::PathSpecCached)   = tangent(path, path.s_end)
 
 # -----------------------------------------------------------------------
 # Path measures
 # -----------------------------------------------------------------------
 
-path_length(path::Path) = arc_length(path)
+path_length(path::PathSpecCached) = arc_length(path)
 
-function cartesian_distance(path::Path, s1::Real, s2::Real)
+function cartesian_distance(path::PathSpecCached, s1::Real, s2::Real)
     return norm(position(path, s2) - position(path, s1))
 end
 
-function bounding_box(path::Path; n::Int = 512)
-    ss = range(path.s_start, path.s_end; length = n)
+function bounding_box(path::PathSpecCached; n::Int = 512)
+    ss = range(path.spec.s_start, path.s_end; length = n)
     pts = [position(path, s) for s in ss]
     lo = minimum(reduce(hcat, pts); dims = 2) |> vec
     hi = maximum(reduce(hcat, pts); dims = 2) |> vec
     return (; lo, hi)
 end
 
-function total_turning_angle(path::Path)
+function total_turning_angle(path::PathSpecCached)
     # ∫κ ds  — for analytic segments computed exactly where possible
     total = 0.0
     for ps in path.placed_segments
@@ -1103,7 +1100,7 @@ function total_turning_angle(path::Path)
     return total
 end
 
-function total_torsion(path::Path)
+function total_torsion(path::PathSpecCached)
     total = 0.0
     for ps in path.placed_segments
         seg = ps.segment
@@ -1122,48 +1119,25 @@ function total_torsion(path::Path)
 end
 
 """
-    total_material_twist(path; s_start=path.s_start, s_end=path.s_end, n_quad=128) → Float64
+    total_material_twist(path; s_start=path.spec.s_start, s_end=path.s_end, n_quad=128) → Float64
 
 Integrated material twist ``∫ τ_{\\mathrm{mat}}(s) \\, ds`` over effective arc length from
 `s_start` to `s_end` (defaults: full path). Require `s_start ≤ s_end`; if `s_start > s_end`,
 an `ArgumentError` is thrown (no reordering). If `s_start == s_end`, returns `0.0`. Both
-endpoints must lie in `[path.s_start, path.s_end]`. Quadrature matches the previous rule on
+endpoints must lie in `[path.spec.s_start, path.s_end]`. Quadrature matches the previous rule on
 each overlap of `[s_start, s_end]` with resolved twist overlays.
 """
 function total_material_twist(
-    path::Path;
-    s_start::Real = path.s_start,
-    s_end::Real = path.s_end,
+    ::PathSpecCached;
+    s_start::Real = 0.0,
+    s_end::Real = 0.0,
     n_quad::Int = 128,
 )
-    s_lo = min(Float64(s_start), Float64(s_end))
-    s_hi = max(Float64(s_start), Float64(s_end))
-    ps0 = path.s_start
-    ps1 = path.s_end
-    if !(ps0 <= s_lo <= ps1) || !(ps0 <= s_hi <= ps1)
-        throw(ArgumentError(
-            "total_material_twist: require path.s_start ≤ s ≤ path.s_end for both endpoints; " *
-            "got [$(s_lo), $(s_hi)] m vs path domain [$(ps0), $(ps1)] m",
-        ))
-    end
-    s_hi <= s_lo && return 0.0
-
-    total = 0.0
-    for ov in path.resolved_overlays
-        for r in ov.rates
-            a = max(r.s_eff_start, s_lo)
-            b = min(r.s_eff_end, s_hi)
-            b <= a && continue
-            ss = range(a, b; length = n_quad + 1)
-            h = (b - a) / n_quad
-            total += h * (sum(r.rate(s) for s in ss) - r.rate(a)/2 - r.rate(b)/2)
-        end
-    end
-    return total
+    error("total_material_twist: twist subsystem pending refactor (per-segment meta)")
 end
 
 """
-    total_frame_rotation(path; s_start=path.s_start, s_end=path.s_end, n_quad=128) → Float64
+    total_frame_rotation(path; s_start=path.spec.s_start, s_end=path.s_end, n_quad=128) → Float64
 
 Total rotation of the polarization reference frame over effective arc length from `s_start`
 to `s_end`, integrating both contributions:
@@ -1178,53 +1152,12 @@ See `path-geometry.md` for a discussion of how this differs from `total_torsion`
 `total_material_twist` individually.
 """
 function total_frame_rotation(
-    path::Path;
-    s_start::Real = path.s_start,
-    s_end::Real   = path.s_end,
+    ::PathSpecCached;
+    s_start::Real = 0.0,
+    s_end::Real   = 0.0,
     n_quad::Int   = 128,
 )
-    s_lo = min(Float64(s_start), Float64(s_end))
-    s_hi = max(Float64(s_start), Float64(s_end))
-    ps0 = path.s_start
-    ps1 = path.s_end
-    if !(ps0 <= s_lo <= ps1) || !(ps0 <= s_hi <= ps1)
-        throw(ArgumentError(
-            "total_frame_rotation: require path.s_start ≤ s ≤ path.s_end for both endpoints; " *
-            "got [$(s_lo), $(s_hi)] m vs path domain [$(ps0), $(ps1)] m",
-        ))
-    end
-    s_hi <= s_lo && return 0.0
-
-    # Geometric torsion: integrate segment-by-segment over the requested window.
-    τ_total = 0.0
-    s_seg_start = ps0
-    for ps in path.placed_segments
-        seg = ps.segment
-        s_seg_end = s_seg_start + arc_length(seg)
-        a = max(s_seg_start, s_lo)
-        b = min(s_seg_end,   s_hi)
-        if b > a
-            # Convert global s to local s within the segment.
-            a_loc = a - s_seg_start
-            b_loc = b - s_seg_start
-            if seg isa StraightSegment || seg isa BendSegment
-                # τ_geom = 0 exactly; skip.
-            elseif seg isa HelixSegment
-                τ_total += geometric_torsion(seg, 0.0) * (b_loc - a_loc)
-            else
-                ss = range(a_loc, b_loc; length = n_quad + 1)
-                h  = (b_loc - a_loc) / n_quad
-                τ_total += h * (sum(geometric_torsion(seg, s) for s in ss) -
-                                geometric_torsion(seg, a_loc)/2 - geometric_torsion(seg, b_loc)/2)
-            end
-        end
-        s_seg_start = s_seg_end
-    end
-
-    # Material twist: reuse total_material_twist logic over the same window.
-    Ω_total = total_material_twist(path; s_start = s_lo, s_end = s_hi, n_quad)
-
-    return τ_total + Ω_total
+    error("total_frame_rotation: twist subsystem pending refactor (per-segment meta)")
 end
 
 """
@@ -1243,18 +1176,18 @@ centerline.  See: Berry (1984) Proc. R. Soc. A 392, and Ross (1984) for the
 fiber optics context.  This contribution should be added to the output of the
 polarization propagator in path-integral.jl whenever the fiber forms a loop.
 """
-function writhe(path::Path; n::Int = 256)
-    ss = collect(range(path.s_start, path.s_end; length = n))
+function writhe(path::PathSpecCached; n::Int = 256)
+    ss = collect(range(path.spec.s_start, path.s_end; length = n))
     rs = [position(path, s) for s in ss]
     ts = [tangent(path, s)  for s in ss]
-    ds = (path.s_end - path.s_start) / (n - 1)
+    ds = (path.s_end - path.spec.s_start) / (n - 1)
 
     Wr = 0.0
     for i in 1:n, j in 1:n
         i == j && continue
         r_ij = rs[i] - rs[j]
         d = norm(r_ij)
-        d < 1e-14 * (path.s_end - path.s_start) && continue
+        d < 1e-14 * (path.s_end - path.spec.s_start) && continue
         Wr += dot(cross(ts[i], ts[j]), r_ij) / d^3
     end
     return Wr * ds^2 / (4π)
@@ -1273,14 +1206,14 @@ Fields: `s`, `position`, `tangent`, `normal`, `binormal`, `curvature`,
 `geometric_torsion`, `material_twist`.
 """
 struct Sample
-    s                 :: Float64
-    position          :: Vector{Float64}
-    tangent           :: Vector{Float64}
-    normal            :: Vector{Float64}
-    binormal          :: Vector{Float64}
-    curvature         :: Float64
-    geometric_torsion :: Float64
-    material_twist    :: Float64
+    s                 :: Real
+    position          :: AbstractVector
+    tangent           :: AbstractVector
+    normal            :: AbstractVector
+    binormal          :: AbstractVector
+    curvature         :: Real
+    geometric_torsion :: Real
+    material_twist    :: Real
 end
 
 """
@@ -1335,6 +1268,15 @@ end
 
 _segment_total_angle(::AbstractPathSegment) = 0.0
 
+_budget_scalar(x::AbstractFloat) = Float64(x)
+_budget_scalar(x::Integer) = Float64(x)
+function _budget_scalar(x)
+    if hasfield(typeof(x), :particles)
+        return Float64(maximum(getfield(x, :particles)))
+    end
+    return Float64(x)
+end
+
 """
     _segment_point_budget(ps, path, s_lo, s_hi, fidelity) → Int
 
@@ -1352,7 +1294,7 @@ The point budget is the maximum of the two rules.
 """
 function _segment_point_budget(
     ps::PlacedSegment,
-    path::Path,
+    path::PathSpecCached,
     s_lo::Float64,
     s_hi::Float64,
     fidelity::Float64,
@@ -1371,12 +1313,11 @@ function _segment_point_budget(
     frac = seg_len > 0.0 ? (b - a) / seg_len : 1.0
 
     # Geometric budget
-    geom_angle  = _segment_total_angle(seg) * frac
+    geom_angle  = _budget_scalar(_segment_total_angle(seg) * frac)
     geom_budget = max(2, ceil(Int, fidelity * geom_angle / (2π) * 32))
 
-    # Twist budget: exact integral of material twist rate over [a, b]
-    twist_angle  = abs(total_material_twist(path; s_start = a, s_end = b, n_quad = 32))
-    twist_budget = max(2, ceil(Int, fidelity * twist_angle / (2π) * 32))
+    # Twist budget: stub (zero) pending twist refactor.
+    twist_budget = 2
 
     return max(geom_budget, twist_budget)
 end
@@ -1401,7 +1342,7 @@ where each budget is `ceil(fidelity · Δφ / (2π) · 32)` (minimum 2), with:
 segments with no twist get 2 points (endpoints only). Junction points between
 segments are always included and shared (no duplicates).
 """
-function sample_path(path::Path, s1::Real, s2::Real; fidelity::Float64 = 1.0)
+function sample_path(path::PathSpecCached, s1::Real, s2::Real; fidelity::Float64 = 1.0)
     @assert s2 > s1    "sample_path: require s2 > s1"
     @assert fidelity > 0.0 "sample_path: fidelity must be positive"
 
@@ -1455,41 +1396,34 @@ function sample_path(path::Path, s1::Real, s2::Real; fidelity::Float64 = 1.0)
     return PathSample(samples, s_lo, s_hi, n)
 end
 
-function normalize_breakpoints(breakpoints::Vector{Float64})
+function normalize_breakpoints(breakpoints::AbstractVector{<:Real})
     return sort(unique(copy(breakpoints)))
 end
 
-function path_segment_breakpoints(path::Path)
-    points = Float64[Float64(path.s_start)]
+function path_segment_breakpoints(path::PathSpecCached)
+    points = Real[path.spec.s_start]
     for ps in path.placed_segments
-        push!(points, Float64(ps.s_offset_eff))
-        push!(points, Float64(ps.s_offset_eff + arc_length(ps.segment)))
+        push!(points, ps.s_offset_eff)
+        push!(points, ps.s_offset_eff + arc_length(ps.segment))
     end
-    push!(points, Float64(path.s_end))
+    push!(points, path.s_end)
     return normalize_breakpoints(points)
 end
 
-function path_twist_breakpoints(path::Path)
-    points = Float64[Float64(path.s_start), Float64(path.s_end)]
-    for overlay in path.resolved_overlays
-        for rate in overlay.rates
-            push!(points, Float64(rate.s_eff_start))
-            push!(points, Float64(rate.s_eff_end))
-        end
-    end
-    return normalize_breakpoints(points)
+function path_twist_breakpoints(path::PathSpecCached)
+    # STUB: twist subsystem pending refactor — only path endpoints contribute.
+    return normalize_breakpoints(Real[path.spec.s_start, path.s_end])
 end
 
-function breakpoints(path::Path)
+function breakpoints(path::PathSpecCached)
     return normalize_breakpoints(vcat(path_segment_breakpoints(path), path_twist_breakpoints(path)))
 end
 
-function sample(path::Path, s_values)
+function sample(path::PathSpecCached, s_values)
     return [frame(path, s) for s in s_values]
 end
 
-function sample_uniform(path::Path; n::Int = 256)
-    ss = range(path.s_start, path.s_end; length = n)
+function sample_uniform(path::PathSpecCached; n::Int = 256)
+    ss = range(path.spec.s_start, path.s_end; length = n)
     return sample(path, ss)
 end
-

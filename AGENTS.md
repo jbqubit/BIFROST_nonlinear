@@ -115,8 +115,9 @@ Do not break these without explicit user discussion:
     required for MCM compatibility and is also faster/exacter for Float64.
   - `output_dgd_2x2` is the MCM-friendly DGD extractor (closed form, no
     `eigvals`); `output_dgd` still uses `eigvals` and is Float64-only.
-  Remaining Float64-only exceptions: Hermite connectors (`JumpBy`/`JumpTo`),
-  `cutoff_wavelength`.
+  - MCM prohibits conditionals anywhere that needs to propagate Particles. 
+    Here this includes most methods in material-properties.jl, fiber-cross-section.jl,
+    path-geometry.jl, fiber-path.jl, fiber-path-modify.jl, path-integral.jl.
 
 ## Adding a New Birefringence Source
 

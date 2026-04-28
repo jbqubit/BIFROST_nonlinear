@@ -43,10 +43,8 @@ segments without annotations incur no arithmetic.
 
 # Twist overlays
 
-Overlay arc-length coordinates are rescaled per segment using the effective
-scale factor `α_eff = arc_length(new_seg) / arc_length(old_seg)`. Constant
-twist rates are preserved; function rates are composed with the inverse
-coordinate map.
+STUB: twist overlay remapping was removed pending the per-segment-meta twist
+refactor. `modify(fiber)` no longer carries twist data through.
 """
 
 if !@isdefined(Fiber)
@@ -61,11 +59,11 @@ end
 # ----------------------------
 
 """
-    modify(fiber::Fiber) → Path
+    modify(fiber::Fiber) → PathSpecCached
 
-Return a new `Path` whose segments have been perturbed according to the
-`MCMadd` / `MCMmul` / `:T_K` annotations on each segment's `meta` vector.
-See this file's module docstring for the per-field and T_K semantics.
+Return a new `PathSpecCached` whose segments have been perturbed according
+to the `MCMadd` / `MCMmul` / `:T_K` annotations on each segment's `meta`
+vector. See this file's module docstring for the per-field and T_K semantics.
 """
 function modify(fiber::Fiber)
     T_ref = fiber.T_ref_K
@@ -152,31 +150,19 @@ _modify_segment(seg::AbstractPathSegment, ::Any, ::Any) =
 # Internal: reassemble a path with replaced segments
 # ----------------------------
 
-function _replace_segments(path::Path, new_segments::Vector{<:AbstractPathSegment})
+function _replace_segments(path::PathSpecCached, new_segments::Vector{<:AbstractPathSegment})
     n_seg = length(path.placed_segments)
     @assert length(new_segments) == n_seg
-
-    # Per-segment effective linear scale, used only for twist-overlay remap.
-    α_per_segment = Vector{Any}(undef, n_seg)
-    for i in 1:n_seg
-        α_per_segment[i] = arc_length(new_segments[i]) /
-                           arc_length(path.placed_segments[i].segment)
-    end
 
     # Re-place the segments, replicating build()'s frame-advancing loop.
     pos     = zeros(3)
     N_frame = [1.0, 0.0, 0.0]
     B_frame = [0.0, 1.0, 0.0]
     T_frame = [0.0, 0.0, 1.0]
-    s_eff   = 0.0
+    s_eff   = Float64(path.spec.s_start)
     placed  = PlacedSegment[]
 
-    s_old_starts = [ps.s_offset_eff for ps in path.placed_segments]
-    s_new_starts = Vector{Any}(undef, n_seg)
-
-    for (i, seg_new) in enumerate(new_segments)
-        s_new_starts[i] = s_eff
-
+    for seg_new in new_segments
         frame = hcat(N_frame, B_frame, T_frame)
         push!(placed, PlacedSegment(seg_new, s_eff, copy(pos), copy(frame)))
 
@@ -192,38 +178,6 @@ function _replace_segments(path::Path, new_segments::Vector{<:AbstractPathSegmen
         s_eff = s_eff + arc_length(seg_new)
     end
 
-    function _find_segment_index(s_old)
-        for i in 1:n_seg
-            seg_old_end = s_old_starts[i] + arc_length(path.placed_segments[i].segment)
-            if s_old <= seg_old_end + 1e-12
-                return i
-            end
-        end
-        return n_seg
-    end
-
-    new_overlays = ResolvedTwistOverlay[]
-    for ov in path.resolved_overlays
-        new_rates = ResolvedTwistRate[]
-        for r in ov.rates
-            i = _find_segment_index(r.s_eff_start)
-            αi = α_per_segment[i]
-            s_old_off = r.s_eff_start - s_old_starts[i]
-            s_old_len = r.s_eff_end   - r.s_eff_start
-            s_new_start = s_new_starts[i] + αi * s_old_off
-            s_new_end   = s_new_start + αi * s_old_len
-            rate_old    = r.rate
-            s_new_seg_start = s_new_starts[i]
-            s_old_seg_start = s_old_starts[i]
-            rate_new = let rate_old = rate_old, αi = αi,
-                           s_new_seg_start = s_new_seg_start,
-                           s_old_seg_start = s_old_seg_start
-                s_new -> rate_old(s_old_seg_start + (s_new - s_new_seg_start) / αi)
-            end
-            push!(new_rates, ResolvedTwistRate(s_new_start, s_new_end, rate_new))
-        end
-        push!(new_overlays, ResolvedTwistOverlay(new_rates))
-    end
-
-    return Path(0.0, s_eff, placed, new_overlays)
+    new_spec = PathSpec(collect(new_segments), path.spec.s_start)
+    return PathSpecCached(new_spec, placed, s_eff)
 end

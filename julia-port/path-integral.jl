@@ -563,7 +563,7 @@ Returns
 """
 function propagate_piecewise(
     K,
-    breaks::Vector{Float64};
+    breaks::AbstractVector{<:Real};
     jumps::AbstractDict = Dict{Float64, Matrix{ComplexF64}}(),
     J0::AbstractMatrix = Matrix{ComplexF64}(I, 2, 2),
     kwargs...
@@ -573,8 +573,8 @@ function propagate_piecewise(
     stats = PropagatorStats[]
 
     for i in 1:length(breaks)-1
-        sL = breaks[i]
-        sR = breaks[i+1]
+        sL = scalar_reduce(breaks[i])
+        sR = scalar_reduce(breaks[i+1])
 
         J, st = propagate_interval!(K, sL, sR, J; kwargs...)
         push!(stats, st)
@@ -618,7 +618,7 @@ Returns
 function propagate_piecewise_sensitivity(
     K,
     Kω,
-    breaks::Vector{Float64};
+    breaks::AbstractVector{<:Real};
     jumps::AbstractDict = Dict{Float64, Matrix{ComplexF64}}(),
     jump_omegas::AbstractDict = Dict{Float64, Matrix{ComplexF64}}(),
     J0::AbstractMatrix = Matrix{ComplexF64}(I, 2, 2),
@@ -631,8 +631,8 @@ function propagate_piecewise_sensitivity(
     stats = PropagatorStats[]
 
     for i in 1:length(breaks)-1
-        sL = breaks[i]
-        sR = breaks[i+1]
+        sL = scalar_reduce(breaks[i])
+        sR = scalar_reduce(breaks[i+1])
 
         J, G, st = propagate_interval_sensitivity!(K, Kω, sL, sR, J; G0 = G, kwargs...)
         push!(stats, st)

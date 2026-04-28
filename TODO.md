@@ -72,4 +72,33 @@ upcoming features. Agents should not start work on these without explicit author
     contrast it with 
 
 
-- [ ] TODO fix the MCM demo in demo.jl
+- [ ] TODO fix the MCM demo in demo.jl 4/28 task
+
+#########################
+#### path-geometry ######
+#########################
+
+- [ ] I want to make some modifications that focus on path-geometry.jl. Let's worry about the downstream consequences of these changes later. 
+
+Currently TwistOverlay is specified by s_start and length. I want to make changes so that the start and end of each twist is defined with respect to segment boundaries. There are several ways  I can think of implementing this. 
+
+OPTION 1 :: use meta
+Create a new struct Twist <: AbstractMeta with members
+      rate::Function
+      \phi_0::Real
+      is_continuous::Bool
+    In this approach Twist meta is associated with the segment where a particular twist rate commences and continues until the end of the Path or until another segment has an associated Twist meta. The bool is_continuous specifies if the twist phase remains continuous with the prior Twist specification. If is_continuous is True then \phi_0 shouldn't be specified. If is_continuous is False than \phi_0 must be specified as this is the starting phase. The rate::Function must accept \phi as a parameter. 
+
+OPTION 2 :: Use zero-length Segment
+Create a new struct Twist <: AbstractPathSegment with members
+      rate::Function
+      \phi_0::Real
+      is_continuous::Bool
+In this approach, a Twist segment is inserted into Path placed_segment as a zero-length segment that demarks the start of a particular twist specified by its member data. The same twist rate  continues until the end of the Path or until another Twist segment is added to the Path. The bool is_continuous specifies if the twist phase remains continuous with the prior Twist specification. If is_continuous is True then \phi_0 shouldn't be specified. If is_continuous is False than \phi_0 must be specified as this is the starting phase. The rate::Function must accept \phi as a parameter. 
+
+One detail common to both approaches is that if is_continuous is True the length of prior segments is important in calculating the phase continuity at the boundary between old and new twist rates. 
+
+While it's outside the context of the current refactoring it's important to note that properties of individual path segments can be modified using meta
+
+Please help me think which is the right approach of if there is another that's better. 
+

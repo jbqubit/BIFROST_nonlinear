@@ -13,11 +13,11 @@ Plotly CDN. It does not load or reference other `julia-port/` sources.
 
     include("path-geometry-plot.jl")
 
-    spec = PathGeometry.PathSpec()
+    spec = PathGeometry.PathSpecBuilder()
     PathGeometry.straight!(spec; length = 0.2)
     PathGeometry.bend!(spec; radius = 0.4, angle = π / 2)
     path = PathGeometry.build(spec)
-    write_path_geometry_plot3d(path, path.s_start, path.s_end; title = "Demo", fidelity = 1.0, output = "path.html")
+    write_path_geometry_plot3d(path, path.spec.s_start, path.s_end; title = "Demo", fidelity = 1.0, output = "path.html")
 """
 
 using LinearAlgebra
@@ -133,7 +133,7 @@ Keyword `twist_n_quad` is passed to `total_material_twist` when building Φ at e
 (default 128).
 """
 function write_path_geometry_plot3d(
-    path::PathGeometry.Path,
+    path::PathGeometry.PathSpecCached,
     s1::Real,
     s2::Real;
     fidelity::Float64 = 3.0,
@@ -221,15 +221,8 @@ function write_path_geometry_plot3d(
     title_html = replace(replace(title, "&" => "&amp;"), "<" => "&lt;")
 
     s_samples = Vector{Float64}(samples.s)
-    integrated_tau_mat = Vector{Float64}(undef, length(s_samples))
-    for i in eachindex(s_samples)
-        integrated_tau_mat[i] = _plot_scalar(PathGeometry.total_material_twist(
-            path;
-            s_start = s1f,
-            s_end = s_samples[i],
-            n_quad = twist_n_quad,
-        ))
-    end
+    # TODO: twist refactor — total_material_twist is currently a stub.
+    integrated_tau_mat = zeros(Float64, length(s_samples))
 
     html = """
     <!--
