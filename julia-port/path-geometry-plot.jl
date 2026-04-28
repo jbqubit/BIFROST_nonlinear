@@ -69,8 +69,16 @@ end
 # Plotly HTML helpers (small JSON serializers for embedded numeric arrays)
 # ---------------------------------------------------------------------------
 
+function _plot_scalar(x::Real)
+    if hasfield(typeof(x), :particles)
+        particles = getfield(x, :particles)
+        return Float64(sum(particles) / length(particles))
+    end
+    return Float64(x)
+end
+
 function _js_real(x::Real)
-    xf = Float64(x)
+    xf = _plot_scalar(x)
     if isnan(xf)
         return "NaN"
     elseif xf == Inf
@@ -215,12 +223,12 @@ function write_path_geometry_plot3d(
     s_samples = Vector{Float64}(samples.s)
     integrated_tau_mat = Vector{Float64}(undef, length(s_samples))
     for i in eachindex(s_samples)
-        integrated_tau_mat[i] = PathGeometry.total_material_twist(
+        integrated_tau_mat[i] = _plot_scalar(PathGeometry.total_material_twist(
             path;
             s_start = s1f,
             s_end = s_samples[i],
             n_quad = twist_n_quad,
-        )
+        ))
     end
 
     html = """
