@@ -467,7 +467,7 @@ end
 end
 
 # -----------------------------------------------------------------------
-# JumpBy and JumpTo (HermiteConnector)
+# JumpBy and JumpTo (QuinticConnector)
 # -----------------------------------------------------------------------
 
 @testset "JumpBy — endpoint matches delta in local frame" begin
@@ -612,7 +612,7 @@ end
     @test isnothing(segment_nickname(segs[2]))  # mcm only
 end
 
-@testset "per-segment meta — build() copies jump meta onto HermiteConnector" begin
+@testset "per-segment meta — build() copies jump meta onto QuinticConnector" begin
     spec = PathSpecBuilder()
     straight!(spec; length = 0.1)
     jumpby!(spec; delta = (0.05, 0.0, 0.2),
@@ -621,7 +621,7 @@ end
     path = build(spec)
 
     hc = path.placed_segments[2].segment
-    @test hc isa HermiteConnector
+    @test hc isa QuinticConnector
     @test length(hc.meta) == 2
     @test segment_nickname(hc) == "connector-1"
     @test any(m -> m isa MCMadd, hc.meta)
@@ -769,3 +769,69 @@ end
     @test_throws ArgumentError build_T3(0.51)
 end
 =#
+
+
+# -----------------------------------------------------------------------
+# G2 integration: curvature_out propagation
+# -----------------------------------------------------------------------
+
+@testset "JumpBy — curvature_out matches sampled κ at end of connector" begin
+    """
+    G2 outgoing match: when the user specifies curvature_out, the connector's
+    sampled scalar curvature at its endpoint must equal ‖curvature_out‖.
+
+    Confirms that the new curvature_out field on JumpBy is plumbed through
+    _resolve_at_placement into _build_quintic_connector and survives all the
+    way to the curve's terminal κ-sample.
+    """
+    spec = PathSpecBuilder()
+    K1 = (0.0, 2.0, 0.0)   # 2 m⁻¹ in local +y
+    jumpby!(spec; delta = (0.5, 0.0, 0.5),
+            tangent = (1.0, 0.0, 0.0),
+            curvature_out = K1)
+    path = build(spec)
+    seg = path.placed_segments[1].segment
+    L = arc_length(seg)
+    @test isapprox(curvature(seg, L), sqrt(K1[1]^2 + K1[2]^2 + K1[3]^2);
+                   rtol = 1e-3, atol = 1e-6)
+end
+
+@testset "JumpBy — incoming K0 inherited from prior bend (G2 join)" begin
+    """
+    G2 incoming match: when a JumpBy follows a BendSegment, the connector's
+    sampled scalar curvature at its *start* must equal the bend's curvature
+    (1/R_bend). This verifies the K_in_global threading in build() and the
+    frame-rotation logic in _resolve_at_placement.
+
+    Without this wiring, the connector would start with κ=0 (G1 join) and the
+    splice would have a curvature jump.
+    """
+    R_bend = 0.5
+    spec = PathSpecBuilder()
+    bend!(spec; radius = R_bend, angle = π/4)
+    jumpby!(spec; delta = (0.3, 0.0, 0.3))
+    path = build(spec)
+    seg = path.placed_segments[2].segment
+    @test isapprox(curvature(seg, 0.0), 1.0 / R_bend; rtol = 1e-2, atol = 1e-4)
+end
+
+@testset "JumpTo — global-frame curvature_out after bend" begin
+    """
+    JumpTo with curvature_out specified in the *global* frame, placed after a
+    BendSegment that has rotated the local frame. The connector's terminal
+    curvature scalar must equal ‖K1_global‖ regardless of frame rotation.
+
+    Probes the global→local rotation of curvature_out in
+    _resolve_at_placement(::JumpTo, …).
+    """
+    spec = PathSpecBuilder()
+    bend!(spec; radius = 0.3, angle = π/2)   # rotates local frame
+    K1_global = (0.0, 1.0, 0.0)
+    jumpto!(spec; destination = (0.6, 0.0, 0.6),
+            tangent = (0.0, 0.0, 1.0),
+            curvature_out = K1_global)
+    path = build(spec)
+    seg = path.placed_segments[2].segment
+    L = arc_length(seg)
+    @test isapprox(curvature(seg, L), 1.0; rtol = 1e-3, atol = 1e-6)
+end

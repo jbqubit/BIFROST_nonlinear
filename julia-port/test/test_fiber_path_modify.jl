@@ -253,3 +253,39 @@ end
         MonteCarloMeasurements.unsafe_comparisons(false)
     end
 end
+
+
+# -----------------------------------------------------------------------
+# QuinticConnector :T_K scaling
+# -----------------------------------------------------------------------
+
+@testset "modify — :T_K scales QuinticConnector arc length" begin
+    """
+    A JumpBy with :T_K MCM meta must scale through to the resolved
+    QuinticConnector after build(). The geometric scale τ should multiply the
+    coefficient matrix and the arc-length table uniformly so the post-modify
+    path length scales by τ.
+    """
+    spec = PathSpecBuilder()
+    jumpby!(spec; delta = (0.4, 0.0, 0.4),
+            tangent = (1.0, 0.0, 0.0),
+            meta = _mcm(0.5))
+    path = build(spec)
+    L_before = path_length(path)
+    path_s = _modify_fiber_path(path)
+    L_after = path_length(path_s)
+    @test isapprox(L_after, 0.5 * L_before; rtol = 1e-10, atol = 1e-12)
+end
+
+@testset "modify — :T_K on QuinticConnector preserves end-point shrinkage" begin
+    """
+    Geometric scaling of the connector by τ must move its endpoint to τ·delta
+    in the local frame. Verifies that QuinticConnector :T_K modify uses the
+    same coefficient-and-table scaling pattern as the prior HermiteConnector.
+    """
+    spec = PathSpecBuilder()
+    jumpby!(spec; delta = (0.0, 0.0, 1.0), meta = _mcm(0.5))
+    path = build(spec)
+    path_s = _modify_fiber_path(path)
+    @test end_point(path_s) ≈ [0.0, 0.0, 0.5] atol = 1e-10
+end

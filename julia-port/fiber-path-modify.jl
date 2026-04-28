@@ -26,7 +26,7 @@ segment's T-sensitive fields, with
 - `BendSegment`     → `:radius`
 - `CatenarySegment` → `:a`, `:length`
 - `HelixSegment`    → `:radius`, `:pitch`
-- `HermiteConnector`→ polynomial coeffs and `s_table`
+- `QuinticConnector`→ polynomial coeffs and `s_table`
 
 Angles (`:angle`, `:axis_angle`) and counts (`:turns`) do not respond to
 `:T_K`.
@@ -128,20 +128,23 @@ function _modify_segment(seg::HelixSegment, T_ref, α_lin)
                         meta = seg.meta)
 end
 
-# HermiteConnector: only :T_K is supported (no field-level MCMs). Scale the
-# Hermite polynomial coefficients and arc-length table by (1 + α_lin·ΔT).
-function _modify_segment(seg::HermiteConnector, T_ref, α_lin)
+# QuinticConnector: only :T_K is supported (no field-level MCMs). Scale the
+# quintic polynomial coefficients and arc-length table by (1 + α_lin·ΔT).
+# Geometric scaling r(u) → τ·r(u) implies all six coefficient rows scale by τ
+# and the parameter-speed handle λ scales by τ too.
+function _modify_segment(seg::QuinticConnector, T_ref, α_lin)
     τ = _T_K_factor(seg, T_ref, α_lin)
     isnothing(τ) && return seg
-    a0 = seg.a0 .* τ
-    a1 = seg.a1 .* τ
-    a2 = seg.a2 .* τ
-    a3 = seg.a3 .* τ
-    return HermiteConnector(a0, a1, a2, a3, seg.s_table .* τ; meta = seg.meta)
+    # `lambda` is a Float64 metadata handle that records the search outcome
+    # at build() time. Field-by-field rescaling only needs to touch the
+    # geometry-bearing arrays; τ may carry MCM Particles which would not fit
+    # the Float64 field anyway.
+    return QuinticConnector(seg.a .* τ, seg.lambda, seg.s_table .* τ;
+                            meta = seg.meta)
 end
 
 # Raw JumpBy / JumpTo should not appear inside a built Path (build() resolves
-# them into HermiteConnector). Preserve the historical fallback.
+# them into QuinticConnector). Preserve the historical fallback.
 _modify_segment(seg::AbstractPathSegment, ::Any, ::Any) =
     error("modify: cannot modify segment of type $(typeof(seg)); " *
           "expected a segment produced by build()")

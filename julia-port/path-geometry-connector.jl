@@ -1,0 +1,490 @@
+"""
+path-geometry-connector.jl
+
+QuinticConnector{T<:Real}: parametric quintic Hermite curve used as the resolved
+form of `JumpBy` / `JumpTo`.
+
+Matches position + tangent direction + curvature vector at both endpoints (G2).
+A single positive scalar λ (handle scale) supplies the parameter-speed degree of
+freedom that geometric G2 boundary data does not pin down.
+
+The struct is parametric over `T<:Real` so MCM `Particles` flow through.
+Branching predicates (`κ ≤ 1/R_min`, `s_table` bisection, Newton refinement)
+are evaluated on nominalized Float64 scalars; the final coefficients are built
+from the original `T`-typed inputs so uncertainty propagates.
+
+This file is `include`d into the same lexical scope as `path-geometry.jl`. It
+uses `AbstractPathSegment` and `AbstractMeta` from there.
+"""
+
+# ---------------------------------------------------------------------------
+# Nominalization (deterministic branching under MCM)
+# ---------------------------------------------------------------------------
+
+_qc_nominalize(x::Real) = x
+function _qc_nominalize(x)
+    if isdefined(Main, :MonteCarloMeasurements)
+        M = getfield(Main, :MonteCarloMeasurements)
+        if isdefined(M, :pmean)
+            f = getfield(M, :pmean)
+            applicable(f, x) && return f(x)
+        end
+    end
+    return x
+end
+
+# ---------------------------------------------------------------------------
+# Gauss–Legendre 4-point nodes/weights for arc-length quadrature
+# ---------------------------------------------------------------------------
+
+const _QC_GAUSS4_NODES   = (-0.8611363115940526, -0.3399810435848563,
+                              0.3399810435848563,  0.8611363115940526)
+const _QC_GAUSS4_WEIGHTS = ( 0.3478548451374538,  0.6521451548625461,
+                              0.6521451548625461,  0.3478548451374538)
+
+# ---------------------------------------------------------------------------
+# Struct
+# ---------------------------------------------------------------------------
+
+"""
+    QuinticConnector{T<:Real}
+
+Resolved form of `JumpBy` / `JumpTo`. Quintic Hermite curve
+
+    r(u) = a₀ + a₁ u + a₂ u² + a₃ u³ + a₄ u⁴ + a₅ u⁵,   u ∈ [0,1]
+
+in 3D, with row `i` of `a` storing the coefficient of `uⁱ⁻¹`. `lambda` is the
+chosen handle scale (Float64 — must be deterministic under MCM inputs).
+`s_table[i]` is the arc length from `u=0` to `u = (i-1)/(n-1)`.
+"""
+struct QuinticConnector{T<:Real} <: AbstractPathSegment
+    a       :: Matrix{T}     # 6 × 3
+    lambda  :: Float64
+    s_table :: Vector{T}
+    meta    :: Vector{AbstractMeta}
+end
+
+QuinticConnector(a::Matrix{T}, lambda::Real, s_table::AbstractVector{T};
+                 meta = AbstractMeta[]) where {T<:Real} =
+    QuinticConnector{T}(a, Float64(lambda), Vector{T}(s_table),
+                        Vector{AbstractMeta}(meta))
+
+# ---------------------------------------------------------------------------
+# Coefficient solve (closed-form quintic Hermite)
+# ---------------------------------------------------------------------------
+
+function _qc_coefficients(P0::AbstractVector{T}, V0::AbstractVector{T}, A0::AbstractVector{T},
+                          P1::AbstractVector{T}, V1::AbstractVector{T}, A1::AbstractVector{T}) where {T<:Real}
+    half = T(1)/T(2)
+    a0 = collect(P0)
+    a1 = collect(V0)
+    a2 = A0 .* half
+    b0 = P1 .- (a0 .+ a1 .+ a2)
+    b1 = V1 .- (a1 .+ T(2) .* a2)
+    b2 = A1 .- (T(2) .* a2)
+    a3 =  T(10) .* b0 .- T(4) .* b1 .+ half .* b2
+    a4 = -T(15) .* b0 .+ T(7) .* b1 .- b2
+    a5 =  T(6)  .* b0 .- T(3) .* b1 .+ half .* b2
+    coeffs = Matrix{T}(undef, 6, 3)
+    @inbounds for j in 1:3
+        coeffs[1,j] = a0[j]
+        coeffs[2,j] = a1[j]
+        coeffs[3,j] = a2[j]
+        coeffs[4,j] = a3[j]
+        coeffs[5,j] = a4[j]
+        coeffs[6,j] = a5[j]
+    end
+    return coeffs
+end
+
+# ---------------------------------------------------------------------------
+# Polynomial evaluators (Horner)
+# ---------------------------------------------------------------------------
+
+@inline function _qc_eval(a::AbstractMatrix, u::Real)
+    val = collect(a[6, :])
+    @inbounds for i in 5:-1:1
+        val = val .* u .+ collect(a[i, :])
+    end
+    return val
+end
+
+@inline function _qc_eval_d1(a::AbstractMatrix, u::Real)
+    c1 = collect(a[2, :])
+    c2 = 2  .* collect(a[3, :])
+    c3 = 3  .* collect(a[4, :])
+    c4 = 4  .* collect(a[5, :])
+    c5 = 5  .* collect(a[6, :])
+    val = c5
+    @inbounds for c in (c4, c3, c2, c1)
+        val = val .* u .+ c
+    end
+    return val
+end
+
+@inline function _qc_eval_d2(a::AbstractMatrix, u::Real)
+    c0 = 2  .* collect(a[3, :])
+    c1 = 6  .* collect(a[4, :])
+    c2 = 12 .* collect(a[5, :])
+    c3 = 20 .* collect(a[6, :])
+    val = c3
+    @inbounds for c in (c2, c1, c0)
+        val = val .* u .+ c
+    end
+    return val
+end
+
+@inline function _qc_eval_d3(a::AbstractMatrix, u::Real)
+    c0 = 6  .* collect(a[4, :])
+    c1 = 24 .* collect(a[5, :])
+    c2 = 60 .* collect(a[6, :])
+    val = c2
+    @inbounds for c in (c1, c0)
+        val = val .* u .+ c
+    end
+    return val
+end
+
+# ---------------------------------------------------------------------------
+# Speed and arc-length table
+# ---------------------------------------------------------------------------
+
+function _qc_speed(a::AbstractMatrix, u::Real)
+    d1 = _qc_eval_d1(a, u)
+    return sqrt(d1[1]^2 + d1[2]^2 + d1[3]^2)
+end
+
+function _qc_build_table(a::Matrix{T}, n::Int) where {T<:Real}
+    s = Vector{T}(undef, n)
+    s[1] = zero(T)
+    @inbounds for i in 2:n
+        u0 = (i - 2) / (n - 1)
+        u1 = (i - 1) / (n - 1)
+        um = (u0 + u1) / 2
+        uh = (u1 - u0) / 2
+        s[i] = s[i-1] + uh * (
+            _QC_GAUSS4_WEIGHTS[1] * _qc_speed(a, um + uh * _QC_GAUSS4_NODES[1]) +
+            _QC_GAUSS4_WEIGHTS[2] * _qc_speed(a, um + uh * _QC_GAUSS4_NODES[2]) +
+            _QC_GAUSS4_WEIGHTS[3] * _qc_speed(a, um + uh * _QC_GAUSS4_NODES[3]) +
+            _QC_GAUSS4_WEIGHTS[4] * _qc_speed(a, um + uh * _QC_GAUSS4_NODES[4]))
+    end
+    return s
+end
+
+# ---------------------------------------------------------------------------
+# s ↔ u inversion (deterministic under MCM)
+# ---------------------------------------------------------------------------
+
+function _qc_t_from_s(seg::QuinticConnector{T}, s_target::Real) where {T<:Real}
+    s_table = seg.s_table
+    n = length(s_table)
+    L_nom = Float64(_qc_nominalize(s_table[end]))
+    s_nom = Float64(_qc_nominalize(s_target))
+    L_nom < 1e-15 && return 0.0
+    sc = clamp(s_nom, 0.0, L_nom)
+
+    lo, hi = 1, n
+    while hi - lo > 1
+        mid = (lo + hi) >> 1
+        s_mid = Float64(_qc_nominalize(s_table[mid]))
+        s_mid <= sc ? (lo = mid) : (hi = mid)
+    end
+    u0 = (lo - 1) / (n - 1)
+    u1 = (hi - 1) / (n - 1)
+    s0 = Float64(_qc_nominalize(s_table[lo]))
+    ds = Float64(_qc_nominalize(s_table[hi])) - s0
+
+    u = ds > 1e-15 ? u0 + (sc - s0) / ds * (u1 - u0) : u0
+
+    a_nom = [Float64(_qc_nominalize(x)) for x in seg.a]
+    a_nom_mat = reshape(a_nom, size(seg.a))
+    for _ in 1:2
+        spd_mid = _qc_speed(a_nom_mat, (u0 + u) / 2)
+        spd_mid < 1e-15 && break
+        s_est = s0 + (u - u0) * spd_mid
+        spd   = _qc_speed(a_nom_mat, u)
+        spd   < 1e-15 && break
+        u = clamp(u - (s_est - sc) / spd, u0, u1)
+    end
+    return u
+end
+
+# ---------------------------------------------------------------------------
+# AbstractPathSegment interface
+# ---------------------------------------------------------------------------
+
+arc_length(seg::QuinticConnector) = seg.s_table[end]
+
+function curvature(seg::QuinticConnector, s::Real)
+    u  = _qc_t_from_s(seg, s)
+    d1 = _qc_eval_d1(seg.a, u)
+    d2 = _qc_eval_d2(seg.a, u)
+    spd2 = d1[1]^2 + d1[2]^2 + d1[3]^2
+    Float64(_qc_nominalize(spd2)) < 1e-30 && return zero(spd2)
+    cx = d1[2]*d2[3] - d1[3]*d2[2]
+    cy = d1[3]*d2[1] - d1[1]*d2[3]
+    cz = d1[1]*d2[2] - d1[2]*d2[1]
+    spd = sqrt(spd2)
+    return sqrt(cx^2 + cy^2 + cz^2) / (spd * spd2)
+end
+
+function geometric_torsion(seg::QuinticConnector, s::Real)
+    u  = _qc_t_from_s(seg, s)
+    d1 = _qc_eval_d1(seg.a, u)
+    d2 = _qc_eval_d2(seg.a, u)
+    d3 = _qc_eval_d3(seg.a, u)
+    cx = d1[2]*d2[3] - d1[3]*d2[2]
+    cy = d1[3]*d2[1] - d1[1]*d2[3]
+    cz = d1[1]*d2[2] - d1[2]*d2[1]
+    denom = cx^2 + cy^2 + cz^2
+    Float64(_qc_nominalize(denom)) < 1e-30 && return zero(denom)
+    return (cx*d3[1] + cy*d3[2] + cz*d3[3]) / denom
+end
+
+position_local(seg::QuinticConnector, s::Real) =
+    _qc_eval(seg.a, _qc_t_from_s(seg, s))
+
+function tangent_local(seg::QuinticConnector, s::Real)
+    u  = _qc_t_from_s(seg, s)
+    d1 = _qc_eval_d1(seg.a, u)
+    spd2 = d1[1]^2 + d1[2]^2 + d1[3]^2
+    if Float64(_qc_nominalize(spd2)) < 1e-30
+        T = eltype(seg.a)
+        return [zero(T), zero(T), one(T)]
+    end
+    return d1 ./ sqrt(spd2)
+end
+
+function _qc_normal_from_derivs(d1::AbstractVector, d2::AbstractVector)
+    spd2 = d1[1]^2 + d1[2]^2 + d1[3]^2
+    Tc = promote_type(eltype(d1), eltype(d2))
+    if Float64(_qc_nominalize(spd2)) < 1e-30
+        Tv = Tc[zero(Tc), zero(Tc), one(Tc)]
+    else
+        Tv = d1 ./ sqrt(spd2)
+    end
+    dotTd2 = Tv[1]*d2[1] + Tv[2]*d2[2] + Tv[3]*d2[3]
+    acc = d2 .- dotTd2 .* Tv
+    an2 = acc[1]^2 + acc[2]^2 + acc[3]^2
+    if Float64(_qc_nominalize(an2)) < 1e-30
+        return Tv, _qc_perp_unit(Tv)
+    end
+    return Tv, acc ./ sqrt(an2)
+end
+
+function normal_local(seg::QuinticConnector, s::Real)
+    u  = _qc_t_from_s(seg, s)
+    d1 = _qc_eval_d1(seg.a, u)
+    d2 = _qc_eval_d2(seg.a, u)
+    _, N = _qc_normal_from_derivs(d1, d2)
+    return N
+end
+
+function binormal_local(seg::QuinticConnector, s::Real)
+    u  = _qc_t_from_s(seg, s)
+    d1 = _qc_eval_d1(seg.a, u)
+    d2 = _qc_eval_d2(seg.a, u)
+    Tv, Nv = _qc_normal_from_derivs(d1, d2)
+    return [Tv[2]*Nv[3] - Tv[3]*Nv[2],
+            Tv[3]*Nv[1] - Tv[1]*Nv[3],
+            Tv[1]*Nv[2] - Tv[2]*Nv[1]]
+end
+
+end_position_local(seg::QuinticConnector) = _qc_eval(seg.a, 1.0)
+
+function end_frame_local(seg::QuinticConnector)
+    d1 = _qc_eval_d1(seg.a, 1.0)
+    d2 = _qc_eval_d2(seg.a, 1.0)
+    Tv, Nv = _qc_normal_from_derivs(d1, d2)
+    Bv = [Tv[2]*Nv[3] - Tv[3]*Nv[2],
+          Tv[3]*Nv[1] - Tv[1]*Nv[3],
+          Tv[1]*Nv[2] - Tv[2]*Nv[1]]
+    return (Tv, Nv, Bv)
+end
+
+# Unit vector perpendicular to t (arbitrary orientation), parametric in T.
+function _qc_perp_unit(t::AbstractVector)
+    T = eltype(t)
+    t3_nom = abs(Float64(_qc_nominalize(t[3])))
+    ref = t3_nom < 0.9 ? T[zero(T), zero(T), one(T)] :
+                         T[one(T), zero(T), zero(T)]
+    dotrt = ref[1]*t[1] + ref[2]*t[2] + ref[3]*t[3]
+    n = ref .- dotrt .* t
+    nn2 = n[1]^2 + n[2]^2 + n[3]^2
+    if Float64(_qc_nominalize(nn2)) < 1e-24
+        return T[one(T), zero(T), zero(T)]
+    end
+    return n ./ sqrt(nn2)
+end
+
+# ---------------------------------------------------------------------------
+# Peak curvature (sampled grid; nominalized)
+# ---------------------------------------------------------------------------
+
+function _qc_peak_curvature(a::AbstractMatrix; n_check::Int = 128)
+    κ_max = 0.0
+    @inbounds for i in 0:n_check
+        u  = i / n_check
+        d1 = _qc_eval_d1(a, u)
+        d2 = _qc_eval_d2(a, u)
+        spd2 = d1[1]^2 + d1[2]^2 + d1[3]^2
+        spd2_nom = Float64(_qc_nominalize(spd2))
+        spd2_nom < 1e-30 && continue
+        cx = d1[2]*d2[3] - d1[3]*d2[2]
+        cy = d1[3]*d2[1] - d1[1]*d2[3]
+        cz = d1[1]*d2[2] - d1[2]*d2[1]
+        cn2_nom = Float64(_qc_nominalize(cx^2 + cy^2 + cz^2))
+        κ = sqrt(cn2_nom) / (sqrt(spd2_nom) * spd2_nom)
+        κ > κ_max && (κ_max = κ)
+    end
+    return κ_max
+end
+
+# ---------------------------------------------------------------------------
+# Coefficient assembly at a chosen λ
+# ---------------------------------------------------------------------------
+
+function _qc_assemble(p1_local::AbstractVector, t_hat_in::AbstractVector,
+                       t_hat_out::AbstractVector, K0::AbstractVector,
+                       K1::AbstractVector, λ::Real)
+    Tc = promote_type(eltype(p1_local), eltype(t_hat_in), eltype(t_hat_out),
+                      eltype(K0), eltype(K1), typeof(λ))
+    P0 = Tc[zero(Tc), zero(Tc), zero(Tc)]
+    P1 = Tc.(p1_local)
+    λT = Tc(λ)
+    V0 = λT .* Tc.(t_hat_in)
+    V1 = λT .* Tc.(t_hat_out)
+    A0 = (λT*λT) .* Tc.(K0)
+    A1 = (λT*λT) .* Tc.(K1)
+    return _qc_coefficients(P0, V0, A0, P1, V1, A1)
+end
+
+# Initial λ guess: chord-driven floor with curvature-aware lower bound.
+function _qc_initial_lambda(p1_local::AbstractVector, t_hat_in::AbstractVector,
+                             t_hat_out::AbstractVector, R_min::Float64)
+    chord_nom = sqrt(Float64(_qc_nominalize(
+        p1_local[1]^2 + p1_local[2]^2 + p1_local[3]^2)))
+    dot_tt = t_hat_in[1]*t_hat_out[1] + t_hat_in[2]*t_hat_out[2] + t_hat_in[3]*t_hat_out[3]
+    dθ = acos(clamp(Float64(_qc_nominalize(dot_tt)), -1.0, 1.0))
+    return max(chord_nom, R_min * dθ, 1e-6)
+end
+
+# Project K onto the plane perpendicular to t (silently — the new segment's
+# local frame is constructed so the prior endpoint's K should already be ⊥ to
+# ẑ; user-supplied K may have a tangential component which we simply discard).
+function _qc_project_perp(K::AbstractVector, t::AbstractVector)
+    dot_tk = t[1]*K[1] + t[2]*K[2] + t[3]*K[3]
+    return K .- dot_tk .* t
+end
+
+# ---------------------------------------------------------------------------
+# Build a connector with optional min_bend_radius (λ search)
+# ---------------------------------------------------------------------------
+
+"""
+    _build_quintic_connector(p1_local, t_hat_out, K0_local, K1_local;
+                             min_bend_radius, n_table, meta) → QuinticConnector
+
+Construct a `QuinticConnector` from `JumpBy` / `JumpTo` resolve data.
+
+`t_hat_in` is the local-frame ẑ = (0,0,1). `K0_local` is the prior segment's
+terminal curvature vector projected into the new segment's local frame.
+`K1_local` is the user-specified outgoing curvature (zero by default). Both
+are silently re-projected onto the plane perpendicular to their tangent.
+
+If `min_bend_radius` is set, performs an exponential-bracket / bisection
+search over the handle scale λ until the sampled peak curvature falls below
+`1/min_bend_radius`. All branching uses nominalized scalars so the chosen λ
+is deterministic under MCM inputs; the final coefficients carry the original
+`T` element type.
+"""
+function _build_quintic_connector(p1_local::AbstractVector,
+                                  t_hat_out::AbstractVector,
+                                  K0_local::AbstractVector,
+                                  K1_local::AbstractVector;
+                                  min_bend_radius::Union{Nothing, Real} = nothing,
+                                  n_table::Int = 256,
+                                  n_check::Int = 128,
+                                  growth::Float64 = 1.5,
+                                  max_iter::Int = 30,
+                                  bisect_iter::Int = 64,
+                                  rel_tol::Float64 = 1e-6,
+                                  curvature_tol::Float64 = 1e-8,
+                                  meta = AbstractMeta[])
+    Tc = promote_type(eltype(p1_local), eltype(t_hat_out),
+                      eltype(K0_local), eltype(K1_local), Float64)
+    t_hat_in = Tc[zero(Tc), zero(Tc), one(Tc)]
+
+    # Project K's onto plane ⊥ tangent. K0 should be ⊥ ẑ by construction;
+    # K1 from user may not be exactly ⊥ to t_hat_out.
+    K0_perp = _qc_project_perp(Tc.(K0_local), t_hat_in)
+    K1_perp = _qc_project_perp(Tc.(K1_local), Tc.(t_hat_out))
+
+    R_min = isnothing(min_bend_radius) ? Inf : Float64(min_bend_radius)
+    R_min > 0.0 || throw(ArgumentError("min_bend_radius must be positive"))
+    κ_limit = isfinite(R_min) ? 1.0 / R_min : Inf
+
+    if isfinite(κ_limit)
+        K0n = sqrt(Float64(_qc_nominalize(K0_perp[1]^2 + K0_perp[2]^2 + K0_perp[3]^2)))
+        K1n = sqrt(Float64(_qc_nominalize(K1_perp[1]^2 + K1_perp[2]^2 + K1_perp[3]^2)))
+        K0n > κ_limit + curvature_tol && throw(ArgumentError(
+            "JumpBy/JumpTo: incoming endpoint curvature ($(round(K0n;digits=3)) m⁻¹) " *
+            "exceeds 1/min_bend_radius ($(round(κ_limit;digits=3)) m⁻¹)"))
+        K1n > κ_limit + curvature_tol && throw(ArgumentError(
+            "JumpBy/JumpTo: outgoing endpoint curvature ($(round(K1n;digits=3)) m⁻¹) " *
+            "exceeds 1/min_bend_radius ($(round(κ_limit;digits=3)) m⁻¹)"))
+    end
+
+    R_for_init = isfinite(R_min) ? R_min : 0.0
+    λ = _qc_initial_lambda(p1_local, t_hat_in, t_hat_out, R_for_init)
+
+    # Unconstrained: build at the initial λ.
+    if !isfinite(κ_limit)
+        coeffs = _qc_assemble(p1_local, t_hat_in, t_hat_out, K0_perp, K1_perp, λ)
+        s_table = _qc_build_table(coeffs, n_table)
+        return QuinticConnector(coeffs, λ, s_table; meta = meta)
+    end
+
+    # Test λ₀.
+    coeffs0 = _qc_assemble(p1_local, t_hat_in, t_hat_out, K0_perp, K1_perp, λ)
+    κ0 = _qc_peak_curvature(coeffs0; n_check = n_check)
+    if κ0 <= κ_limit + curvature_tol
+        s_table = _qc_build_table(coeffs0, n_table)
+        return QuinticConnector(coeffs0, λ, s_table; meta = meta)
+    end
+
+    # Exponential bracket: grow λ until feasible.
+    λ_lo = λ
+    λ_hi = λ
+    found = false
+    for _ in 1:max_iter
+        λ_hi = λ_hi * growth
+        coeffs_hi = _qc_assemble(p1_local, t_hat_in, t_hat_out, K0_perp, K1_perp, λ_hi)
+        κ_hi = _qc_peak_curvature(coeffs_hi; n_check = n_check)
+        if κ_hi <= κ_limit + curvature_tol
+            found = true
+            break
+        end
+        λ_lo = λ_hi
+    end
+    found || throw(ArgumentError(
+        "JumpBy/JumpTo: min_bend_radius=$(R_min) m infeasible; could not bring " *
+        "peak curvature below $(round(κ_limit;digits=3)) m⁻¹ within λ=$(round(λ_hi;digits=3))."))
+
+    # Bisect for tighter λ.
+    for _ in 1:bisect_iter
+        (λ_hi - λ_lo) < rel_tol * λ_hi && break
+        λ_mid = (λ_lo + λ_hi) / 2
+        coeffs_mid = _qc_assemble(p1_local, t_hat_in, t_hat_out, K0_perp, K1_perp, λ_mid)
+        κ_mid = _qc_peak_curvature(coeffs_mid; n_check = n_check)
+        if κ_mid <= κ_limit + curvature_tol
+            λ_hi = λ_mid
+        else
+            λ_lo = λ_mid
+        end
+    end
+
+    coeffs_final = _qc_assemble(p1_local, t_hat_in, t_hat_out, K0_perp, K1_perp, λ_hi)
+    s_table = _qc_build_table(coeffs_final, n_table)
+    return QuinticConnector(coeffs_final, λ_hi, s_table; meta = meta)
+end
