@@ -278,28 +278,145 @@ end
 end
 
 # -----------------------------------------------------------------------
-# TwistOverlay and material_twist
+# Twist meta and material_twist
 # -----------------------------------------------------------------------
 
-# TODO: twist refactor — the following twist testsets are skipped pending the
-# per-segment-meta twist subsystem migration.
-@testset "TwistOverlay — constant rate (Float64)" begin
-    @test_skip true
+@testset "Twist — constant rate (Float64) is exact" begin
+    spec = PathSpecBuilder()
+    straight!(spec; length = 2.0, meta = AbstractMeta[Twist(; rate = 1.5, phi_0 = 0.0)])
+    path = build(spec)
+    @test material_twist(path, 0.0) == 1.5
+    @test material_twist(path, 0.7) == 1.5
+    @test material_twist(path, 2.0) == 1.5
+    @test total_material_twist(path) == 1.5 * 2.0   # exact, no tolerance
 end
-@testset "TwistOverlay — zero outside overlay interval" begin
-    @test_skip true
+
+@testset "Twist — zero outside the run" begin
+    spec = PathSpecBuilder()
+    straight!(spec; length = 1.0)
+    straight!(spec; length = 1.0, meta = AbstractMeta[Twist(; rate = 2.0)])
+    straight!(spec; length = 1.0)
+    path = build(spec)
+    # Run is [1.0, 2.0] (until end of next twist anchor — but there is no
+    # next anchor, so this run actually extends to s_end = 3.0).
+    @test material_twist(path, 0.5) == 0.0
+    @test material_twist(path, 1.5) == 2.0
+    @test material_twist(path, 2.5) == 2.0   # extends to s_end
 end
-@testset "TwistOverlay — function-valued rate" begin
-    @test_skip true
+
+@testset "Twist — run terminates at next Twist anchor" begin
+    spec = PathSpecBuilder()
+    straight!(spec; length = 1.0, meta = AbstractMeta[Twist(; rate = 1.0)])
+    straight!(spec; length = 1.0, meta = AbstractMeta[Twist(; rate = 3.0, is_continuous = true)])
+    path = build(spec)
+    @test length(path.resolved_twists) == 2
+    @test path.resolved_twists[1].s_eff_end == 1.0
+    @test path.resolved_twists[2].s_eff_start == 1.0
+    @test material_twist(path, 0.5) == 1.0
+    @test material_twist(path, 1.5) == 3.0
 end
-@testset "TwistOverlay — function rate total twist via integration" begin
-    @test_skip true
+
+@testset "Twist — function rate is invariant under run-local s" begin
+    f = s -> sin(s)
+    spec = PathSpecBuilder()
+    straight!(spec; length = 1.0)                                  # no twist
+    straight!(spec; length = 2π, meta = AbstractMeta[Twist(; rate = f)])
+    path = build(spec)
+    # At absolute s = 1.0 + 0.7, run-local s_local = 0.7
+    @test material_twist(path, 1.7) == f(0.7)
+    # Total over the run: ∫₀^{2π} sin(s) ds = 0
+    @test isapprox(total_material_twist(path), 0.0; atol = 1e-7)
 end
-@testset "TwistOverlay — overlay spanning segment boundary" begin
-    @test_skip true
+
+@testset "Twist — oscillatory rate handled by adaptive quadrature" begin
+    spec = PathSpecBuilder()
+    straight!(spec; length = 2π,
+              meta = AbstractMeta[Twist(; rate = s -> sin(50 * s))])
+    path = build(spec)
+    # ∫₀^{2π} sin(50 s) ds = (1 - cos(100π)) / 50 = 0
+    @test isapprox(total_material_twist(path), 0.0; atol = 1e-7)
 end
-@testset "TwistOverlay — total_material_twist partial interval" begin
-    @test_skip true
+
+@testset "Twist — phi_0 carry-over with is_continuous=true" begin
+    spec = PathSpecBuilder()
+    L1 = 1.5
+    τ1 = 2.0
+    straight!(spec; length = L1, meta = AbstractMeta[Twist(; rate = τ1, phi_0 = 0.5)])
+    straight!(spec; length = 1.0, meta = AbstractMeta[Twist(; rate = 1.0, is_continuous = true)])
+    path = build(spec)
+    @test path.resolved_twists[1].phi_0 == 0.5
+    @test isapprox(path.resolved_twists[2].phi_0, 0.5 + τ1 * L1; atol = 1e-12)
+end
+
+@testset "Twist — phi_0 carry-over with function rate" begin
+    spec = PathSpecBuilder()
+    L1 = π
+    f1 = s -> cos(s)   # ∫₀^π cos(s) ds = sin(π) - sin(0) = 0
+    straight!(spec; length = L1, meta = AbstractMeta[Twist(; rate = f1, phi_0 = 0.7)])
+    straight!(spec; length = 1.0, meta = AbstractMeta[Twist(; rate = 1.0, is_continuous = true)])
+    path = build(spec)
+    @test isapprox(path.resolved_twists[2].phi_0, 0.7; atol = 1e-8)
+end
+
+@testset "Twist — total_material_twist partial interval" begin
+    spec = PathSpecBuilder()
+    straight!(spec; length = 4.0, meta = AbstractMeta[Twist(; rate = 0.5)])
+    path = build(spec)
+    @test total_material_twist(path; s_start = 1.0, s_end = 3.0) == 0.5 * 2.0
+end
+
+@testset "Twist — no anchors → zero everywhere" begin
+    spec = PathSpecBuilder()
+    straight!(spec; length = 1.0)
+    path = build(spec)
+    @test path.resolved_twists == ResolvedTwistRate[]
+    @test material_twist(path, 0.5) == 0.0
+    @test total_material_twist(path) == 0.0
+end
+
+@testset "Twist — validation: first Twist with is_continuous=true rejected" begin
+    spec = PathSpecBuilder()
+    straight!(spec; length = 1.0,
+              meta = AbstractMeta[Twist(; rate = 1.0, is_continuous = true)])
+    @test_throws ArgumentError build(spec)
+end
+
+@testset "Twist — validation: two Twists per segment rejected" begin
+    spec = PathSpecBuilder()
+    straight!(spec; length = 1.0,
+              meta = AbstractMeta[Twist(; rate = 1.0), Twist(; rate = 2.0)])
+    @test_throws ArgumentError build(spec)
+end
+
+@testset "Twist — validation: phi_0 with is_continuous rejected at construction" begin
+    @test_throws ArgumentError Twist(; rate = 1.0, phi_0 = 0.7, is_continuous = true)
+end
+
+@testset "Twist — frame() returns material_twist" begin
+    spec = PathSpecBuilder()
+    straight!(spec; length = 1.0, meta = AbstractMeta[Twist(; rate = 2.5)])
+    path = build(spec)
+    @test frame(path, 0.4).material_twist == 2.5
+end
+
+@testset "Twist — total_frame_rotation = τ_geom + Ω_material" begin
+    spec = PathSpecBuilder()
+    # straight segment has τ_geom = 0, so total_frame_rotation = ∫τ_mat ds.
+    straight!(spec; length = 2.0, meta = AbstractMeta[Twist(; rate = 0.5)])
+    path = build(spec)
+    @test isapprox(total_frame_rotation(path), 1.0; atol = 1e-12)
+end
+
+@testset "Twist — path_twist_breakpoints includes run boundaries" begin
+    spec = PathSpecBuilder()
+    straight!(spec; length = 1.0)
+    straight!(spec; length = 1.0, meta = AbstractMeta[Twist(; rate = 1.0)])
+    straight!(spec; length = 1.0)
+    path = build(spec)
+    bps = path_twist_breakpoints(path)
+    @test 0.0 in bps
+    @test 1.0 in bps
+    @test 3.0 in bps   # run extends to s_end since no later anchor
 end
 
 # -----------------------------------------------------------------------

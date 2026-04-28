@@ -32,13 +32,24 @@ Two approaches are supported and can be freely mixed on a `PathSpecBuilder`:
         jumpby!(spec; delta=(0.0, 0.0, 0.5))
         jumpto!(spec; destination=(1.0, 0.0, 0.5), tangent=(0.0, 1.0, 0.0))
 
-# Twist subsystem (STUB)
+# Material twist
 
-`TwistOverlay`, `ResolvedTwistOverlay`, `ResolvedTwistRate`, `twist!`,
-`material_twist`, `total_material_twist`, and the material-twist branch of
-`total_frame_rotation` are pending a planned refactor that moves twist into
-per-segment meta. They remain defined but are orphaned from
-`PathSpecCached`; calling them errors with a "pending refactor" message.
+Material twist is attached as per-segment meta via `Twist <: AbstractMeta`.
+A `Twist` placed in a segment's `meta` vector starts a twist run at that
+segment's start and continues until the next `Twist`-bearing segment, or
+until the path ends.
+
+    spec = PathSpecBuilder()
+    straight!(spec; length = 1.0,
+              meta = [Twist(; rate = 2π, phi_0 = 0.0)])           # constant rate
+    straight!(spec; length = 1.0,
+              meta = [Twist(; rate = s -> sin(s), is_continuous = true)])
+    build(spec)
+
+`rate` may be a `Real` (constant rad/m) or a `Function` `rate(s_local)` of
+run-local arc length (`s_local = 0` at the start of the run). With
+`is_continuous = true` the resolver computes `phi_0` from the prior run's
+accumulated phase.
 
 # Shrinkage
 
@@ -52,7 +63,7 @@ are applied by `fiber-path-shrinkage.jl` as a `shrink(path, α) → Path` transf
     arc_length(path, s1, s2)
     curvature(seg_or_path, s)
     geometric_torsion(seg_or_path, s)
-    material_twist(path, s)              # STUB — errors
+    material_twist(path, s)
     position(path, s)
     tangent(path, s)
     normal(path, s)
@@ -65,14 +76,15 @@ are applied by `fiber-path-shrinkage.jl` as a `shrink(path, α) → Path` transf
     bounding_box(path)
     total_turning_angle(path)
     total_torsion(path)
-    total_material_twist(path; s_start, s_end, n_quad)   # STUB — errors
-    total_frame_rotation(path; s_start, s_end, n_quad)   # STUB — errors
+    total_material_twist(path; s_start, s_end, rtol, atol)
+    total_frame_rotation(path; s_start, s_end, rtol, atol)
     writhe(path)
     sample(path, s_values)
     sample_uniform(path; n)
 """
 
 using LinearAlgebra
+using QuadGK
 
 # -----------------------------------------------------------------------
 # Abstract segment type
@@ -109,42 +121,70 @@ segment_meta(seg::AbstractPathSegment) =
     :meta ∈ fieldnames(typeof(seg)) ? seg.meta : AbstractMeta[]
 
 # -----------------------------------------------------------------------
-# TwistOverlay  (STUB — see twist subsystem stub region below)
+# Twist  (per-segment material-twist annotation)
 # -----------------------------------------------------------------------
 
 """
-    TwistOverlay(s_start, length, rate)
+    Twist(; rate, phi_0 = 0.0, is_continuous = false)
 
-Material twist applied over an arc-length interval `[s_start, s_start + length]`.
-`rate` is a function giving the twist rate in rad/m of arc-length.
+Material-twist annotation attached to a segment's `meta` vector. The twist run
+begins at the host segment's start (effective arc length `s_offset_eff`) and
+extends until the next segment carrying a `Twist`, or until the path ends.
 
-STUB: orphaned from `PathSpecCached` pending the twist → per-segment-meta refactor.
+- `rate` may be a `Real` (constant rad/m) or a `Function` `rate(s_local)` of
+  run-local arc length where `s_local = 0` at the start of the twist run.
+- `phi_0` is the absolute initial phase (rad) at the start of the run when
+  `is_continuous = false`.
+- `is_continuous = true` means the resolver computes `phi_0` from the prior
+  twist run's accumulated phase. In that case `phi_0` must be left at its
+  default `0.0`.
+
+At most one `Twist` may appear in any single segment's `meta`. The first
+`Twist` on a path must have `is_continuous = false`.
 """
-struct TwistOverlay
-    s_start::Float64
-    length::Float64
-    rate::Function
+struct Twist <: AbstractMeta
+    rate::Union{Float64, Function}
+    phi_0::Float64
+    is_continuous::Bool
+
+    function Twist(; rate, phi_0 = 0.0, is_continuous::Bool = false)
+        if is_continuous && phi_0 != 0.0
+            throw(ArgumentError(
+                "Twist: do not specify phi_0 when is_continuous=true (phase is carried over from prior run)"))
+        end
+        r = rate isa Function ? rate : Float64(rate)
+        new(r, Float64(phi_0), is_continuous)
+    end
 end
 
-# Resolved twist data — defined for namespace continuity but not produced
-# by `build()` under the current refactor. Pending twist → per-segment-meta.
+"""
+    ResolvedTwistRate(s_eff_start, s_eff_end, rate, phi_0)
+
+A single twist run resolved to absolute path coordinates. `rate` is called
+(when a `Function`) with run-local arc length `s_local = s - s_eff_start`.
+`phi_0` is the absolute phase (rad) at `s_eff_start`.
+"""
 struct ResolvedTwistRate
-    s_eff_start::Real
-    s_eff_end::Real
-    rate::Function
+    s_eff_start::Float64
+    s_eff_end::Float64
+    rate::Union{Float64, Function}
+    phi_0::Float64
 end
 
-struct ResolvedTwistOverlay
-    rates::Vector{ResolvedTwistRate}
-end
+# -----------------------------------------------------------------------
+# Quadrature helper
+# -----------------------------------------------------------------------
+# Integrate a twist rate over a run-local interval. Constant rates take the
+# analytic branch; function rates use QuadGK adaptive Gauss–Kronrod, which
+# subdivides automatically for oscillatory integrands.
 
-"""
-    twist!(spec; s_start, length, rate)  (STUB)
+_integrate_rate(rate::Float64, a::Float64, b::Float64;
+                rtol::Float64 = 1e-8, atol::Float64 = 0.0) = rate * (b - a)
 
-Pending twist → per-segment-meta refactor; calling errors loudly.
-"""
-function twist!(::Any; s_start::Real = 0.0, length::Real = 0.0, rate = 0.0)
-    error("twist!: twist subsystem pending refactor (per-segment meta)")
+function _integrate_rate(rate::Function, a::Float64, b::Float64;
+                         rtol::Float64 = 1e-8, atol::Float64 = 0.0)
+    val, _err = QuadGK.quadgk(rate, a, b; rtol = rtol, atol = atol)
+    return val
 end
 
 # -----------------------------------------------------------------------
@@ -914,6 +954,7 @@ struct PathSpecCached
     spec::PathSpec
     placed_segments::Vector{PlacedSegment}
     s_end::Real
+    resolved_twists::Vector{ResolvedTwistRate}
 end
 
 # Convenience accessor: callers historically read `path.spec.s_start`. Provided
@@ -964,7 +1005,72 @@ function build(spec::PathSpec)
         s_eff += arc_length(seg_placed)
     end
 
-    return PathSpecCached(spec, placed, s_eff)
+    # Skip twist resolution when no segment carries a Twist. This also keeps
+    # MCM-valued (Particles) paths working: _resolve_twists requires a Float64
+    # s_end which is incompatible with Particles-typed cumulative arc length.
+    has_twist = any(ps -> any(m -> m isa Twist, segment_meta(ps.segment)), placed)
+    resolved_twists = has_twist ? _resolve_twists(placed, Float64(s_eff)) : ResolvedTwistRate[]
+    return PathSpecCached(spec, placed, s_eff, resolved_twists)
+end
+
+# -----------------------------------------------------------------------
+# _resolve_twists
+# -----------------------------------------------------------------------
+# Walk placed segments in order, collect Twist anchors from each segment's
+# meta, and emit one ResolvedTwistRate per anchor. Each run extends from the
+# anchor's segment start to the next anchor's segment start (or to s_end).
+# is_continuous=true anchors take their phi_0 from the prior run's accumulated
+# phase.
+
+function _resolve_twists(placed::Vector{PlacedSegment}, s_end::Float64)
+    # Collect (s_eff_start, twist) anchors with at-most-one-Twist-per-segment validation.
+    anchors = Tuple{Float64, Twist}[]
+    for ps in placed
+        twists_here = Twist[]
+        for m in segment_meta(ps.segment)
+            m isa Twist && push!(twists_here, m)
+        end
+        if length(twists_here) > 1
+            throw(ArgumentError(
+                "Path build: segment at s_offset_eff = $(ps.s_offset_eff) carries " *
+                "$(length(twists_here)) Twist meta entries; at most one is permitted"))
+        end
+        if !isempty(twists_here)
+            push!(anchors, (Float64(ps.s_offset_eff), twists_here[1]))
+        end
+    end
+
+    isempty(anchors) && return ResolvedTwistRate[]
+
+    n = length(anchors)
+    out = Vector{ResolvedTwistRate}(undef, n)
+    prev_phi_0 = 0.0
+    prev_run_length = 0.0
+    prev_rate::Union{Float64, Function} = 0.0
+
+    for i in 1:n
+        s_start, tw = anchors[i]
+        s_run_end = (i < n) ? anchors[i + 1][1] : s_end
+
+        if tw.is_continuous
+            if i == 1
+                throw(ArgumentError(
+                    "Path build: first Twist on the path has is_continuous=true; " *
+                    "the first run has no prior phase to continue from"))
+            end
+            phi_0 = prev_phi_0 + _integrate_rate(prev_rate, 0.0, prev_run_length)
+        else
+            phi_0 = tw.phi_0
+        end
+
+        out[i] = ResolvedTwistRate(s_start, s_run_end, tw.rate, phi_0)
+
+        prev_phi_0 = phi_0
+        prev_run_length = s_run_end - s_start
+        prev_rate = tw.rate
+    end
+
+    return out
 end
 
 # -----------------------------------------------------------------------
@@ -1011,12 +1117,21 @@ function geometric_torsion(path::PathSpecCached, s::Real)
 end
 
 """
-    material_twist  (STUB)
+    material_twist(path, s)
 
-Material twist rate at effective arc-length `s`. Currently returns zero
-(no overlays carried) pending the twist → per-segment-meta refactor.
+Material twist rate (rad/m) at effective arc length `s`, summed over all
+resolved twist runs that contain `s`. Runs are disjoint by construction; the
+sum exists only as a robustness guard.
 """
-material_twist(::PathSpecCached, s) = zero(s isa AbstractFloat ? s : Float64(s))
+function material_twist(path::PathSpecCached, s)
+    τ = zero(s isa AbstractFloat ? s : Float64(s))
+    for r in path.resolved_twists
+        if r.s_eff_start <= s <= r.s_eff_end
+            τ += r.rate isa Function ? r.rate(s - r.s_eff_start) : r.rate
+        end
+    end
+    return τ
+end
 
 function position(path::PathSpecCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
@@ -1044,9 +1159,7 @@ function frame(path::PathSpecCached, s::Real)
     B = binormal(path, s)
     κ = curvature(path, s)
     τ = geometric_torsion(path, s)
-    # material_twist intentionally zero pending twist refactor; field preserved
-    # so downstream Sample/PathSample callers continue to type-check.
-    m = 0.0
+    m = material_twist(path, s)
     return (; position = position(path, s), tangent = T, normal = N, binormal = B,
               curvature = κ, geometric_torsion = τ, material_twist = m)
 end
@@ -1119,25 +1232,52 @@ function total_torsion(path::PathSpecCached)
 end
 
 """
-    total_material_twist(path; s_start=path.spec.s_start, s_end=path.s_end, n_quad=128) → Float64
+    total_material_twist(path; s_start, s_end, rtol = 1e-8, atol = 0.0) → Float64
 
 Integrated material twist ``∫ τ_{\\mathrm{mat}}(s) \\, ds`` over effective arc length from
-`s_start` to `s_end` (defaults: full path). Require `s_start ≤ s_end`; if `s_start > s_end`,
-an `ArgumentError` is thrown (no reordering). If `s_start == s_end`, returns `0.0`. Both
-endpoints must lie in `[path.spec.s_start, path.s_end]`. Quadrature matches the previous rule on
-each overlap of `[s_start, s_end]` with resolved twist overlays.
+`s_start` to `s_end` (defaults: full path).  Both
+endpoints must lie in `[path.spec.s_start, path.s_end]`.
+
+Constant twist rates integrate analytically; `Function` rates use adaptive
+Gauss–Kronrod (QuadGK) at the supplied `rtol`/`atol`.
 """
 function total_material_twist(
-    ::PathSpecCached;
-    s_start::Real = 0.0,
-    s_end::Real = 0.0,
-    n_quad::Int = 128,
+    path::PathSpecCached;
+    s_start::Real = path.spec.s_start,
+    s_end::Real   = path.s_end,
+    rtol::Real    = 1e-8,
+    atol::Real    = 0.0,
 )
-    error("total_material_twist: twist subsystem pending refactor (per-segment meta)")
+    s_lo = Float64(s_start)
+    s_hi = Float64(s_end)
+    if s_lo > s_hi
+        throw(ArgumentError(
+            "total_material_twist: require s_start ≤ s_end; got s_start=$(s_lo), s_end=$(s_hi)"))
+    end
+    ps0 = Float64(path.spec.s_start)
+    ps1 = Float64(path.s_end)
+    if !(ps0 - 1e-12 <= s_lo <= ps1 + 1e-12) || !(ps0 - 1e-12 <= s_hi <= ps1 + 1e-12)
+        throw(ArgumentError(
+            "total_material_twist: require path.s_start ≤ s ≤ path.s_end for both endpoints; " *
+            "got [$(s_lo), $(s_hi)] m vs path domain [$(ps0), $(ps1)] m"))
+    end
+    s_lo == s_hi && return 0.0
+
+    total = 0.0
+    rtolf = Float64(rtol)
+    atolf = Float64(atol)
+    for r in path.resolved_twists
+        a = max(r.s_eff_start, s_lo)
+        b = min(r.s_eff_end, s_hi)
+        b <= a && continue
+        total += _integrate_rate(r.rate, a - r.s_eff_start, b - r.s_eff_start;
+                                 rtol = rtolf, atol = atolf)
+    end
+    return total
 end
 
 """
-    total_frame_rotation(path; s_start=path.spec.s_start, s_end=path.s_end, n_quad=128) → Float64
+    total_frame_rotation(path; s_start, s_end, rtol = 1e-8, atol = 0.0) → Float64
 
 Total rotation of the polarization reference frame over effective arc length from `s_start`
 to `s_end`, integrating both contributions:
@@ -1146,18 +1286,61 @@ to `s_end`, integrating both contributions:
 
 where `τ_geom` is the geometric torsion of the centerline (nonzero for helices; zero for
 straight segments and circular bends) and `Ω_material` is the applied material twist rate
-from `TwistOverlay`s.  Returns the integral in radians.
+from `Twist` meta annotations. Returns the integral in radians.
 
 See `path-geometry.md` for a discussion of how this differs from `total_torsion` and
 `total_material_twist` individually.
 """
 function total_frame_rotation(
-    ::PathSpecCached;
-    s_start::Real = 0.0,
-    s_end::Real   = 0.0,
-    n_quad::Int   = 128,
+    path::PathSpecCached;
+    s_start::Real = path.spec.s_start,
+    s_end::Real   = path.s_end,
+    rtol::Real    = 1e-8,
+    atol::Real    = 0.0,
 )
-    error("total_frame_rotation: twist subsystem pending refactor (per-segment meta)")
+    s_lo = Float64(s_start)
+    s_hi = Float64(s_end)
+    if s_lo > s_hi
+        throw(ArgumentError(
+            "total_frame_rotation: require s_start ≤ s_end; got s_start=$(s_lo), s_end=$(s_hi)"))
+    end
+    ps0 = Float64(path.spec.s_start)
+    ps1 = Float64(path.s_end)
+    if !(ps0 - 1e-12 <= s_lo <= ps1 + 1e-12) || !(ps0 - 1e-12 <= s_hi <= ps1 + 1e-12)
+        throw(ArgumentError(
+            "total_frame_rotation: require path.s_start ≤ s ≤ path.s_end for both endpoints; " *
+            "got [$(s_lo), $(s_hi)] m vs path domain [$(ps0), $(ps1)] m"))
+    end
+    s_lo == s_hi && return 0.0
+
+    # Geometric torsion: integrate segment-by-segment, with closed-form
+    # shortcuts where available.
+    τ_total = 0.0
+    rtolf = Float64(rtol)
+    atolf = Float64(atol)
+    for ps in path.placed_segments
+        seg = ps.segment
+        seg_s_start = Float64(ps.s_offset_eff)
+        seg_s_end   = seg_s_start + Float64(arc_length(seg))
+        a = max(seg_s_start, s_lo)
+        b = min(seg_s_end,   s_hi)
+        b <= a && continue
+        a_loc = a - seg_s_start
+        b_loc = b - seg_s_start
+        if seg isa StraightSegment || seg isa BendSegment || seg isa CatenarySegment
+            # τ_geom = 0
+        elseif seg isa HelixSegment
+            τ_total += geometric_torsion(seg, 0.0) * (b_loc - a_loc)
+        else
+            val, _ = QuadGK.quadgk(s -> geometric_torsion(seg, s), a_loc, b_loc;
+                                   rtol = rtolf, atol = atolf)
+            τ_total += val
+        end
+    end
+
+    Ω_total = total_material_twist(path; s_start = s_lo, s_end = s_hi,
+                                   rtol = rtolf, atol = atolf)
+    return τ_total + Ω_total
 end
 
 """
@@ -1316,8 +1499,11 @@ function _segment_point_budget(
     geom_angle  = _budget_scalar(_segment_total_angle(seg) * frac)
     geom_budget = max(2, ceil(Int, fidelity * geom_angle / (2π) * 32))
 
-    # Twist budget: stub (zero) pending twist refactor.
-    twist_budget = 2
+    # Twist budget: integrate |τ_mat| over [a, b] at loose tolerance — this is
+    # only sizing a sampling budget, so 1e-3 relative is plenty.
+    twist_total  = total_material_twist(path; s_start = a, s_end = b, rtol = 1e-3)
+    twist_angle  = abs(_budget_scalar(twist_total))
+    twist_budget = max(2, ceil(Int, fidelity * twist_angle / (2π) * 32))
 
     return max(geom_budget, twist_budget)
 end
@@ -1411,8 +1597,12 @@ function path_segment_breakpoints(path::PathSpecCached)
 end
 
 function path_twist_breakpoints(path::PathSpecCached)
-    # STUB: twist subsystem pending refactor — only path endpoints contribute.
-    return normalize_breakpoints(Real[path.spec.s_start, path.s_end])
+    points = Real[path.spec.s_start, path.s_end]
+    for r in path.resolved_twists
+        push!(points, r.s_eff_start)
+        push!(points, r.s_eff_end)
+    end
+    return normalize_breakpoints(points)
 end
 
 function breakpoints(path::PathSpecCached)

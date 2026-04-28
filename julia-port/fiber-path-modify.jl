@@ -179,5 +179,11 @@ function _replace_segments(path::PathSpecCached, new_segments::Vector{<:Abstract
     end
 
     new_spec = PathSpec(collect(new_segments), path.spec.s_start)
-    return PathSpecCached(new_spec, placed, s_eff)
+    # Only resolve twists if any segment carries one. Skipping the resolve when
+    # there are no anchors keeps MCM-valued (Particles) modify paths working;
+    # _resolve_twists requires a Float64 s_end which is incompatible with
+    # Particles-typed cumulative arc length.
+    has_twist = any(ps -> any(m -> m isa Twist, segment_meta(ps.segment)), placed)
+    resolved_twists = has_twist ? _resolve_twists(placed, Float64(s_eff)) : ResolvedTwistRate[]
+    return PathSpecCached(new_spec, placed, s_eff, resolved_twists)
 end

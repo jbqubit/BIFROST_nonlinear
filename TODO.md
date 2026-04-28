@@ -74,6 +74,14 @@ upcoming features. Agents should not start work on these without explicit author
 
 - [ ] TODO fix the MCM demo in demo.jl 4/28 task
 
+- [ ] Verify the `Twist` `is_continuous = true` carry-over semantics are what we
+      want: when a `Twist` meta has `is_continuous = true`, the resolver in
+      path-geometry.jl computes its `phi_0` as `prev.phi_0 + ∫_0^{prev_run_length}
+      prev.rate(s_local) ds_local` — i.e. the absolute phase at the start of the
+      new run equals the accumulated phase at the end of the prior run. Confirm
+      this is the intended physical meaning before any downstream consumer
+      (polarization propagator, plotting, etc.) starts relying on `phi_0`.
+
 #########################
 #### path-geometry ######
 #########################
