@@ -47,7 +47,7 @@ path_spec = PathSpecBuilder()
 straight!(path_spec; length = 5.0)
 bend!(path_spec;
     radius = 4.458, angle = π / 2, axis_angle = 0.0,
-    meta = AbstractMeta[
+    meta = [
         Nickname("90° bend"),
         MCMadd(:T_K, Normal(0.0, 2.0)),   # +ΔT_K ~ N(0, 2 K) on this segment
     ],

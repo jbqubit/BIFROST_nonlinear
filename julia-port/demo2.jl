@@ -614,9 +614,9 @@ function demo_modify_jumpby_drift_2d(;
     spec = PathSpecBuilder()
     straight!(spec; length = 0.3)
     bend!(spec; radius = 0.5, angle = π/2, axis_angle = 0.0,
-          meta = AbstractMeta[MCMmul(:radius, 1.25)])
+          meta = [MCMmul(:radius, 1.25)])
     bend!(spec; radius = 0.5, angle = π/2, axis_angle = π,
-          meta = AbstractMeta[MCMmul(:radius, 1.25)])
+          meta = [MCMmul(:radius, 1.25)])
     straight!(spec; length = 0.3)
     jumpby!(spec; delta = (0.0, 0.0, 0.8))
     straight!(spec; length = 1)
@@ -666,9 +666,9 @@ function demo_modify_jumpto_anchor_2d(;
     spec = PathSpecBuilder()
     straight!(spec; length = 0.3)
     bend!(spec; radius = 0.5, angle = π/2, axis_angle = 0.0,
-          meta = AbstractMeta[MCMmul(:radius, 1.5)])
+          meta = [MCMmul(:radius, 1.5)])
     bend!(spec; radius = 0.5, angle = π/2, axis_angle = π,
-          meta = AbstractMeta[MCMmul(:radius, 1.5)])
+          meta = [MCMmul(:radius, 1.5)])
     straight!(spec; length = 0.3)
     jumpto!(spec; destination = destination)
     modified = modify(Fiber(build(spec);
@@ -710,7 +710,7 @@ function demo_modify_jumpto_anchor_thermal_2d(;
     spec = PathSpecBuilder()
     straight!(spec; length = 0.3)
     helix!(spec; radius = 0.10, pitch = 0.5, turns = 3.0, axis_angle = 0.0,
-           meta = AbstractMeta[MCMmul(:radius, 1.25), MCMadd(:T_K, ΔT_5pct)])
+           meta = [MCMmul(:radius, 1.25), MCMadd(:T_K, ΔT_5pct)])
     straight!(spec; length = 0.3)
     jumpto!(spec; destination = (1.5, 0.0, 2.4),
             tangent = (0.0, 0.0, 1.0),

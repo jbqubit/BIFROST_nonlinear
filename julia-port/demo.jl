@@ -63,14 +63,13 @@ function demo_path_geometry_segment_labels(;
     title::AbstractString = "Path geometry: segment nicknames",
 )
     PG = PathGeometry
-    _nick(s) = PG.AbstractMeta[PG.Nickname(s)]
     spec = PG.PathSpecBuilder()
-    PG.straight!(spec; length = 0.08, meta = _nick("lead-in"))
-    PG.bend!(spec; radius = 0.06, angle = π / 2, meta = _nick("90° bend"))
-    PG.straight!(spec; length = 0.06, meta = _nick("spacer"))
-    PG.catenary!(spec; a = 0.04, length = 0.08, axis_angle = 0.0, meta = _nick("sag"))
-    PG.helix!(spec; radius = 0.025, pitch = 0.015, turns = 1.2, axis_angle = 0.0, meta = _nick("twist section"))
-    PG.straight!(spec; length = 0.06, meta = _nick("lead-out"))
+    PG.straight!(spec; length = 0.08, meta = [PG.Nickname("lead-in")])
+    PG.bend!(spec; radius = 0.06, angle = π / 2, meta = [PG.Nickname("90° bend")])
+    PG.straight!(spec; length = 0.06, meta = [PG.Nickname("spacer")])
+    PG.catenary!(spec; a = 0.04, length = 0.08, axis_angle = 0.0, meta = [PG.Nickname("sag")])
+    PG.helix!(spec; radius = 0.025, pitch = 0.015, turns = 1.2, axis_angle = 0.0, meta = [PG.Nickname("twist section")])
+    PG.straight!(spec; length = 0.06, meta = [PG.Nickname("lead-out")])
     path = PG.build(spec)
     println("Arc length (effective): ", PG.path_length(path), " m")
     plot_path = write_path_geometry_plot3d(
@@ -198,7 +197,7 @@ end
 # segment indexed by `target_idx` (1 = first straight, 2 = bend, 3 = second
 # straight). Returns the modified path and the target segment index.
 function _build_modify_variant(L::Float64, R::Float64,
-                               target_idx::Int, target_meta::Vector{AbstractMeta})
+                               target_idx::Int, target_meta::AbstractVector{<:AbstractMeta})
     spec = PathSpecBuilder()
     straight!(spec; length = L, meta = target_idx == 1 ? target_meta : AbstractMeta[])
     bend!(spec; radius = R, angle = π, axis_angle = 0.0,
@@ -221,7 +220,7 @@ const _MODIFY_HELIX_TURNS  = 1.5
 # `target_meta` to the segment indexed by `target_idx`:
 #   1 = first straight, 2 = bend, 3 = helix, 4 = second straight.
 function _build_modify_variant_helix(L::Float64, R::Float64,
-                                     target_idx::Int, target_meta::Vector{AbstractMeta})
+                                     target_idx::Int, target_meta::AbstractVector{<:AbstractMeta})
     spec = PathSpecBuilder()
     straight!(spec; length = L, meta = target_idx == 1 ? target_meta : AbstractMeta[])
     bend!(spec; radius = R, angle = π, axis_angle = 0.0,
@@ -355,7 +354,7 @@ function demo_modify_straight_length(;
         L = 1.0, R = 0.5,
         variants = [
             ("baseline",              1, AbstractMeta[]),
-            ("MCMadd(:length, -0.4)", 1, AbstractMeta[MCMadd(:length, -0.4)]),
+            ("MCMadd(:length, -0.4)", 1, [MCMadd(:length, -0.4)]),
         ],
     )
 end
@@ -369,8 +368,8 @@ function demo_modify_bend_radius(;
         L = 1.0, R = 0.5,
         variants = [
             ("baseline",               2, AbstractMeta[]),
-            ("MCMadd(:radius, -0.25)", 2, AbstractMeta[MCMadd(:radius, -0.25)]),
-            ("MCMadd(:radius, +0.50)", 2, AbstractMeta[MCMadd(:radius,  0.50)]),
+            ("MCMadd(:radius, -0.25)", 2, [MCMadd(:radius, -0.25)]),
+            ("MCMadd(:radius, +0.50)", 2, [MCMadd(:radius,  0.50)]),
         ],
     )
 end
@@ -384,9 +383,9 @@ function demo_modify_bend_angle(;
         L = 1.0, R = 0.5,
         variants = [
             ("baseline",            2, AbstractMeta[]),
-            ("MCMadd(:angle, -π/2)", 2, AbstractMeta[MCMadd(:angle, -π/2)]),
-            ("MCMadd(:angle, +π/4)", 2, AbstractMeta[MCMadd(:angle,  π/4)]),
-            ("MCMadd(:angle, +π)",   2, AbstractMeta[MCMadd(:angle,  π)]),
+            ("MCMadd(:angle, -π/2)", 2, [MCMadd(:angle, -π/2)]),
+            ("MCMadd(:angle, +π/4)", 2, [MCMadd(:angle,  π/4)]),
+            ("MCMadd(:angle, +π)",   2, [MCMadd(:angle,  π)]),
         ],
     )
 end
@@ -400,8 +399,8 @@ function demo_modify_straight_length_mul(;
         L = 1.0, R = 0.5,
         variants = [
             ("baseline",              1, AbstractMeta[]),
-            ("MCMmul(:length, -0.4)", 1, AbstractMeta[MCMmul(:length, -0.4)]),
-            ("MCMmul(:length, +0.5)", 1, AbstractMeta[MCMmul(:length,  0.5)]),
+            ("MCMmul(:length, -0.4)", 1, [MCMmul(:length, -0.4)]),
+            ("MCMmul(:length, +0.5)", 1, [MCMmul(:length,  0.5)]),
         ],
     )
 end
@@ -415,10 +414,10 @@ function demo_modify_bend_radius_mul(;
         L = 1.0, R = 0.5,
         variants = [
             ("baseline",             2, AbstractMeta[]),
-            ("MCMmul(:radius, 0.5)", 2, AbstractMeta[MCMmul(:radius, 0.5)]),
+            ("MCMmul(:radius, 0.5)", 2, [MCMmul(:radius, 0.5)]),
             # neg radius not supported, throws @assertion error:
-            # ("MCMmul(:radius, -0.5)", 2, AbstractMeta[MCMmul(:radius, -0.5)]),
-            ("MCMmul(:radius, 2.0)", 2, AbstractMeta[MCMmul(:radius, 2.0)]),
+            # ("MCMmul(:radius, -0.5)", 2, [MCMmul(:radius, -0.5)]),
+            ("MCMmul(:radius, 2.0)", 2, [MCMmul(:radius, 2.0)]),
         ],
     )
 end
@@ -432,8 +431,8 @@ function demo_modify_bend_angle_mul(;
         L = 1.0, R = 0.5,
         variants = [
             ("baseline",            2, AbstractMeta[]),
-            ("MCMmul(:angle, 0.5)",  2, AbstractMeta[MCMmul(:angle, 0.5)]),
-            ("MCMmul(:angle, 1.25)", 2, AbstractMeta[MCMmul(:angle, 1.25)]),
+            ("MCMmul(:angle, 0.5)",  2, [MCMmul(:angle, 0.5)]),
+            ("MCMmul(:angle, 1.25)", 2, [MCMmul(:angle, 1.25)]),
         ],
     )
 end
@@ -448,8 +447,8 @@ function demo_modify_helix_radius(;
         builder = _build_modify_variant_helix,
         variants = [
             ("baseline",               3, AbstractMeta[]),
-            ("MCMadd(:radius, -0.05)", 3, AbstractMeta[MCMadd(:radius, -0.05)]),
-            ("MCMadd(:radius, +0.10)", 3, AbstractMeta[MCMadd(:radius,  0.10)]),
+            ("MCMadd(:radius, -0.05)", 3, [MCMadd(:radius, -0.05)]),
+            ("MCMadd(:radius, +0.10)", 3, [MCMadd(:radius,  0.10)]),
         ],
     )
 end
@@ -464,8 +463,8 @@ function demo_modify_helix_pitch(;
         builder = _build_modify_variant_helix,
         variants = [
             ("baseline",              3, AbstractMeta[]),
-            ("MCMadd(:pitch, -0.10)", 3, AbstractMeta[MCMadd(:pitch, -0.10)]),
-            ("MCMadd(:pitch, +0.20)", 3, AbstractMeta[MCMadd(:pitch,  0.20)]),
+            ("MCMadd(:pitch, -0.10)", 3, [MCMadd(:pitch, -0.10)]),
+            ("MCMadd(:pitch, +0.20)", 3, [MCMadd(:pitch,  0.20)]),
         ],
     )
 end
@@ -480,8 +479,8 @@ function demo_modify_helix_turns(;
         builder = _build_modify_variant_helix,
         variants = [
             ("baseline",             3, AbstractMeta[]),
-            ("MCMadd(:turns, -0.5)", 3, AbstractMeta[MCMadd(:turns, -0.5)]),
-            ("MCMadd(:turns, +0.5)", 3, AbstractMeta[MCMadd(:turns,  0.5)]),
+            ("MCMadd(:turns, -0.5)", 3, [MCMadd(:turns, -0.5)]),
+            ("MCMadd(:turns, +0.5)", 3, [MCMadd(:turns,  0.5)]),
         ],
     )
 end
@@ -496,8 +495,8 @@ function demo_modify_helix_radius_mul(;
         builder = _build_modify_variant_helix,
         variants = [
             ("baseline",             3, AbstractMeta[]),
-            ("MCMmul(:radius, 0.5)", 3, AbstractMeta[MCMmul(:radius, 0.5)]),
-            ("MCMmul(:radius, 2.0)", 3, AbstractMeta[MCMmul(:radius, 2.0)]),
+            ("MCMmul(:radius, 0.5)", 3, [MCMmul(:radius, 0.5)]),
+            ("MCMmul(:radius, 2.0)", 3, [MCMmul(:radius, 2.0)]),
         ],
     )
 end
@@ -512,8 +511,8 @@ function demo_modify_helix_pitch_mul(;
         builder = _build_modify_variant_helix,
         variants = [
             ("baseline",            3, AbstractMeta[]),
-            ("MCMmul(:pitch, 0.5)", 3, AbstractMeta[MCMmul(:pitch, 0.5)]),
-            ("MCMmul(:pitch, 2.0)", 3, AbstractMeta[MCMmul(:pitch, 2.0)]),
+            ("MCMmul(:pitch, 0.5)", 3, [MCMmul(:pitch, 0.5)]),
+            ("MCMmul(:pitch, 2.0)", 3, [MCMmul(:pitch, 2.0)]),
         ],
     )
 end
@@ -528,8 +527,8 @@ function demo_modify_helix_turns_mul(;
         builder = _build_modify_variant_helix,
         variants = [
             ("baseline",             3, AbstractMeta[]),
-            ("MCMmul(:turns, 0.67)", 3, AbstractMeta[MCMmul(:turns, 0.67)]),
-            ("MCMmul(:turns, 1.5)",  3, AbstractMeta[MCMmul(:turns, 1.5)]),
+            ("MCMmul(:turns, 0.67)", 3, [MCMmul(:turns, 0.67)]),
+            ("MCMmul(:turns, 1.5)",  3, [MCMmul(:turns, 1.5)]),
         ],
     )
 end
@@ -544,11 +543,10 @@ function demo_helix_mcm_twist(;
     title::AbstractString = "Helix with MCM twist",
 )
     PG = PathGeometry
-    _nick(s) = PG.AbstractMeta[PG.Nickname(s)]
     spec = PG.PathSpecBuilder()
-    PG.straight!(spec; length = 1, meta = PG.AbstractMeta[PG.Nickname("lead-in"), PG.Twist(; rate = 2π)])
-    PG.helix!(spec; radius = 0.5, pitch = 0.05, turns = 4, axis_angle = 0.0, meta = _nick("helix"))
-    PG.straight!(spec; length = 1, meta = _nick("lead-out"))
+    PG.straight!(spec; length = 1, meta = [PG.Nickname("lead-in"), PG.Twist(; rate = 2π)])
+    PG.helix!(spec; radius = 0.5, pitch = 0.05, turns = 4, axis_angle = 0.0, meta = [PG.Nickname("helix")])
+    PG.straight!(spec; length = 1, meta = [PG.Nickname("lead-out")])
     path = PG.build(spec)
     return write_path_geometry_plot3d(
         path,

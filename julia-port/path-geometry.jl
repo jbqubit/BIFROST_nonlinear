@@ -654,32 +654,32 @@ deep-copied so subsequent mutation of `builder` does not affect the spec.
 """
 freeze(b::PathSpecBuilder) = PathSpec(deepcopy(b.segments), b.s_start)
 
-function straight!(spec::PathSpecBuilder; length, meta = AbstractMeta[])
+function straight!(spec::PathSpecBuilder; length, meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
     push!(spec.segments, StraightSegment(length; meta))
     return spec
 end
 
 function bend!(spec::PathSpecBuilder; radius::Real, angle::Real, axis_angle::Real = 0.0,
-               meta = AbstractMeta[])
+               meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
     push!(spec.segments, BendSegment(radius, angle, axis_angle; meta))
     return spec
 end
 
 function helix!(spec::PathSpecBuilder; radius::Real, pitch::Real, turns::Real,
-                axis_angle::Real = 0.0, meta = AbstractMeta[])
+                axis_angle::Real = 0.0, meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
     push!(spec.segments, HelixSegment(radius, pitch, turns, axis_angle; meta))
     return spec
 end
 
 function catenary!(spec::PathSpecBuilder; a::Real, length::Real, axis_angle::Real = 0.0,
-                   meta = AbstractMeta[])
+                   meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
     push!(spec.segments, CatenarySegment(a, length, axis_angle; meta))
     return spec
 end
 
 function jumpby!(spec::PathSpecBuilder; delta, tangent = nothing,
                  curvature_out = nothing, min_bend_radius = nothing,
-                 meta = AbstractMeta[])
+                 meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
     push!(spec.segments, JumpBy(delta; tangent_out = tangent,
                                 curvature_out = curvature_out,
                                 min_bend_radius, meta))
@@ -688,7 +688,7 @@ end
 
 function jumpto!(spec::PathSpecBuilder; destination, tangent = nothing,
                  curvature_out = nothing, min_bend_radius = nothing,
-                 meta = AbstractMeta[])
+                 meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
     push!(spec.segments, JumpTo(destination; tangent_out = tangent,
                                 curvature_out = curvature_out,
                                 min_bend_radius, meta))

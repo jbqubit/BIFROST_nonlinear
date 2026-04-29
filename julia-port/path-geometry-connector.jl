@@ -426,7 +426,7 @@ function _build_quintic_connector(p1_local::AbstractVector,
                                   bisect_iter::Int = 64,
                                   rel_tol::Float64 = 1e-6,
                                   curvature_tol::Float64 = 1e-8,
-                                  meta = AbstractMeta[])
+                                  meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
     Tc = promote_type(eltype(p1_local), eltype(t_hat_out),
                       eltype(K0_local), eltype(K1_local), Float64)
     t_hat_in = Tc[zero(Tc), zero(Tc), one(Tc)]

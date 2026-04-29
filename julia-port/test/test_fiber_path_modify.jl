@@ -28,7 +28,7 @@ const _MODIFY_ALPHA_LIN  = cte(_MODIFY_TEST_XS.cladding_material, _MODIFY_TEST_T
 
 # Helper: ΔT that produces a given total-length α = 1 + α_lin·ΔT.
 _ΔT_for(α) = (α - 1) / _MODIFY_ALPHA_LIN
-_mcm(α)    = AbstractMeta[MCMadd(:T_K, _ΔT_for(α))]
+_mcm(α)    = [MCMadd(:T_K, _ΔT_for(α))]
 
 _modify_fiber_path(path) = modify(Fiber(path;
     cross_section = _MODIFY_TEST_XS, T_ref_K = _MODIFY_TEST_T_REF))
@@ -145,7 +145,7 @@ end
 @testset "modify — non-matching MCM symbols are ignored" begin
     spec = PathSpecBuilder()
     straight!(spec; length = 1.0,
-              meta = AbstractMeta[MCMadd(:not_a_field, 1e6),
+              meta = [MCMadd(:not_a_field, 1e6),
                                   Nickname("labelled")])
     path = build(spec)
 
@@ -159,7 +159,7 @@ end
 
 @testset "modify — direct field :length on StraightSegment" begin
     spec = PathSpecBuilder()
-    straight!(spec; length = 1.0, meta = AbstractMeta[MCMadd(:length, 0.05)])
+    straight!(spec; length = 1.0, meta = [MCMadd(:length, 0.05)])
     path = build(spec)
     seg = _modify_fiber_path(path).placed_segments[1].segment
     @test seg.length ≈ 1.05 atol = 1e-12
@@ -168,7 +168,7 @@ end
 @testset "modify — direct field :radius on BendSegment" begin
     spec = PathSpecBuilder()
     bend!(spec; radius = 0.05, angle = π / 2,
-          meta = AbstractMeta[MCMadd(:radius, 0.01)])
+          meta = [MCMadd(:radius, 0.01)])
     path = build(spec)
     seg = _modify_fiber_path(path).placed_segments[1].segment
     @test seg.radius ≈ 0.06 atol = 1e-12
@@ -178,7 +178,7 @@ end
 @testset "modify — direct field :angle on BendSegment" begin
     spec = PathSpecBuilder()
     bend!(spec; radius = 0.05, angle = π / 2,
-          meta = AbstractMeta[MCMadd(:angle, π / 12)])
+          meta = [MCMadd(:angle, π / 12)])
     path = build(spec)
     seg = _modify_fiber_path(path).placed_segments[1].segment
     @test seg.angle ≈ π / 2 + π / 12 atol = 1e-12
@@ -188,7 +188,7 @@ end
 @testset "modify — direct field :pitch on HelixSegment (MCMmul)" begin
     spec = PathSpecBuilder()
     helix!(spec; radius = 0.03, pitch = 0.01, turns = 2.0,
-           meta = AbstractMeta[MCMmul(:pitch, 1.1)])
+           meta = [MCMmul(:pitch, 1.1)])
     path = build(spec)
     seg = _modify_fiber_path(path).placed_segments[1].segment
     @test seg.pitch ≈ 0.01 * 1.1 atol = 1e-14
@@ -198,7 +198,7 @@ end
 @testset "modify — direct field :a on CatenarySegment" begin
     spec = PathSpecBuilder()
     catenary!(spec; a = 0.2, length = 1.0,
-              meta = AbstractMeta[MCMadd(:a, 0.002)])
+              meta = [MCMadd(:a, 0.002)])
     path = build(spec)
     seg = _modify_fiber_path(path).placed_segments[1].segment
     @test seg.a ≈ 0.202 atol = 1e-12
@@ -210,7 +210,7 @@ end
     # :length additive offset on top.
     spec = PathSpecBuilder()
     straight!(spec; length = 1.0,
-              meta = AbstractMeta[MCMadd(:T_K, 10.0),
+              meta = [MCMadd(:T_K, 10.0),
                                   MCMadd(:length, 0.001)])
     path = build(spec)
     seg = _modify_fiber_path(path).placed_segments[1].segment
@@ -243,7 +243,7 @@ end
         ΔT = 0.0 ± (0.01 / _MODIFY_ALPHA_LIN)    # σ_α = 0.01 around α = 1
         spec = PathSpecBuilder()
         bend!(spec; radius = 0.05, angle = π / 2,
-              meta = AbstractMeta[MCMadd(:T_K, ΔT)])
+              meta = [MCMadd(:T_K, ΔT)])
         path = build(spec)
         path_s = _modify_fiber_path(path)
 
@@ -293,7 +293,7 @@ end
 @testset "modify — T-GUARDRAIL: upstream bend changes recompute connector K0" begin
     spec = PathSpecBuilder()
     bend!(spec; radius = 1.0, angle = π / 3,
-          meta = AbstractMeta[MCMmul(:radius, 2.0)])
+          meta = [MCMmul(:radius, 2.0)])
     jumpby!(spec; delta = (1.0, 0.0, 0.2))
 
     path_s = _modify_fiber_path(build(spec))
@@ -309,7 +309,7 @@ end
     try
         spec = PathSpecBuilder()
         straight!(spec; length = 1.0,
-                  meta = AbstractMeta[
+                  meta = [
                       Twist(; rate = 2.0),
                       MCMadd(:length, 0.0 ± 0.01),
                   ])

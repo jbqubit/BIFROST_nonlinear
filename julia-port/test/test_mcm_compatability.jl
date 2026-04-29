@@ -418,7 +418,7 @@ end
     try
         spec = PathSpecBuilder()
         bend!(spec; radius = 0.05 ± 0.005, angle = π/2,
-              meta = AbstractMeta[Twist(; rate = 1.0)])
+              meta = [Twist(; rate = 1.0)])
         path = build(spec)   # was a hard crash before Tier 1.1
         @test arc_length(path) isa Particles
         @test length(path.resolved_twists) == 1
@@ -437,7 +437,7 @@ end
         spec = PathSpecBuilder()
         bend!(spec; radius = 0.05 ± 0.005, angle = π/2)
         bend!(spec; radius = 0.04, angle = π/4,
-              meta = AbstractMeta[Twist(; rate = 2.0)])
+              meta = [Twist(; rate = 2.0)])
         path = build(spec)
         bps = breakpoints(path)
         @test eltype(bps) == Float64
@@ -464,7 +464,7 @@ end
 
         spec = PathSpecBuilder()
         bend!(spec; radius = 0.05 ± 0.005, angle = π/2,
-              meta = AbstractMeta[Twist(; rate = 1.0)])
+              meta = [Twist(; rate = 1.0)])
         path = build(spec)   # gated by Tier 1.1
         fiber = Fiber(path; cross_section = xs, T_ref_K = T_ref)
 
@@ -503,7 +503,7 @@ end
     try
         spec = PathSpecBuilder()
         bend!(spec; radius = 0.05 ± 0.005, angle = π/2,
-              meta = AbstractMeta[Twist(; rate = 1.0)])
+              meta = [Twist(; rate = 1.0)])
         path = build(spec)   # path.s_end is Particles
         # Default endpoints used to crash on Float64(::Particles); now nominalize.
         Ω = total_material_twist(path)
