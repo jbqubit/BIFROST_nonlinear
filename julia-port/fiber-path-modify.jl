@@ -68,11 +68,7 @@ vector. See this file's module docstring for the per-field and T_K semantics.
 function modify(fiber::Fiber)
     T_ref = fiber.T_ref_K
     α_lin = cte(fiber.cross_section.cladding_material, T_ref)
-    new_segments = AbstractPathSegment[]
-    for ps in fiber.path.placed_segments
-        push!(new_segments, _modify_segment(ps.segment, T_ref, α_lin))
-    end
-    return _replace_segments(fiber.path, new_segments)
+    return _modified_rebuild(fiber.path, T_ref, α_lin)
 end
 
 # ----------------------------
@@ -153,20 +149,39 @@ _modify_segment(seg::AbstractPathSegment, ::Any, ::Any) =
 # Internal: reassemble a path with replaced segments
 # ----------------------------
 
-function _replace_segments(path::PathSpecCached, new_segments::Vector{<:AbstractPathSegment})
-    n_seg = length(path.placed_segments)
-    @assert length(new_segments) == n_seg
+function _modify_authored_segment(seg::Union{JumpBy,JumpTo}, ::Any, ::Any)
+    return seg
+end
 
-    # Re-place the segments, replicating build()'s frame-advancing loop.
+_modify_authored_segment(seg::AbstractPathSegment, T_ref, α_lin) =
+    _modify_segment(seg, T_ref, α_lin)
+
+function _modified_rebuild(path::PathSpecCached, T_ref, α_lin)
+    authored_segments = path.spec.segments
+
+    # Re-place the authored segments, matching build()'s frame-advancing loop.
+    # JumpBy/JumpTo are resolved after upstream modifications so G2 connector
+    # endpoints inherit the modified incoming curvature. Connector-local :T_K
+    # meta is then applied to the resolved QuinticConnector.
     pos     = zeros(3)
     N_frame = [1.0, 0.0, 0.0]
     B_frame = [0.0, 1.0, 0.0]
     T_frame = [0.0, 0.0, 1.0]
     s_eff   = Float64(path.spec.s_start)
     placed  = PlacedSegment[]
+    spec_segments = AbstractPathSegment[]
+    K_in_global = zeros(3)
 
-    for seg_new in new_segments
+    for seg_orig in authored_segments
         frame = hcat(N_frame, B_frame, T_frame)
+
+        seg_authored = _modify_authored_segment(seg_orig, T_ref, α_lin)
+        seg_resolved = _resolve_at_placement(seg_authored, pos, frame, K_in_global)
+        seg_new = seg_authored isa Union{JumpBy,JumpTo} ?
+            _modify_segment(seg_resolved, T_ref, α_lin) :
+            seg_resolved
+
+        push!(spec_segments, seg_new)
         push!(placed, PlacedSegment(seg_new, s_eff, copy(pos), copy(frame)))
 
         pos_end_local         = end_position_local(seg_new)
@@ -178,15 +193,22 @@ function _replace_segments(path::PathSpecCached, new_segments::Vector{<:Abstract
         N_frame = _safe_normalize(N_end_g - dot(N_end_g, T_frame) * T_frame)
         B_frame = cross(T_frame, N_frame)
 
-        s_eff = s_eff + arc_length(seg_new)
+        L_seg = arc_length(seg_new)
+        κ_end = curvature(seg_new, L_seg)
+        K_in_global = κ_end .* N_frame
+
+        s_eff = s_eff + L_seg
     end
 
-    new_spec = PathSpec(collect(new_segments), path.spec.s_start)
-    # Only resolve twists if any segment carries one. Skipping the resolve when
-    # there are no anchors keeps MCM-valued (Particles) modify paths working;
-    # _resolve_twists requires a Float64 s_end which is incompatible with
-    # Particles-typed cumulative arc length.
+    new_spec = PathSpec(spec_segments, path.spec.s_start)
     has_twist = any(ps -> any(m -> m isa Twist, segment_meta(ps.segment)), placed)
-    resolved_twists = has_twist ? _resolve_twists(placed, Float64(s_eff)) : ResolvedTwistRate[]
+    resolved_twists = has_twist ?
+        _resolve_twists(placed, Float64(_qc_nominalize(s_eff))) :
+        ResolvedTwistRate[]
     return PathSpecCached(new_spec, placed, s_eff, resolved_twists)
+end
+
+function _replace_segments(path::PathSpecCached, new_segments::Vector{<:AbstractPathSegment})
+    @assert length(new_segments) == length(path.placed_segments)
+    return build(PathSpec(collect(new_segments), path.spec.s_start))
 end

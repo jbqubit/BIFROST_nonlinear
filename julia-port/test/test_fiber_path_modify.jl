@@ -289,3 +289,36 @@ end
     path_s = _modify_fiber_path(path)
     @test end_point(path_s) ≈ [0.0, 0.0, 0.5] atol = 1e-10
 end
+
+@testset "modify — T-GUARDRAIL: upstream bend changes recompute connector K0" begin
+    spec = PathSpecBuilder()
+    bend!(spec; radius = 1.0, angle = π / 3,
+          meta = AbstractMeta[MCMmul(:radius, 2.0)])
+    jumpby!(spec; delta = (1.0, 0.0, 0.2))
+
+    path_s = _modify_fiber_path(build(spec))
+    bend_seg = path_s.placed_segments[1].segment
+    connector = path_s.placed_segments[2].segment
+
+    @test curvature(bend_seg, arc_length(bend_seg)) ≈ 0.5 atol = 1e-12
+    @test curvature(connector, 0.0) ≈ 0.5 atol = 1e-12
+end
+
+@testset "modify — T-GUARDRAIL: Twist anchors tolerate MCM-valued modified length" begin
+    MonteCarloMeasurements.unsafe_comparisons(true)
+    try
+        spec = PathSpecBuilder()
+        straight!(spec; length = 1.0,
+                  meta = AbstractMeta[
+                      Twist(; rate = 2.0),
+                      MCMadd(:length, 0.0 ± 0.01),
+                  ])
+
+        path_s = _modify_fiber_path(build(spec))
+
+        @test arc_length(path_s) isa Particles
+        @test total_material_twist(path_s) ≈ 2.0 * pmean(arc_length(path_s)) rtol = 1e-6
+    finally
+        MonteCarloMeasurements.unsafe_comparisons(false)
+    end
+end

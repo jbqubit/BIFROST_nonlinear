@@ -325,7 +325,7 @@ function demo_fiber_path_jumps_min_radius(;
             min_bend_radius = 0.1) # T2: fails only if min_bend_radius >0.5
     PG.straight!(spec; length = 1)
     PG.jumpto!(spec; destination = (3, 0.0, 1), tangent = (0.0, 0.0, -1.0),
-            min_bend_radius = 0.2) # T3: fails only if min_bend_radius >0.50
+            min_bend_radius = 0.05) # T3: fails only if min_bend_radius >0.50
     PG.straight!(spec; length = 1)
     PG.jumpby!(spec; delta = (-1, 0.0, 0), tangent = (0.0, 0.0, -1.0),
             min_bend_radius = 0.1)
@@ -366,24 +366,24 @@ function demo_fiber_path_jumps2(;
     PG = PathGeometry
     spec = PG.PathSpecBuilder()
 
-    PG.straight!(spec; length = 0.05)
+    PG.straight!(spec; length = 1)
 
     # Prescribed tangent_out + min_bend_radius: handle length grows to keep κ ≤ 1/R.
-    PG.jumpby!(spec; delta = (0.03, 0.0, 0.04), tangent = (0.0, 0.0, 1.0),
-               min_bend_radius = 0.02)
+    PG.jumpby!(spec; delta = (1, 1, 1), tangent = (0.0, 0.0, 1.0),
+               min_bend_radius = 0.4)
 
-    PG.helix!(spec; radius = 0.02, pitch = 0.01, turns = 1.0, axis_angle = 0.0)
-    PG.straight!(spec; length = 0.04)
+    PG.helix!(spec; radius = 0.5, pitch = 0.2, turns = 5.0, axis_angle = 0.0)
+    PG.straight!(spec; length = 1)
 
     # No tangent_out → exit tangent follows chord direction.
-    PG.jumpby!(spec; delta = (0.05, 0.0, 0.03))
+    PG.jumpby!(spec; delta = (1, 0.0, 1))
 
-    PG.bend!(spec; radius = 0.04, angle = π / 2, axis_angle = 0.0)
-    PG.jumpto!(spec; destination = (0.22, 0.0, 0.20))
-    PG.straight!(spec; length = 0.03)
-    PG.jumpto!(spec; destination = (0.22, 0.0, 0.28), tangent = (0.0, 0.0, 1.0),
+    PG.bend!(spec; radius = 0.5, angle = π / 2, axis_angle = 0.0)
+    PG.jumpto!(spec; destination = (-1, 0.0, 0))
+    PG.straight!(spec; length = 1)
+    PG.jumpto!(spec; destination = (0, -2, 0), tangent = (0.0, 0.0, 1.0),
                min_bend_radius = 0.1)
-    PG.straight!(spec; length = 0.05)
+    PG.straight!(spec; length = 1)
 
     path = PG.build(spec)
     println("Arc length : ", round(PG.path_length(path) * 100; digits = 2), " cm")
@@ -1313,6 +1313,425 @@ function demo_all(; index_output::AbstractString = joinpath(@__DIR__, "..", "out
 
     println("Wrote demo index to: ", index_output)
     return index_output
+end
+
+# =====================================================================
+# demo_fiber_path_jumps — visual experiments for JumpBy / JumpTo
+# =====================================================================
+#
+# Companion to `demo_fiber_path_modify`. Each row is one standalone
+# Plotly HTML scene that places a `straight · Jump · straight` path
+# (or a richer variant) side-by-side across several parameter values
+# of the jump. The jump's resolved QuinticConnector — the "gap" — is
+# drawn in red; the prior/posterior fixed segments are drawn in green.
+
+# Build a path containing a JumpBy at index `target_idx`.
+# `priors` and `tails` are NamedTuples of segment-builder kwargs that
+# precede / follow the jump. `jump_kwargs` is forwarded to `jumpby!`.
+function _build_jumpby_variant(L::Float64, R::Float64, target_idx::Int,
+                                jump_kwargs::NamedTuple;
+                                priors::Vector = [(:straight, (length = L,))],
+                                tails::Vector  = [(:straight, (length = L,))])
+    spec = PathSpecBuilder()
+    for (kind, kw) in priors
+        kind === :straight ? straight!(spec; kw...) :
+        kind === :bend     ? bend!(spec; kw...)     :
+        kind === :helix    ? helix!(spec; kw...)    :
+        error("unknown prior kind: $kind")
+    end
+    jumpby!(spec; jump_kwargs...)
+    for (kind, kw) in tails
+        kind === :straight ? straight!(spec; kw...) :
+        kind === :bend     ? bend!(spec; kw...)     :
+        kind === :helix    ? helix!(spec; kw...)    :
+        error("unknown tail kind: $kind")
+    end
+    return (build(spec), target_idx)
+end
+
+# Build a path containing a JumpTo at index `target_idx`.
+function _build_jumpto_variant(L::Float64, R::Float64, target_idx::Int,
+                                jump_kwargs::NamedTuple;
+                                priors::Vector = [(:straight, (length = L,))],
+                                tails::Vector  = [(:straight, (length = L,))])
+    spec = PathSpecBuilder()
+    for (kind, kw) in priors
+        kind === :straight ? straight!(spec; kw...) :
+        kind === :bend     ? bend!(spec; kw...)     :
+        kind === :helix    ? helix!(spec; kw...)    :
+        error("unknown prior kind: $kind")
+    end
+    jumpto!(spec; jump_kwargs...)
+    for (kind, kw) in tails
+        kind === :straight ? straight!(spec; kw...) :
+        kind === :bend     ? bend!(spec; kw...)     :
+        kind === :helix    ? helix!(spec; kw...)    :
+        error("unknown tail kind: $kind")
+    end
+    return (build(spec), target_idx)
+end
+
+# Build a multi-jump composite path (e.g. the T1/T2/T3 routing pattern).
+# `segments` is an ordered list of `(:straight | :jumpto | :jumpby, kwargs)`.
+# `red_indices` lists which placed segments should render red.
+function _build_jump_composite(segments::Vector)
+    spec = PathSpecBuilder()
+    for (kind, kw) in segments
+        if kind === :straight; straight!(spec; kw...)
+        elseif kind === :bend; bend!(spec; kw...)
+        elseif kind === :helix; helix!(spec; kw...)
+        elseif kind === :jumpby; jumpby!(spec; kw...)
+        elseif kind === :jumpto; jumpto!(spec; kw...)
+        else error("unknown segment kind: $kind") end
+    end
+    return build(spec)
+end
+
+# Render one jump experiment row. `variants` is a list of
+# (label, builder, builder_args) where `builder` returns
+# `(path::PathSpecCached, red_indices::Union{Int, Vector{Int}})`.
+# Variants are offset along x by `variant_spacing` for side-by-side
+# comparison (set to 0 to overlay a single composite).
+function _jump_row_html(output::AbstractString, title::AbstractString;
+                        variants::Vector,
+                        variant_spacing::Float64 = 2.5,
+                        z_label_offset::Float64 = 1.6)
+    js_num(x)   = isnan(x) ? "NaN" : string(Float64(x))
+    js_arr(xs)  = "[" * join(js_num.(xs), ",") * "]"
+    js_strarr(xs) = "[" * join(("\"" * replace(string(x), "\"" => "\\\"") * "\"" for x in xs), ",") * "]"
+
+    trace_strs  = String[]
+    label_xs    = Float64[]; label_ys = Float64[]; label_zs = Float64[]
+    label_texts = String[]
+    start_xs    = Float64[]; start_ys = Float64[]; start_zs = Float64[]
+
+    for (k, (label, build_fn)) in enumerate(variants)
+        path, red_spec = build_fn()
+        red_indices = red_spec isa Integer ? Int[red_spec] : Int.(collect(red_spec))
+        dx = (k - 1) * variant_spacing
+        n_segs = length(path.placed_segments)
+        for i in 1:n_segs
+            s     = _sample_segment_xyz(path, i)
+            xs    = s.x .+ dx
+            color = i in red_indices ? "#e55" : "#6c6"
+            name  = "$(label) — seg $(i)"
+            push!(trace_strs, """
+{
+  type: 'scatter3d',
+  mode: 'lines',
+  x: $(js_arr(xs)),
+  y: $(js_arr(s.y)),
+  z: $(js_arr(s.z)),
+  line: {color: '$(color)', width: 6},
+  name: $(repr(name)),
+  showlegend: $(i == 1)
+}""")
+        end
+        p0 = position(path, path.spec.s_start)
+        push!(start_xs, Float64(p0[1]) + dx)
+        push!(start_ys, Float64(p0[2]))
+        push!(start_zs, Float64(p0[3]))
+
+        push!(label_xs, dx)
+        push!(label_ys, 0.0)
+        push!(label_zs, z_label_offset)
+        push!(label_texts, label)
+    end
+
+    start_trace = """
+{
+  type: 'scatter3d',
+  mode: 'markers',
+  x: $(js_arr(start_xs)),
+  y: $(js_arr(start_ys)),
+  z: $(js_arr(start_zs)),
+  marker: {color: '#6c6', size: 6, symbol: 'circle'},
+  name: 'start',
+  showlegend: false
+}"""
+
+    labels_trace = """
+{
+  type: 'scatter3d',
+  mode: 'text',
+  x: $(js_arr(label_xs)),
+  y: $(js_arr(label_ys)),
+  z: $(js_arr(label_zs)),
+  text: $(js_strarr(label_texts)),
+  textfont: {color: '#ddd', size: 13},
+  showlegend: false
+}"""
+
+    html = """<!DOCTYPE html>
+<html lang=\"en\"><head><meta charset=\"utf-8\"><title>$(title)</title>
+<script src=\"https://cdn.plot.ly/plotly-2.35.2.min.js\"></script>
+<style>html,body{margin:0;padding:0;width:100%;height:100%;background:#111;color:#eee;font-family:sans-serif;}#plot{width:100%;height:100%;}</style>
+</head><body><div id=\"plot\"></div>
+<script>
+const traces = [$(join(trace_strs, ",\n")),
+$(start_trace)$(isempty(label_texts) ? "" : ",\n")$(labels_trace)];
+const layout = {
+  title: {text: $(repr(title)), font: {color: '#eee'}},
+  paper_bgcolor: '#111',
+  plot_bgcolor:  '#111',
+  scene: {
+    bgcolor: '#111',
+    xaxis: {gridcolor: '#333', color: '#aaa'},
+    yaxis: {gridcolor: '#333', color: '#aaa'},
+    zaxis: {gridcolor: '#333', color: '#aaa'},
+    aspectmode: 'data',
+    camera: {eye: {x: 0.0, y: -2.5, z: 0.5}}
+  },
+  margin: {l:0, r:0, t:40, b:0},
+  legend: {font: {color: '#eee'}}
+};
+Plotly.newPlot('plot', traces, layout);
+</script>
+</body></html>
+"""
+    open(output, "w") do io
+        write(io, html)
+    end
+    return output
+end
+
+"""
+    demo_fiber_path_jumps(; output_dir = …)
+
+Visual demos for `JumpBy` and `JumpTo`. Each call writes a set of
+standalone Plotly HTML scenes to `output_dir`. In every scene the
+resolved quintic-Hermite connector — the "gap" filled by the jump
+— is drawn in red; the surrounding fixed segments are drawn in
+green. Variants are offset along *x* so they appear side-by-side
+in a single 3D scene.
+
+Scenarios mirror the geometric questions explored by the JumpBy /
+JumpTo unit tests in `test/test_path_geometry.jl`.
+"""
+function demo_fiber_path_jumps(;
+    output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
+)
+    L = 1.0
+    R = 0.5
+
+    # Block A — JumpBy parameter sweeps. Path = straight · JumpBy · straight.
+    # Jump is segment 2; red index = 2.
+    jb(kw) = () -> _build_jumpby_variant(L, R, 2, kw)
+
+    row1 = _jump_row_html(
+        joinpath(output_dir, "jumpby-delta-axial.html"),
+        "JumpBy(delta=(0,0,d)) — axial sweep";
+        variants = [
+            ("d = 0.3",  jb((delta = (0.0, 0.0, 0.3),))),
+            ("d = 0.6",  jb((delta = (0.0, 0.0, 0.6),))),
+            ("d = 1.0",  jb((delta = (0.0, 0.0, 1.0),))),
+        ],
+        z_label_offset = 2.2,
+    )
+
+    row2 = _jump_row_html(
+        joinpath(output_dir, "jumpby-delta-transverse.html"),
+        "JumpBy(delta=(d,0,0.5)) — transverse sweep";
+        variants = [
+            ("d = 0.0",  jb((delta = (0.0, 0.0, 0.5),))),
+            ("d = 0.2",  jb((delta = (0.2, 0.0, 0.5),))),
+            ("d = 0.5",  jb((delta = (0.5, 0.0, 0.5),))),
+        ],
+        z_label_offset = 1.8,
+    )
+
+    row3 = _jump_row_html(
+        joinpath(output_dir, "jumpby-tangent-out.html"),
+        "JumpBy — outgoing tangent (local frame)";
+        variants = [
+            ("tangent = (+1,0,1)/√2", jb((delta = (0.4, 0.0, 0.4),
+                                            tangent = (1/sqrt(2), 0.0, 1/sqrt(2))))),
+            ("tangent = (0,0,1)",     jb((delta = (0.4, 0.0, 0.4),
+                                            tangent = (0.0, 0.0, 1.0)))),
+            ("tangent = (-1,0,1)/√2", jb((delta = (0.4, 0.0, 0.4),
+                                            tangent = (-1/sqrt(2), 0.0, 1/sqrt(2))))),
+        ],
+        z_label_offset = 1.8,
+    )
+
+    row4 = _jump_row_html(
+        joinpath(output_dir, "jumpby-curvature-out.html"),
+        "JumpBy — outgoing curvature (G2 knob, local frame)";
+        variants = [
+            ("κ_out = 0",         jb((delta = (0.5, 0.0, 0.5),
+                                       tangent = (1.0, 0.0, 1.0) ./ sqrt(2),
+                                       curvature_out = (0.0, 0.0, 0.0)))),
+            ("κ_out = (0,+2,0)",  jb((delta = (0.5, 0.0, 0.5),
+                                       tangent = (1.0, 0.0, 1.0) ./ sqrt(2),
+                                       curvature_out = (0.0,  2.0, 0.0)))),
+            ("κ_out = (0,-2,0)",  jb((delta = (0.5, 0.0, 0.5),
+                                       tangent = (1.0, 0.0, 1.0) ./ sqrt(2),
+                                       curvature_out = (0.0, -2.0, 0.0)))),
+        ],
+        z_label_offset = 1.8,
+    )
+
+    # Block B — JumpTo parameter sweeps. Path = straight · JumpTo · straight.
+    # After a 1 m straight along +z, the jump starts at global (0,0,1).
+    jt(kw) = () -> _build_jumpto_variant(L, R, 2, kw)
+
+    row5 = _jump_row_html(
+        joinpath(output_dir, "jumpto-destination.html"),
+        "JumpTo(destination=(0,0,z)) — axial sweep";
+        variants = [
+            ("z = 1.3",  jt((destination = (0.0, 0.0, 1.3),))),
+            ("z = 1.6",  jt((destination = (0.0, 0.0, 1.6),))),
+            ("z = 2.0",  jt((destination = (0.0, 0.0, 2.0),))),
+        ],
+        z_label_offset = 2.6,
+    )
+
+    row6 = _jump_row_html(
+        joinpath(output_dir, "jumpto-destination-transverse.html"),
+        "JumpTo(destination=(x,0,1.5)) — transverse sweep";
+        variants = [
+            ("x = 0.0",  jt((destination = (0.0, 0.0, 1.5),))),
+            ("x = 0.3",  jt((destination = (0.3, 0.0, 1.5),))),
+            ("x = 0.6",  jt((destination = (0.6, 0.0, 1.5),))),
+        ],
+        z_label_offset = 2.4,
+    )
+
+    row7 = _jump_row_html(
+        joinpath(output_dir, "jumpto-tangent-global.html"),
+        "JumpTo — outgoing tangent (GLOBAL frame)";
+        variants = [
+            ("tangent = (+1,0,0)", jt((destination = (0.5, 0.0, 1.5),
+                                         tangent = (1.0, 0.0, 0.0)))),
+            ("tangent = (0,0,+1)", jt((destination = (0.5, 0.0, 1.5),
+                                         tangent = (0.0, 0.0, 1.0)))),
+            ("tangent = (-1,0,1)/√2", jt((destination = (0.5, 0.0, 1.5),
+                                         tangent = (-1/sqrt(2), 0.0, 1/sqrt(2))))),
+        ],
+        z_label_offset = 2.4,
+    )
+
+    row8 = _jump_row_html(
+        joinpath(output_dir, "jumpto-curvature-global.html"),
+        "JumpTo — outgoing curvature (GLOBAL frame)";
+        variants = [
+            ("κ_out = 0",          jt((destination = (0.5, 0.0, 1.5),
+                                        tangent = (0.0, 0.0, 1.0),
+                                        curvature_out = (0.0, 0.0, 0.0)))),
+            ("κ_out = (10,0,0)",   jt((destination = (0.5, 0.0, 1.5),
+                                        tangent = (0.0, 0.0, 1.0),
+                                        curvature_out = (10.0, 0.0, 0.0)))),
+            ("κ_out = (-10,0,0)",  jt((destination = (0.5, 0.0, 1.5),
+                                        tangent = (0.0, 0.0, 1.0),
+                                        curvature_out = (-10.0, 0.0, 0.0)))),
+        ],
+        variant_spacing = 1.5,
+        z_label_offset = 2.4,
+    )
+
+    # Block C — composite scenarios drawn from the unit-test file.
+
+    # Row 9: JumpBy after a 90° bend. delta is in the post-bend LOCAL frame.
+    # Path = straight(L) · bend(R, π/2) · JumpBy · straight(L). Jump = seg 3.
+    bend_priors = [(:straight, (length = L,)), (:bend, (radius = R, angle = π/2, axis_angle = 0.0))]
+    jb_post_bend(kw) = () -> _build_jumpby_variant(L, R, 3, kw;
+                                                    priors = bend_priors,
+                                                    tails  = [(:straight, (length = L,))])
+
+    row9 = _jump_row_html(
+        joinpath(output_dir, "jumpby-after-bend.html"),
+        "JumpBy after 90° bend — delta in ROTATED local frame";
+        variants = [
+            ("delta = (0,0,0.5)", jb_post_bend((delta = (0.0, 0.0, 0.5),))),
+            ("delta = (0.3,0,0.5)", jb_post_bend((delta = (0.3, 0.0, 0.5),))),
+            ("delta = (-0.3,0,0.5)", jb_post_bend((delta = (-0.3, 0.0, 0.5),))),
+        ],
+        variant_spacing = 3.5,
+        z_label_offset = 2.0,
+    )
+
+    # Row 10: JumpTo after a 90° bend. destination is in the GLOBAL frame.
+    # End of bend is at global (R, 0, L+R) ≈ (0.5, 0, 1.5).
+    jt_post_bend(kw) = () -> _build_jumpto_variant(L, R, 3, kw;
+                                                    priors = bend_priors,
+                                                    tails  = [(:straight, (length = L,))])
+
+    row10 = _jump_row_html(
+        joinpath(output_dir, "jumpto-after-bend.html"),
+        "JumpTo after 90° bend — destination in GLOBAL frame";
+        variants = [
+            ("dest = (1.0, 0, 1.5)", jt_post_bend((destination = (1.0, 0.0, 1.5),))),
+            ("dest = (1.3, 0, 1.5)", jt_post_bend((destination = (1.3, 0.0, 1.5),))),
+            ("dest = (0.5, 0, 2.0)", jt_post_bend((destination = (0.5, 0.0, 2.0),))),
+        ],
+        variant_spacing = 3.5,
+        z_label_offset = 2.4,
+    )
+
+    # Row 11: G2 inheritance — JumpBy after a quarter-bend of varying radius.
+    # The connector's start curvature inherits 1/R_bend from the prior bend.
+    # Path = bend(R_b, π/4) · JumpBy(delta) · straight(L). Jump = seg 2.
+    function jb_g2(R_b)
+        () -> _build_jumpby_variant(L, R, 2, (delta = (0.3, 0.0, 0.3),);
+                                     priors = [(:bend, (radius = R_b, angle = π/4, axis_angle = 0.0))],
+                                     tails  = [(:straight, (length = L,))])
+    end
+
+    row11 = _jump_row_html(
+        joinpath(output_dir, "jumpby-g2-inheritance.html"),
+        "JumpBy after bend — G2 inheritance of incoming κ from prior bend";
+        variants = [
+            ("R_bend = 0.30 (κ_in ≈ 3.33)", jb_g2(0.30)),
+            ("R_bend = 0.50 (κ_in = 2.00)", jb_g2(0.50)),
+            ("R_bend = 0.80 (κ_in = 1.25)", jb_g2(0.80)),
+        ],
+        variant_spacing = 3.0,
+        z_label_offset = 1.6,
+    )
+
+    # Row 12: composite multi-jump routing pattern from disabled
+    # min_bend_radius tests (T1/T2/T3). Single scene; three red connectors.
+    function build_routing()
+        path = _build_jump_composite([
+            (:straight, (length = 1.0,)),
+            (:jumpto,   (destination = (1.0, 0.0, 1.0),
+                         tangent = (0.0, 0.0, -1.0),
+                         min_bend_radius = 0.1)),
+            (:straight, (length = 1.0,)),
+            (:jumpto,   (destination = (2.0, 0.0, 0.0),
+                         tangent = (0.0, 0.0, 1.0),
+                         min_bend_radius = 0.1)),
+            (:straight, (length = 1.0,)),
+            (:jumpto,   (destination = (3.0, 0.0, 1.0),
+                         tangent = (0.0, 0.0, -1.0),
+                         min_bend_radius = 0.1)),
+        ])
+        # Jumps land at indices 2, 4, 6 in the placed-segment list.
+        return (path, [2, 4, 6])
+    end
+
+    row12 = _jump_row_html(
+        joinpath(output_dir, "jumpto-routing.html"),
+        "JumpTo routing — T1/T2/T3 composite (anti-parallel tangents)";
+        variants = [("composite", build_routing)],
+        variant_spacing = 0.0,
+        z_label_offset = 1.6,
+    )
+
+    return (
+        plot_jumpby_delta_axial      = row1,
+        plot_jumpby_delta_transverse = row2,
+        plot_jumpby_tangent_out      = row3,
+        plot_jumpby_curvature_out    = row4,
+        plot_jumpto_destination      = row5,
+        plot_jumpto_dest_transverse  = row6,
+        plot_jumpto_tangent_global   = row7,
+        plot_jumpto_curvature_global = row8,
+        plot_jumpby_after_bend       = row9,
+        plot_jumpto_after_bend       = row10,
+        plot_jumpby_g2_inheritance   = row11,
+        plot_jumpto_routing          = row12,
+    )
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
