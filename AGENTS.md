@@ -82,6 +82,15 @@ Examples:
 Standard: These should be cheap, structural, and not depend on tuned numerical
 thresholds.
 
+### 5. Visual Tests
+
+These are tests that generate a plot or other visual output for debugging by humans.
+They are currently implemented in demo*.jl. 
+- Code duplication is tolerated here if it is in the interest of readability.
+For example, if the intent of a demonstration is exercising an api or testing edge cases,
+don't add layers of abstraction that obscure the atomic steps. 
+- Abstraction related to visual presentation is fine and prefered. 
+
 ## Key Invariants
 
 Do not break these without explicit user discussion:

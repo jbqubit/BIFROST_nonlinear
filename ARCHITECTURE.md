@@ -30,7 +30,7 @@ reflect the location of all files.
 │   ├── path-integral.jl             [12]
 |   ├── path-geometry.jl
 │   ├── fiber-path-plot.jl           [13]
-│   ├── demo.jl                      [14]
+│   ├── demo*.jl                      [14]
 │   └── test                         [15]
 │    
 └── *.py / *.jl supporting scripts
@@ -48,7 +48,7 @@ reflect the location of all files.
 - [11] Fiber authoring/specification layer and source assembly.
 - [12] Adaptive propagation engine and DGD sensitivity solver.
 - [13] 3D geometry and visualization output pipeline.
-- [14] End-to-end runnable examples over composed fibers.
+- [14] Tests with visual output designed to be checked by humans.
 - [15] Julia tests.
 - [16] User guide for the julia port (for humans and agents).
 - [17] TODO list for humans.
