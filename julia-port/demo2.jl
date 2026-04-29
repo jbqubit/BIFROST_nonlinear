@@ -19,68 +19,13 @@
 #
 # This file expects to be `include`d after demo.jl is in scope (it
 # reuses `_sample_segment_xyz` and the path-builder API).
+#
+# Each demo function builds its path inline using PathSpecBuilder — no
+# shared builder helpers. Code duplication across variants is intentional
+# per AGENTS.md §5 (Visual Tests): clarity over abstraction.
 
 if !isdefined(Main, :_sample_segment_xyz)
     include(joinpath(@__DIR__, "demo.jl"))
-end
-
-# ---------------------------------------------------------------------
-# Shared builders (used by both 3D and 2D demos)
-# ---------------------------------------------------------------------
-
-function _build_jumpby_variant(L::Float64, R::Float64, target_idx::Int,
-                                jump_kwargs::NamedTuple;
-                                priors::Vector = [(:straight, (length = L,))],
-                                tails::Vector  = [(:straight, (length = L,))])
-    spec = PathSpecBuilder()
-    for (kind, kw) in priors
-        kind === :straight ? straight!(spec; kw...) :
-        kind === :bend     ? bend!(spec; kw...)     :
-        kind === :helix    ? helix!(spec; kw...)    :
-        error("unknown prior kind: $kind")
-    end
-    jumpby!(spec; jump_kwargs...)
-    for (kind, kw) in tails
-        kind === :straight ? straight!(spec; kw...) :
-        kind === :bend     ? bend!(spec; kw...)     :
-        kind === :helix    ? helix!(spec; kw...)    :
-        error("unknown tail kind: $kind")
-    end
-    return (build(spec), target_idx)
-end
-
-function _build_jumpto_variant(L::Float64, R::Float64, target_idx::Int,
-                                jump_kwargs::NamedTuple;
-                                priors::Vector = [(:straight, (length = L,))],
-                                tails::Vector  = [(:straight, (length = L,))])
-    spec = PathSpecBuilder()
-    for (kind, kw) in priors
-        kind === :straight ? straight!(spec; kw...) :
-        kind === :bend     ? bend!(spec; kw...)     :
-        kind === :helix    ? helix!(spec; kw...)    :
-        error("unknown prior kind: $kind")
-    end
-    jumpto!(spec; jump_kwargs...)
-    for (kind, kw) in tails
-        kind === :straight ? straight!(spec; kw...) :
-        kind === :bend     ? bend!(spec; kw...)     :
-        kind === :helix    ? helix!(spec; kw...)    :
-        error("unknown tail kind: $kind")
-    end
-    return (build(spec), target_idx)
-end
-
-function _build_jump_composite(segments::Vector)
-    spec = PathSpecBuilder()
-    for (kind, kw) in segments
-        if kind === :straight; straight!(spec; kw...)
-        elseif kind === :bend; bend!(spec; kw...)
-        elseif kind === :helix; helix!(spec; kw...)
-        elseif kind === :jumpby; jumpby!(spec; kw...)
-        elseif kind === :jumpto; jumpto!(spec; kw...)
-        else error("unknown segment kind: $kind") end
-    end
-    return build(spec)
 end
 
 # =====================================================================
@@ -414,7 +359,8 @@ variant label shows `(infeasible)`.
 function demo_jumpto_2d_min_radius(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    function variant(mbr::Float64)
+    variants = []
+    for mbr in (0.10, 0.30, 0.49, 0.51, 0.70)
         partial, n_built, err = _build_with_failure() do spec
             straight!(spec; length = 1.0)
             jumpto!(spec;   destination     = (1.0, 0.0, 1.0),
@@ -422,17 +368,13 @@ function demo_jumpto_2d_min_radius(;
                             min_bend_radius = mbr)
             straight!(spec; length = 1.0)
         end
-        red = (partial !== nothing && length(partial.placed_segments) >= 2) ?
-              [2] : Int[]
+        partial === nothing && continue
+        red   = length(partial.placed_segments) >= 2 ? [2] : Int[]
         label = err === nothing ?
                 "mbr = $(mbr)" :
                 "mbr = $(mbr) (infeasible — $(n_built)/3 built)"
-        return (label, partial, red)
+        push!(variants, (label, let p = partial, r = red; () -> (p, r); end))
     end
-
-    raw = [variant(m) for m in (0.10, 0.30, 0.49, 0.51, 0.70)]
-    raw = filter(t -> t[2] !== nothing, raw)
-    variants = [(label, () -> (path, red)) for (label, path, red) in raw]
 
     return _jump_row_svg(
         joinpath(output_dir, "jumpto-2d-min-radius.html"),
@@ -845,15 +787,31 @@ end
 function demo_jumpby_delta_axial(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    L = 1.0; R = 0.5
-    jb(kw) = () -> _build_jumpby_variant(L, R, 2, kw)
     return _jump_row_html(
         joinpath(output_dir, "jumpby-delta-axial.html"),
         "JumpBy(delta=(0,0,d)) — axial sweep";
         variants = [
-            ("d = 0.3",  jb((delta = (0.0, 0.0, 0.3),))),
-            ("d = 0.6",  jb((delta = (0.0, 0.0, 0.6),))),
-            ("d = 1.0",  jb((delta = (0.0, 0.0, 1.0),))),
+            ("d = 0.3", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length = 1.0)
+                jumpby!(spec;   delta  = (0.0, 0.0, 0.3))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
+            ("d = 0.6", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length = 1.0)
+                jumpby!(spec;   delta  = (0.0, 0.0, 0.6))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
+            ("d = 1.0", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length = 1.0)
+                jumpby!(spec;   delta  = (0.0, 0.0, 1.0))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
         ],
         z_label_offset = 2.2,
     )
@@ -862,15 +820,31 @@ end
 function demo_jumpby_delta_transverse(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    L = 1.0; R = 0.5
-    jb(kw) = () -> _build_jumpby_variant(L, R, 2, kw)
     return _jump_row_html(
         joinpath(output_dir, "jumpby-delta-transverse.html"),
         "JumpBy(delta=(d,0,0.5)) — transverse sweep";
         variants = [
-            ("d = 0.0",  jb((delta = (0.0, 0.0, 0.5),))),
-            ("d = 0.2",  jb((delta = (0.2, 0.0, 0.5),))),
-            ("d = 0.5",  jb((delta = (0.5, 0.0, 0.5),))),
+            ("d = 0.0", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length = 1.0)
+                jumpby!(spec;   delta  = (0.0, 0.0, 0.5))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
+            ("d = 0.2", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length = 1.0)
+                jumpby!(spec;   delta  = (0.2, 0.0, 0.5))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
+            ("d = 0.5", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length = 1.0)
+                jumpby!(spec;   delta  = (0.5, 0.0, 0.5))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
         ],
         z_label_offset = 1.8,
     )
@@ -879,18 +853,34 @@ end
 function demo_jumpby_tangent_out(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    L = 1.0; R = 0.5
-    jb(kw) = () -> _build_jumpby_variant(L, R, 2, kw)
     return _jump_row_html(
         joinpath(output_dir, "jumpby-tangent-out.html"),
         "JumpBy — outgoing tangent (local frame)";
         variants = [
-            ("tangent = (+1,0,1)/√2", jb((delta = (0.4, 0.0, 0.4),
-                                            tangent = (1/sqrt(2), 0.0, 1/sqrt(2))))),
-            ("tangent = (0,0,1)",     jb((delta = (0.4, 0.0, 0.4),
-                                            tangent = (0.0, 0.0, 1.0)))),
-            ("tangent = (-1,0,1)/√2", jb((delta = (0.4, 0.0, 0.4),
-                                            tangent = (-1/sqrt(2), 0.0, 1/sqrt(2))))),
+            ("tangent = (+1,0,1)/√2", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length  = 1.0)
+                jumpby!(spec;   delta   = (0.4, 0.0, 0.4),
+                                tangent = (1/sqrt(2), 0.0, 1/sqrt(2)))
+                straight!(spec; length  = 1.0)
+                (build(spec), 2)
+            end),
+            ("tangent = (0,0,1)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length  = 1.0)
+                jumpby!(spec;   delta   = (0.4, 0.0, 0.4),
+                                tangent = (0.0, 0.0, 1.0))
+                straight!(spec; length  = 1.0)
+                (build(spec), 2)
+            end),
+            ("tangent = (-1,0,1)/√2", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length  = 1.0)
+                jumpby!(spec;   delta   = (0.4, 0.0, 0.4),
+                                tangent = (-1/sqrt(2), 0.0, 1/sqrt(2)))
+                straight!(spec; length  = 1.0)
+                (build(spec), 2)
+            end),
         ],
         z_label_offset = 1.8,
     )
@@ -899,21 +889,37 @@ end
 function demo_jumpby_curvature_out(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    L = 1.0; R = 0.5
-    jb(kw) = () -> _build_jumpby_variant(L, R, 2, kw)
     return _jump_row_html(
         joinpath(output_dir, "jumpby-curvature-out.html"),
         "JumpBy — outgoing curvature (G2 knob, local frame)";
         variants = [
-            ("κ_out = 0",         jb((delta = (0.5, 0.0, 0.5),
-                                       tangent = (1.0, 0.0, 1.0) ./ sqrt(2),
-                                       curvature_out = (0.0, 0.0, 0.0)))),
-            ("κ_out = (0,+2,0)",  jb((delta = (0.5, 0.0, 0.5),
-                                       tangent = (1.0, 0.0, 1.0) ./ sqrt(2),
-                                       curvature_out = (0.0,  2.0, 0.0)))),
-            ("κ_out = (0,-2,0)",  jb((delta = (0.5, 0.0, 0.5),
-                                       tangent = (1.0, 0.0, 1.0) ./ sqrt(2),
-                                       curvature_out = (0.0, -2.0, 0.0)))),
+            ("κ_out = 0", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length = 1.0)
+                jumpby!(spec;   delta         = (0.5, 0.0, 0.5),
+                                tangent       = (1.0, 0.0, 1.0) ./ sqrt(2),
+                                curvature_out = (0.0, 0.0, 0.0))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
+            ("κ_out = (0,+2,0)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length = 1.0)
+                jumpby!(spec;   delta         = (0.5, 0.0, 0.5),
+                                tangent       = (1.0, 0.0, 1.0) ./ sqrt(2),
+                                curvature_out = (0.0, 2.0, 0.0))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
+            ("κ_out = (0,-2,0)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length = 1.0)
+                jumpby!(spec;   delta         = (0.5, 0.0, 0.5),
+                                tangent       = (1.0, 0.0, 1.0) ./ sqrt(2),
+                                curvature_out = (0.0, -2.0, 0.0))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
         ],
         z_label_offset = 1.8,
     )
@@ -922,15 +928,31 @@ end
 function demo_jumpto_destination(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    L = 1.0; R = 0.5
-    jt(kw) = () -> _build_jumpto_variant(L, R, 2, kw)
     return _jump_row_html(
         joinpath(output_dir, "jumpto-destination.html"),
         "JumpTo(destination=(0,0,z)) — axial sweep";
         variants = [
-            ("z = 1.3",  jt((destination = (0.0, 0.0, 1.3),))),
-            ("z = 1.6",  jt((destination = (0.0, 0.0, 1.6),))),
-            ("z = 2.0",  jt((destination = (0.0, 0.0, 2.0),))),
+            ("z = 1.3", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.0, 0.0, 1.3))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
+            ("z = 1.6", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.0, 0.0, 1.6))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
+            ("z = 2.0", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.0, 0.0, 2.0))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
         ],
         z_label_offset = 2.6,
     )
@@ -939,15 +961,31 @@ end
 function demo_jumpto_destination_transverse(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    L = 1.0; R = 0.5
-    jt(kw) = () -> _build_jumpto_variant(L, R, 2, kw)
     return _jump_row_html(
         joinpath(output_dir, "jumpto-destination-transverse.html"),
         "JumpTo(destination=(x,0,1.5)) — transverse sweep";
         variants = [
-            ("x = 0.0",  jt((destination = (0.0, 0.0, 1.5),))),
-            ("x = 0.3",  jt((destination = (0.3, 0.0, 1.5),))),
-            ("x = 0.6",  jt((destination = (0.6, 0.0, 1.5),))),
+            ("x = 0.0", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.0, 0.0, 1.5))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
+            ("x = 0.3", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.3, 0.0, 1.5))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
+            ("x = 0.6", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.6, 0.0, 1.5))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
         ],
         z_label_offset = 2.4,
     )
@@ -956,18 +994,34 @@ end
 function demo_jumpto_tangent_global(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    L = 1.0; R = 0.5
-    jt(kw) = () -> _build_jumpto_variant(L, R, 2, kw)
     return _jump_row_html(
         joinpath(output_dir, "jumpto-tangent-global.html"),
         "JumpTo — outgoing tangent (GLOBAL frame)";
         variants = [
-            ("tangent = (+1,0,0)", jt((destination = (0.5, 0.0, 1.5),
-                                         tangent = (1.0, 0.0, 0.0)))),
-            ("tangent = (0,0,+1)", jt((destination = (0.5, 0.0, 1.5),
-                                         tangent = (0.0, 0.0, 1.0)))),
-            ("tangent = (-1,0,1)/√2", jt((destination = (0.5, 0.0, 1.5),
-                                         tangent = (-1/sqrt(2), 0.0, 1/sqrt(2))))),
+            ("tangent = (+1,0,0)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.5, 0.0, 1.5),
+                                tangent     = (1.0, 0.0, 0.0))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
+            ("tangent = (0,0,+1)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.5, 0.0, 1.5),
+                                tangent     = (0.0, 0.0, 1.0))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
+            ("tangent = (-1,0,1)/√2", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.5, 0.0, 1.5),
+                                tangent     = (-1/sqrt(2), 0.0, 1/sqrt(2)))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
         ],
         z_label_offset = 2.4,
     )
@@ -976,21 +1030,37 @@ end
 function demo_jumpto_curvature_global(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    L = 1.0; R = 0.5
-    jt(kw) = () -> _build_jumpto_variant(L, R, 2, kw)
     return _jump_row_html(
         joinpath(output_dir, "jumpto-curvature-global.html"),
         "JumpTo — outgoing curvature (GLOBAL frame)";
         variants = [
-            ("κ_out = 0",          jt((destination = (0.5, 0.0, 1.5),
-                                        tangent = (0.0, 0.0, 1.0),
-                                        curvature_out = (0.0, 0.0, 0.0)))),
-            ("κ_out = (10,0,0)",   jt((destination = (0.5, 0.0, 1.5),
-                                        tangent = (0.0, 0.0, 1.0),
-                                        curvature_out = (10.0, 0.0, 0.0)))),
-            ("κ_out = (-10,0,0)",  jt((destination = (0.5, 0.0, 1.5),
-                                        tangent = (0.0, 0.0, 1.0),
-                                        curvature_out = (-10.0, 0.0, 0.0)))),
+            ("κ_out = 0", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.5, 0.0, 1.5),
+                                tangent     = (0.0, 0.0, 1.0),
+                                curvature_out = (0.0, 0.0, 0.0))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
+            ("κ_out = (10,0,0)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.5, 0.0, 1.5),
+                                tangent     = (0.0, 0.0, 1.0),
+                                curvature_out = (10.0, 0.0, 0.0))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
+            ("κ_out = (-10,0,0)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                jumpto!(spec;   destination = (0.5, 0.0, 1.5),
+                                tangent     = (0.0, 0.0, 1.0),
+                                curvature_out = (-10.0, 0.0, 0.0))
+                straight!(spec; length      = 1.0)
+                (build(spec), 2)
+            end),
         ],
         variant_spacing = 1.5,
         z_label_offset = 2.4,
@@ -1000,18 +1070,34 @@ end
 function demo_jumpby_after_bend(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    L = 1.0; R = 0.5
-    bend_priors = [(:straight, (length = L,)), (:bend, (radius = R, angle = π/2, axis_angle = 0.0))]
-    jb_post_bend(kw) = () -> _build_jumpby_variant(L, R, 3, kw;
-                                                    priors = bend_priors,
-                                                    tails  = [(:straight, (length = L,))])
     return _jump_row_html(
         joinpath(output_dir, "jumpby-after-bend.html"),
         "JumpBy after 90° bend — delta in ROTATED local frame";
         variants = [
-            ("delta = (0,0,0.5)",   jb_post_bend((delta = (0.0, 0.0, 0.5),))),
-            ("delta = (0.3,0,0.5)", jb_post_bend((delta = (0.3, 0.0, 0.5),))),
-            ("delta = (-0.3,0,0.5)",jb_post_bend((delta = (-0.3, 0.0, 0.5),))),
+            ("delta = (0,0,0.5)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length     = 1.0)
+                bend!(spec;     radius     = 0.5, angle = π/2, axis_angle = 0.0)
+                jumpby!(spec;   delta      = (0.0, 0.0, 0.5))
+                straight!(spec; length     = 1.0)
+                (build(spec), 3)
+            end),
+            ("delta = (0.3,0,0.5)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length     = 1.0)
+                bend!(spec;     radius     = 0.5, angle = π/2, axis_angle = 0.0)
+                jumpby!(spec;   delta      = (0.3, 0.0, 0.5))
+                straight!(spec; length     = 1.0)
+                (build(spec), 3)
+            end),
+            ("delta = (-0.3,0,0.5)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length     = 1.0)
+                bend!(spec;     radius     = 0.5, angle = π/2, axis_angle = 0.0)
+                jumpby!(spec;   delta      = (-0.3, 0.0, 0.5))
+                straight!(spec; length     = 1.0)
+                (build(spec), 3)
+            end),
         ],
         variant_spacing = 3.5,
         z_label_offset = 2.0,
@@ -1021,18 +1107,34 @@ end
 function demo_jumpto_after_bend(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    L = 1.0; R = 0.5
-    bend_priors = [(:straight, (length = L,)), (:bend, (radius = R, angle = π/2, axis_angle = 0.0))]
-    jt_post_bend(kw) = () -> _build_jumpto_variant(L, R, 3, kw;
-                                                    priors = bend_priors,
-                                                    tails  = [(:straight, (length = L,))])
     return _jump_row_html(
         joinpath(output_dir, "jumpto-after-bend.html"),
         "JumpTo after 90° bend — destination in GLOBAL frame";
         variants = [
-            ("dest = (1.0, 0, 1.5)", jt_post_bend((destination = (1.0, 0.0, 1.5),))),
-            ("dest = (1.3, 0, 1.5)", jt_post_bend((destination = (1.3, 0.0, 1.5),))),
-            ("dest = (0.5, 0, 2.0)", jt_post_bend((destination = (0.5, 0.0, 2.0),))),
+            ("dest = (1.0, 0, 1.5)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                bend!(spec;     radius      = 0.5, angle = π/2, axis_angle = 0.0)
+                jumpto!(spec;   destination = (1.0, 0.0, 1.5))
+                straight!(spec; length      = 1.0)
+                (build(spec), 3)
+            end),
+            ("dest = (1.3, 0, 1.5)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                bend!(spec;     radius      = 0.5, angle = π/2, axis_angle = 0.0)
+                jumpto!(spec;   destination = (1.3, 0.0, 1.5))
+                straight!(spec; length      = 1.0)
+                (build(spec), 3)
+            end),
+            ("dest = (0.5, 0, 2.0)", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length      = 1.0)
+                bend!(spec;     radius      = 0.5, angle = π/2, axis_angle = 0.0)
+                jumpto!(spec;   destination = (0.5, 0.0, 2.0))
+                straight!(spec; length      = 1.0)
+                (build(spec), 3)
+            end),
         ],
         variant_spacing = 3.5,
         z_label_offset = 2.4,
@@ -1042,19 +1144,31 @@ end
 function demo_jumpby_g2_inheritance(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    L = 1.0; R = 0.5
-    function jb_g2(R_b)
-        () -> _build_jumpby_variant(L, R, 2, (delta = (0.3, 0.0, 0.3),);
-                                     priors = [(:bend, (radius = R_b, angle = π/4, axis_angle = 0.0))],
-                                     tails  = [(:straight, (length = L,))])
-    end
     return _jump_row_html(
         joinpath(output_dir, "jumpby-g2-inheritance.html"),
         "JumpBy after bend — G2 inheritance of incoming κ from prior bend";
         variants = [
-            ("R_bend = 0.30 (κ_in ≈ 3.33)", jb_g2(0.30)),
-            ("R_bend = 0.50 (κ_in = 2.00)", jb_g2(0.50)),
-            ("R_bend = 0.80 (κ_in = 1.25)", jb_g2(0.80)),
+            ("R_bend = 0.30 (κ_in ≈ 3.33)", () -> begin
+                spec = PathSpecBuilder()
+                bend!(spec;   radius = 0.30, angle = π/4, axis_angle = 0.0)
+                jumpby!(spec; delta  = (0.3, 0.0, 0.3))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
+            ("R_bend = 0.50 (κ_in = 2.00)", () -> begin
+                spec = PathSpecBuilder()
+                bend!(spec;   radius = 0.50, angle = π/4, axis_angle = 0.0)
+                jumpby!(spec; delta  = (0.3, 0.0, 0.3))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
+            ("R_bend = 0.80 (κ_in = 1.25)", () -> begin
+                spec = PathSpecBuilder()
+                bend!(spec;   radius = 0.80, angle = π/4, axis_angle = 0.0)
+                jumpby!(spec; delta  = (0.3, 0.0, 0.3))
+                straight!(spec; length = 1.0)
+                (build(spec), 2)
+            end),
         ],
         variant_spacing = 3.0,
         z_label_offset = 1.6,
@@ -1064,27 +1178,27 @@ end
 function demo_jumpto_routing(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    function build_routing()
-        path = _build_jump_composite([
-            (:straight, (length = 1.0,)),
-            (:jumpto,   (destination = (1.0, 0.0, 1.0),
-                         tangent = (0.0, 0.0, -1.0),
-                         min_bend_radius = 0.1)),
-            (:straight, (length = 1.0,)),
-            (:jumpto,   (destination = (2.0, 0.0, 0.0),
-                         tangent = (0.0, 0.0, 1.0),
-                         min_bend_radius = 0.1)),
-            (:straight, (length = 1.0,)),
-            (:jumpto,   (destination = (3.0, 0.0, 1.0),
-                         tangent = (0.0, 0.0, -1.0),
-                         min_bend_radius = 0.1)),
-        ])
-        return (path, [2, 4, 6])
-    end
     return _jump_row_html(
         joinpath(output_dir, "jumpto-routing.html"),
         "JumpTo routing — T1/T2/T3 composite (anti-parallel tangents)";
-        variants = [("composite", build_routing)],
+        variants = [
+            ("composite", () -> begin
+                spec = PathSpecBuilder()
+                straight!(spec; length          = 1.0)
+                jumpto!(spec;   destination     = (1.0, 0.0, 1.0),
+                                tangent         = (0.0, 0.0, -1.0),
+                                min_bend_radius = 0.1)
+                straight!(spec; length          = 1.0)
+                jumpto!(spec;   destination     = (2.0, 0.0, 0.0),
+                                tangent         = (0.0, 0.0, 1.0),
+                                min_bend_radius = 0.1)
+                straight!(spec; length          = 1.0)
+                jumpto!(spec;   destination     = (3.0, 0.0, 1.0),
+                                tangent         = (0.0, 0.0, -1.0),
+                                min_bend_radius = 0.1)
+                (build(spec), [2, 4, 6])
+            end),
+        ],
         variant_spacing = 0.0,
         z_label_offset = 1.6,
     )
