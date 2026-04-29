@@ -4,14 +4,12 @@
 
 Start here, then read ARCHITECTURE.md and README.md.
 
-- **Active code**: `julia-port/` — Julia refactor, all new work goes here.
-
 ## Running Tests
 
 From the shell:
 
 ```bash
-julia julia-port/test/runtests.jl
+julia --project=. julia-port/test/runtests.jl
 ```
 
 The test orchestrator is `julia-port/test/runtests.jl`. All test files live under
@@ -90,6 +88,10 @@ They are currently implemented in demo*.jl.
 For example, if the intent of a demonstration is exercising an api or testing edge cases,
 don't add layers of abstraction that obscure the atomic steps. 
 - Abstraction related to visual presentation is fine and prefered. 
+- One function, one output file. Each demo function produces exactly one HTML file  and returns its path. No aggregator functions that internally loop over scenes.
+- Names derived from outputs. Function names are demo_ + the HTML filename stem  (hyphens → underscores), so the mapping between function and artifact is unambiguous and mechanical.                                                                 
+- File order mirrors index order.                               
+- Descriptions live next to implementations.              
 
 ## Key Invariants
 
@@ -167,6 +169,4 @@ scattering.
 
 - When citing literature only use sources that you can verify in a library catalogue or
   database.
-- Line wrap markdown and comments at 100 characters.
-- Send the output of all demo.jl methods to the folder in the repository root 
-named output. 
+- Markdown, comments and code must line wrap at 100 characters.

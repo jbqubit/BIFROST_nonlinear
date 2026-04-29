@@ -32,7 +32,7 @@ reflect the location of all files.
 │   ├── fiber-path-plot.jl           [13]
 │   ├── demo*.jl                      [14]
 │   └── test                         [15]
-│    
+│   output                           [18] 
 └── *.py / *.jl supporting scripts
 ```
 
@@ -52,6 +52,7 @@ reflect the location of all files.
 - [15] Julia tests.
 - [16] User guide for the julia port (for humans and agents).
 - [17] TODO list for humans.
+- [18] Output of all demo*.jl methods goes here.
 
 Certain files must have no cross-dependencies.
 
