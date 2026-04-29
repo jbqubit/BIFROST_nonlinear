@@ -6,6 +6,29 @@ applies any `MCMadd` / `MCMmul` annotations (via `MCMcombine`) to the
 matching scalar fields of that segment type, and rebuilds the path with
 the perturbed segments re-placed.
 
+# JumpTo: lab-frame anchoring
+
+A `JumpTo` segment **conserves its lab-frame destination** under
+`modify(fiber)`: the endpoint stays fixed regardless of what `:T_K` or
+field-level perturbations any upstream segment carries. On long fibers
+with many meta-annotated segments this anchoring is essential. Without
+it, each segment's perturbation propagates into every downstream
+position; the accumulated drift compounds along the path and the
+geometry can swing well outside the author's intent. Each `JumpTo`
+re-pins the path and confines that drift to the connector immediately
+preceding it.
+
+!!! warning "min_bend_radius and birefringence"
+    The slack a `JumpTo` connector absorbs shows up as **curvature
+    variation**, even when the total path length is correctly preserved
+    (`:T_K` on the connector targets `τ · baseline_L`). The connector's
+    local shape can swing between the baseline and perturbed solves
+    while keeping its endpoints pinned. Set `min_bend_radius` on each
+    `JumpTo` large enough that the resulting peak curvature stays well
+    below the regime where bend-induced birefringence is consequential
+    — otherwise length-conserving shape variations alone can dominate
+    the polarization budget.
+
 # Field-level symbols (direct)
 
 | Segment           | Scalar symbols                               |
@@ -14,6 +37,8 @@ the perturbed segments re-placed.
 | `BendSegment`     | `:radius`, `:angle`, `:axis_angle`           |
 | `CatenarySegment` | `:a`, `:length`, `:axis_angle`               |
 | `HelixSegment`    | `:radius`, `:pitch`, `:turns`, `:axis_angle` |
+
+All segment types also accept `:T_K`; see below.
 
 # `:T_K` sugar (indirect)
 
@@ -26,7 +51,15 @@ segment's T-sensitive fields, with
 - `BendSegment`     → `:radius`
 - `CatenarySegment` → `:a`, `:length`
 - `HelixSegment`    → `:radius`, `:pitch`
-- `QuinticConnector`→ polynomial coeffs and `s_table`
+- `JumpBy`          → resolved connector geometry scales by `τ` (chord
+  and arc both expand; `delta` is fiber-relative)
+- `JumpTo`          → connector arc length is constrained to
+  `τ · baseline_L` while the chord stays pinned to the (lab-frame)
+  destination — solved by `_build_quintic_connector(...;
+  target_arc_length = ...)`. Geometric scaling is *not* applied,
+  because that would move the chord.
+- `QuinticConnector` (already-resolved, e.g. inside a `JumpBy`)
+  → polynomial coeffs and `s_table` scale by `τ`
 
 Angles (`:angle`, `:axis_angle`) and counts (`:turns`) do not respond to
 `:T_K`.
@@ -172,14 +205,31 @@ function _modified_rebuild(path::PathSpecCached, T_ref, α_lin)
     spec_segments = AbstractPathSegment[]
     K_in_global = zeros(3)
 
-    for seg_orig in authored_segments
+    for (idx, seg_orig) in enumerate(authored_segments)
         frame = hcat(N_frame, B_frame, T_frame)
 
         seg_authored = _modify_authored_segment(seg_orig, T_ref, α_lin)
-        seg_resolved = _resolve_at_placement(seg_authored, pos, frame, K_in_global)
-        seg_new = seg_authored isa Union{JumpBy,JumpTo} ?
-            _modify_segment(seg_resolved, T_ref, α_lin) :
-            seg_resolved
+        seg_new = if seg_authored isa JumpTo
+            # JumpTo destination is a lab-frame invariant. If the authored
+            # JumpTo carries :T_K, fold the thermal expansion into the
+            # connector's *arc length* (target_arc_length = τ · baseline_L)
+            # rather than scaling the resolved geometry by τ — the latter
+            # would move the chord and break the destination invariant.
+            τ_conn = _T_K_factor(seg_authored, T_ref, α_lin)
+            if isnothing(τ_conn)
+                _resolve_at_placement(seg_authored, pos, frame, K_in_global)
+            else
+                baseline_L = arc_length(path.placed_segments[idx].segment)
+                _resolve_at_placement(seg_authored, pos, frame, K_in_global;
+                                      target_arc_length = τ_conn * baseline_L)
+            end
+        elseif seg_authored isa JumpBy
+            # JumpBy delta is fiber-relative; chord-and-arc both scale by τ.
+            seg_resolved = _resolve_at_placement(seg_authored, pos, frame, K_in_global)
+            _modify_segment(seg_resolved, T_ref, α_lin)
+        else
+            _resolve_at_placement(seg_authored, pos, frame, K_in_global)
+        end
 
         push!(spec_segments, seg_new)
         push!(placed, PlacedSegment(seg_new, s_eff, copy(pos), copy(frame)))

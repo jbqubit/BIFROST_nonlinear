@@ -594,7 +594,8 @@ function _resolve_at_placement(seg::JumpBy, pos::AbstractVector, frame_mat::Abst
 end
 
 function _resolve_at_placement(seg::JumpTo, pos::AbstractVector, frame_mat::AbstractMatrix,
-                                K_in_global::AbstractVector)
+                                K_in_global::AbstractVector;
+                                target_arc_length::Union{Nothing,Real} = nothing)
     p1_local  = frame_mat' * (collect(seg.destination) .- pos)
     chord     = norm(p1_local)
     t_hat_out = if isnothing(seg.tangent_out)
@@ -610,6 +611,7 @@ function _resolve_at_placement(seg::JumpTo, pos::AbstractVector, frame_mat::Abst
     end
     return _build_quintic_connector(p1_local, t_hat_out, K0_local, K1_local;
                                     min_bend_radius = seg.min_bend_radius,
+                                    target_arc_length = target_arc_length,
                                     meta = seg.meta)
 end
 

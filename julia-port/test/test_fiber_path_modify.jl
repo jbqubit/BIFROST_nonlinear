@@ -322,3 +322,94 @@ end
         MonteCarloMeasurements.unsafe_comparisons(false)
     end
 end
+
+# -----------------------------------------------------------------------
+# JumpTo + :T_K — length-constrained connector resolve
+# -----------------------------------------------------------------------
+# JumpTo destination is a lab-frame invariant. Thermal expansion on the
+# connector itself must show up as arc length, not as a chord rescaling
+# (which would move the endpoint). modify() folds this into the resolver
+# via target_arc_length = τ_conn · baseline_L.
+
+@testset "modify — :T_K on JumpTo preserves destination" begin
+    spec = PathSpecBuilder()
+    jumpto!(spec; destination = (0.4, 0.0, 0.4),
+            tangent = (1.0, 0.0, 0.0),
+            meta = _mcm(1.05))
+    path = build(spec)
+    path_s = _modify_fiber_path(path)
+    @test end_point(path_s) ≈ [0.4, 0.0, 0.4] atol = 1e-6
+end
+
+@testset "modify — :T_K on JumpTo scales arc length only" begin
+    α = 1.05
+    spec = PathSpecBuilder()
+    jumpto!(spec; destination = (0.4, 0.0, 0.4),
+            tangent = (1.0, 0.0, 0.0),
+            meta = _mcm(α))
+    path = build(spec)
+    L_baseline = arc_length(path.placed_segments[1].segment)
+    path_s = _modify_fiber_path(path)
+    @test end_point(path_s) ≈ [0.4, 0.0, 0.4] atol = 1e-6
+    L_modified = arc_length(path_s.placed_segments[1].segment)
+    @test L_modified ≈ α * L_baseline rtol = 1e-4
+end
+
+@testset "modify — JumpTo without :T_K is unchanged" begin
+    spec = PathSpecBuilder()
+    jumpto!(spec; destination = (0.5, 0.0, 0.5),
+            tangent = (1.0, 0.0, 0.0))
+    path = build(spec)
+    path_s = _modify_fiber_path(path)
+    @test end_point(path_s) ≈ [0.5, 0.0, 0.5] atol = 1e-10
+    @test path_length(path_s) ≈ path_length(path) atol = 1e-10
+end
+
+@testset "modify — JumpTo absorbs upstream thermal drift" begin
+    α = 1.05
+    spec = PathSpecBuilder()
+    straight!(spec; length = 0.5, meta = _mcm(α))
+    jumpto!(spec; destination = (0.0, 0.0, 1.0))
+    path = build(spec)
+    path_s = _modify_fiber_path(path)
+
+    # Endpoint pinned at lab-frame destination despite upstream expansion.
+    @test end_point(path_s) ≈ [0.0, 0.0, 1.0] atol = 1e-8
+
+    # Straight expanded by α; connector has no own :T_K so no length target,
+    # arc length is whatever the unconstrained smooth ramp produces. Sanity:
+    # connector arc length ≈ |1 - α·0.5| (chord magnitude, since tangents
+    # default to chord-aligned for a straight-on jump).
+    seg_straight = path_s.placed_segments[1].segment
+    @test seg_straight.length ≈ α * 0.5 atol = 1e-12
+    L_conn = arc_length(path_s.placed_segments[2].segment)
+    @test L_conn ≈ (1.0 - α * 0.5) rtol = 1e-3
+end
+
+@testset "modify — JumpTo with both upstream and own :T_K" begin
+    α_up = 1.05    # upstream straight expansion
+    α_jt = 1.10    # connector's own thermal expansion
+    spec = PathSpecBuilder()
+    straight!(spec; length = 0.5, meta = _mcm(α_up))
+    jumpto!(spec; destination = (0.0, 0.0, 1.0), meta = _mcm(α_jt))
+    path = build(spec)
+    L_conn_baseline = arc_length(path.placed_segments[2].segment)
+    path_s = _modify_fiber_path(path)
+
+    @test end_point(path_s) ≈ [0.0, 0.0, 1.0] atol = 1e-6
+    seg_straight = path_s.placed_segments[1].segment
+    @test seg_straight.length ≈ α_up * 0.5 atol = 1e-12
+    L_conn_modified = arc_length(path_s.placed_segments[2].segment)
+    @test L_conn_modified ≈ α_jt * L_conn_baseline rtol = 1e-4
+end
+
+@testset "modify — JumpTo with infeasible :T_K shrinkage throws" begin
+    # τ < 1 with a chord that already equals baseline arc length: target
+    # falls below chord magnitude, which is geometrically infeasible.
+    spec = PathSpecBuilder()
+    jumpto!(spec; destination = (0.0, 0.0, 1.0),
+            tangent = (0.0, 0.0, 1.0),
+            meta = _mcm(0.5))
+    path = build(spec)
+    @test_throws ArgumentError _modify_fiber_path(path)
+end

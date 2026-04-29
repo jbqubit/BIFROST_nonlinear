@@ -392,7 +392,8 @@ end
 
 """
     _build_quintic_connector(p1_local, t_hat_out, K0_local, K1_local;
-                             min_bend_radius, n_table, meta) → QuinticConnector
+                             min_bend_radius, target_arc_length,
+                             n_table, meta) → QuinticConnector
 
 Construct a `QuinticConnector` from `JumpBy` / `JumpTo` resolve data.
 
@@ -403,7 +404,12 @@ are silently re-projected onto the plane perpendicular to their tangent.
 
 If `min_bend_radius` is set, performs an exponential-bracket / bisection
 search over the handle scale λ until the sampled peak curvature falls below
-`1/min_bend_radius`. All branching uses nominalized scalars so the chosen λ
+`1/min_bend_radius`. If `target_arc_length` is set, instead searches λ until
+the connector's arc length matches the target — used by `modify(fiber)` to
+honor `:T_K` thermal expansion on a `JumpTo` whose endpoint is a lab-frame
+invariant. The two constraints can be combined: when both are set, λ is
+chosen by the arc-length search and the result is validated against
+`min_bend_radius`. All branching uses nominalized scalars so the chosen λ
 is deterministic under MCM inputs; the final coefficients carry the original
 `T` element type.
 """
@@ -412,6 +418,7 @@ function _build_quintic_connector(p1_local::AbstractVector,
                                   K0_local::AbstractVector,
                                   K1_local::AbstractVector;
                                   min_bend_radius::Union{Nothing, Real} = nothing,
+                                  target_arc_length::Union{Nothing, Real} = nothing,
                                   n_table::Int = 256,
                                   n_check::Int = 128,
                                   growth::Float64 = 1.5,
@@ -446,6 +453,94 @@ function _build_quintic_connector(p1_local::AbstractVector,
 
     R_for_init = isfinite(R_min) ? R_min : 0.0
     λ = _qc_initial_lambda(p1_local, t_hat_in, t_hat_out, R_for_init)
+
+    # Length-constrained mode: search λ so arc length ≈ target. λ is monotone
+    # in arc length over the typical range (chord-aligned baseline upward). If
+    # both target and min_bend_radius are set, pick λ by arc length and verify
+    # peak curvature post-hoc.
+    if !isnothing(target_arc_length)
+        target = Float64(_qc_nominalize(target_arc_length))
+        target > 0.0 || throw(ArgumentError(
+            "target_arc_length must be positive; got $(target)"))
+        chord_nom = sqrt(Float64(_qc_nominalize(
+            p1_local[1]^2 + p1_local[2]^2 + p1_local[3]^2)))
+        target < chord_nom * (1 - rel_tol) && throw(ArgumentError(
+            "target arc length infeasible: target=$(target) m is shorter " *
+            "than chord ($(round(chord_nom;digits=6)) m)"))
+
+        arc_at = function (λv)
+            c = _qc_assemble(p1_local, t_hat_in, t_hat_out, K0_perp, K1_perp, λv)
+            s = _qc_build_table(c, n_table)
+            return Float64(_qc_nominalize(s[end]))
+        end
+
+        arc_init = arc_at(λ)
+
+        local λ_lo::Float64, λ_hi::Float64
+        if abs(arc_init - target) <= max(rel_tol * target, 1e-12)
+            λ_lo = λ
+            λ_hi = λ
+        elseif arc_init < target
+            # Grow λ until arc length ≥ target.
+            λ_lo = λ
+            λ_hi = λ
+            found = false
+            for _ in 1:max_iter
+                λ_hi = λ_hi * growth
+                if arc_at(λ_hi) >= target
+                    found = true
+                    break
+                end
+                λ_lo = λ_hi
+            end
+            found || throw(ArgumentError(
+                "target arc length infeasible: arc length did not reach " *
+                "$(target) m within λ=$(round(λ_hi;digits=3))"))
+        else
+            # Shrink λ until arc length ≤ target.
+            λ_lo = λ
+            λ_hi = λ
+            found = false
+            for _ in 1:max_iter
+                λ_lo = λ_lo / growth
+                if arc_at(λ_lo) <= target
+                    found = true
+                    break
+                end
+                λ_hi = λ_lo
+            end
+            found || throw(ArgumentError(
+                "target arc length infeasible: arc length did not shrink to " *
+                "$(target) m down to λ=$(round(λ_lo;digits=6))"))
+        end
+
+        # Bisect (arc length is monotone-ish in λ over the bracket).
+        for _ in 1:bisect_iter
+            (λ_hi - λ_lo) < rel_tol * max(λ_hi, 1e-12) && break
+            λ_mid = (λ_lo + λ_hi) / 2
+            if arc_at(λ_mid) < target
+                λ_lo = λ_mid
+            else
+                λ_hi = λ_mid
+            end
+        end
+        λ_final = (λ_lo + λ_hi) / 2
+
+        coeffs_final = _qc_assemble(p1_local, t_hat_in, t_hat_out,
+                                    K0_perp, K1_perp, λ_final)
+        s_table = _qc_build_table(coeffs_final, n_table)
+
+        if isfinite(κ_limit)
+            κ_final = _qc_peak_curvature(coeffs_final; n_check = n_check)
+            κ_final > κ_limit + curvature_tol && throw(ArgumentError(
+                "target_arc_length=$(target) m and min_bend_radius=$(R_min) m " *
+                "are jointly infeasible: peak curvature " *
+                "$(round(κ_final;digits=3)) m⁻¹ exceeds 1/R_min=" *
+                "$(round(κ_limit;digits=3)) m⁻¹"))
+        end
+
+        return QuinticConnector(coeffs_final, λ_final, s_table; meta = meta)
+    end
 
     # Unconstrained: build at the initial λ.
     if !isfinite(κ_limit)
