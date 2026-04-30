@@ -1,4 +1,5 @@
 using LinearAlgebra
+using Printf
 
 
 # Code Overview:
@@ -566,22 +567,37 @@ function propagate_piecewise(
     breaks::AbstractVector{<:Real};
     jumps::AbstractDict = Dict{Float64, Matrix{ComplexF64}}(),
     J0::AbstractMatrix = Matrix{ComplexF64}(I, 2, 2),
+    verbose::Bool = true,
     kwargs...
 )
     @assert issorted(breaks)
     J = copy(J0)
     stats = PropagatorStats[]
+    n = length(breaks) - 1
+    t_start = time()
+    s_done = 0.0
 
-    for i in 1:length(breaks)-1
+    for i in 1:n
         sL = scalar_reduce(breaks[i])
         sR = scalar_reduce(breaks[i+1])
 
         J, st = propagate_interval!(K, sL, sR, J; kwargs...)
         push!(stats, st)
+        s_done += sR - sL
+
+        if verbose
+            elapsed = time() - t_start
+            rate = elapsed > 0 ? s_done / elapsed : 0.0
+            @printf(stderr, "\r  propagate_piecewise: interval %d/%d (%.1f%%)  %.2f m/s  ", i, n, 100.0*i/n, rate)
+        end
 
         if haskey(jumps, sR)
             J = jumps[sR] * J
         end
+    end
+
+    if verbose
+        println(stderr)
     end
 
     return J, stats
@@ -623,19 +639,30 @@ function propagate_piecewise_sensitivity(
     jump_omegas::AbstractDict = Dict{Float64, Matrix{ComplexF64}}(),
     J0::AbstractMatrix = Matrix{ComplexF64}(I, 2, 2),
     G0::AbstractMatrix = zeros(eltype(J0), 2, 2),
+    verbose::Bool = true,
     kwargs...
 )
     @assert issorted(breaks)
     J = copy(J0)
     G = copy(G0)
     stats = PropagatorStats[]
+    n = length(breaks) - 1
+    t_start = time()
+    s_done = 0.0
 
-    for i in 1:length(breaks)-1
+    for i in 1:n
         sL = scalar_reduce(breaks[i])
         sR = scalar_reduce(breaks[i+1])
 
         J, G, st = propagate_interval_sensitivity!(K, Kω, sL, sR, J; G0 = G, kwargs...)
         push!(stats, st)
+        s_done += sR - sL
+
+        if verbose
+            elapsed = time() - t_start
+            rate = elapsed > 0 ? s_done / elapsed : 0.0
+            @printf(stderr, "\r  propagate_piecewise_sensitivity: interval %d/%d (%.1f%%)  %.2f m/s  ", i, n, 100.0*i/n, rate)
+        end
 
         if haskey(jumps, sR)
             J_pre = J
@@ -645,6 +672,10 @@ function propagate_piecewise_sensitivity(
             J = J_jump * J_pre
             G = G_jump * J_pre + J_jump * G_pre
         end
+    end
+
+    if verbose
+        println(stderr)
     end
 
     return J, G, stats
