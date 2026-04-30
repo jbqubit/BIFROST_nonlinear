@@ -1,23 +1,23 @@
 if !isdefined(Main, :FiberCrossSection)
     include("fiber-cross-section.jl")
 end
-if !isdefined(Main, :PathSpecCached)
+if !isdefined(Main, :SubpathCached)
     include("path-geometry.jl")
 end
 
-include("fiber-path-meta.jl")
+include("path-geometry-meta.jl")
 
 """
 Fiber assembly on top of `path-geometry.jl`.
 
 High-level authoring happens in `path-geometry.jl`:
-- build piecewise geometry with `PathSpecBuilder`
-- compile it to `PathSpecCached` with `build(path_spec)`
+- build piecewise geometry with `SubpathBuilder`
+- compile it to `SubpathCached` with `build(path_spec)`
 - bind geometry to a cross section with `Fiber(path; cross_section, T_ref_K)`
 
 `Fiber` is the compiled query object consumed downstream by `path-integral.jl`.
 It owns:
-- the immutable built `PathSpecCached`
+- the immutable built `SubpathCached` (or `PathCached`)
 - the `FiberCrossSection`
 - a single reference temperature `T_ref_K` that is the reference for both the
   path geometry (segment lengths/radii valid at `T_ref_K`) and the cross-section
@@ -43,7 +43,7 @@ xs = FiberCrossSection(
     model_number = "SMF-like"
 )
 
-path_spec = PathSpecBuilder()
+path_spec = SubpathBuilder()
 straight!(path_spec; length = 5.0)
 bend!(path_spec;
     radius = 4.458, angle = π / 2, axis_angle = 0.0,
@@ -67,7 +67,7 @@ if !isdefined(Main, :DEFAULT_T_REF_K)
     const DEFAULT_T_REF_K = 297.15
 end
 
-function bend_components(path::PathSpecCached, s::Real)
+function bend_components(path::Union{SubpathCached, PathCached}, s::Real)
     κ = curvature(path, s)
     if κ == zero(κ)
         z = zero(κ)
@@ -90,11 +90,27 @@ struct Fiber{P,T,S}
 end
 
 function Fiber(
-    path::PathSpecCached;
+    path::SubpathCached;
     cross_section::FiberCrossSection,
     T_ref_K = DEFAULT_T_REF_K,
 )
-    s_start, s_end = promote(path.spec.s_start, path.s_end)
+    s_start, s_end = promote(0.0, path.s_end)
+    @assert s_end > s_start "Fiber requires s_end > s_start"
+    return Fiber{typeof(path),typeof(T_ref_K),typeof(s_start)}(
+        path,
+        cross_section,
+        T_ref_K,
+        s_start,
+        s_end,
+    )
+end
+
+function Fiber(
+    path::PathCached;
+    cross_section::FiberCrossSection,
+    T_ref_K = DEFAULT_T_REF_K,
+)
+    s_start, s_end = promote(0.0, path.s_end)
     @assert s_end > s_start "Fiber requires s_end > s_start"
     return Fiber{typeof(path),typeof(T_ref_K),typeof(s_start)}(
         path,
@@ -107,7 +123,8 @@ end
 
 # TODO: twist refactor — material_twist is currently a stub; restore once the
 # per-segment-meta twist subsystem lands.
-path_twist_rate(path::PathSpecCached, s::Real) = geometric_torsion(path, s) + material_twist(path, s)
+path_twist_rate(path::Union{SubpathCached, PathCached}, s::Real) =
+    geometric_torsion(path, s) + material_twist(path, s)
 
 fiber_path(f::Fiber) = f.path
 

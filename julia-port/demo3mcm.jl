@@ -76,7 +76,7 @@ const _MCM_DEMO_HELIX1_TURNS = 10001.892069208387
 # Build the 5-segment fiber spec.  `ΔT_K` is the temperature offset applied
 # to the first helix via MCMadd(:T_K, ΔT_K); pass 0.0 for the baseline.
 function _mcm_demo_fiber(ΔT_K)
-    spec = PathSpecBuilder()
+    spec = SubpathBuilder()
     # Sinusoidal twist: amplitude 1 rad/m, period 10 m, starts here and runs
     # to end of fiber (no subsequent Twist annotation resets it).
     straight!(spec; length = 5.0,

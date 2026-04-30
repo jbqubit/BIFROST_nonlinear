@@ -6,28 +6,18 @@ applies any `MCMadd` / `MCMmul` annotations (via `MCMcombine`) to the
 matching scalar fields of that segment type, and rebuilds the path with
 the perturbed segments re-placed.
 
-# JumpTo: lab-frame anchoring
+# jumpto! terminal connector: lab-frame anchoring
 
-A `JumpTo` segment **conserves its lab-frame destination** under
-`modify(fiber)`: the endpoint stays fixed regardless of what `:T_K` or
-field-level perturbations any upstream segment carries. On long fibers
-with many meta-annotated segments this anchoring is essential. Without
-it, each segment's perturbation propagates into every downstream
-position; the accumulated drift compounds along the path and the
-geometry can swing well outside the author's intent. Each `JumpTo`
-re-pins the path and confines that drift to the connector immediately
-preceding it.
+The terminal connector (authored via `jumpto!` on a `SubpathBuilder`) **conserves
+its lab-frame destination** under `modify(fiber)`: the endpoint stays fixed
+regardless of what `:T_K` or field-level perturbations any upstream segment carries.
+On long fibers with many meta-annotated segments this anchoring is essential. Without
+it, each segment's perturbation propagates into every downstream position; the
+accumulated drift compounds along the path and the geometry can swing well outside the
+author's intent.
 
-!!! warning "min_bend_radius and birefringence"
-    The slack a `JumpTo` connector absorbs shows up as **curvature
-    variation**, even when the total path length is correctly preserved
-    (`:T_K` on the connector targets `τ · baseline_L`). The connector's
-    local shape can swing between the baseline and perturbed solves
-    while keeping its endpoints pinned. Set `min_bend_radius` on each
-    `JumpTo` large enough that the resulting peak curvature stays well
-    below the regime where bend-induced birefringence is consequential
-    — otherwise length-conserving shape variations alone can dominate
-    the polarization budget.
+Note: in Phase 2, `:T_K` meta on the terminal connector's `jumpto_meta` is not
+applied. Length-constrained connector behavior under `:T_K` is pending Phase 3.
 
 # Field-level symbols (direct)
 
@@ -53,11 +43,6 @@ segment's T-sensitive fields, with
 - `HelixSegment`    → `:radius`, `:pitch`
 - `JumpBy`          → resolved connector geometry scales by `τ` (chord
   and arc both expand; `delta` is fiber-relative)
-- `JumpTo`          → connector arc length is constrained to
-  `τ · baseline_L` while the chord stays pinned to the (lab-frame)
-  destination — solved by `_build_quintic_connector(...;
-  target_arc_length = ...)`. Geometric scaling is *not* applied,
-  because that would move the chord.
 - `QuinticConnector` (already-resolved, e.g. inside a `JumpBy`)
   → polynomial coeffs and `s_table` scale by `τ`
 
@@ -84,7 +69,7 @@ if !@isdefined(Fiber)
     include("fiber-path.jl")
 end
 if !@isdefined(MCMadd)
-    include("fiber-path-meta.jl")
+    include("path-geometry-meta.jl")
 end
 
 # ----------------------------
@@ -92,9 +77,9 @@ end
 # ----------------------------
 
 """
-    modify(fiber::Fiber) → PathSpecCached
+    modify(fiber::Fiber) → SubpathCached
 
-Return a new `PathSpecCached` whose segments have been perturbed according
+Return a new `SubpathCached` whose segments have been perturbed according
 to the `MCMadd` / `MCMmul` / `:T_K` annotations on each segment's `meta`
 vector. See this file's module docstring for the per-field and T_K semantics.
 """
@@ -182,48 +167,31 @@ _modify_segment(seg::AbstractPathSegment, ::Any, ::Any) =
 # Internal: reassemble a path with replaced segments
 # ----------------------------
 
-function _modify_authored_segment(seg::Union{JumpBy,JumpTo}, ::Any, ::Any)
+function _modify_authored_segment(seg::JumpBy, ::Any, ::Any)
     return seg
 end
 
 _modify_authored_segment(seg::AbstractPathSegment, T_ref, α_lin) =
     _modify_segment(seg, T_ref, α_lin)
 
-function _modified_rebuild(path::PathSpecCached, T_ref, α_lin)
-    authored_segments = path.spec.segments
+function _modified_rebuild(path::SubpathCached, T_ref, α_lin)
+    sub = path.subpath
 
     # Re-place the authored segments, matching build()'s frame-advancing loop.
-    # JumpBy/JumpTo are resolved after upstream modifications so G2 connector
-    # endpoints inherit the modified incoming curvature. Connector-local :T_K
-    # meta is then applied to the resolved QuinticConnector.
-    pos     = zeros(3)
-    N_frame = [1.0, 0.0, 0.0]
-    B_frame = [0.0, 1.0, 0.0]
-    T_frame = [0.0, 0.0, 1.0]
-    s_eff   = Float64(path.spec.s_start)
-    placed  = PlacedSegment[]
-    spec_segments = AbstractPathSegment[]
-    K_in_global = zeros(3)
+    # JumpBy is resolved after upstream modifications so G2 connector endpoints
+    # inherit the modified incoming curvature. Connector-local :T_K meta is then
+    # applied to the resolved QuinticConnector.
+    pos         = collect(sub.origin_point)
+    T_frame, N_frame, B_frame = _initial_frame(collect(sub.origin_outgoing_tangent))
+    s_eff       = 0.0
+    placed      = PlacedSegment[]
+    K_in_global = collect(sub.origin_outgoing_curvature)
 
-    for (idx, seg_orig) in enumerate(authored_segments)
+    for seg_orig in sub.segments
         frame = hcat(N_frame, B_frame, T_frame)
 
         seg_authored = _modify_authored_segment(seg_orig, T_ref, α_lin)
-        seg_new = if seg_authored isa JumpTo
-            # JumpTo destination is a lab-frame invariant. If the authored
-            # JumpTo carries :T_K, fold the thermal expansion into the
-            # connector's *arc length* (target_arc_length = τ · baseline_L)
-            # rather than scaling the resolved geometry by τ — the latter
-            # would move the chord and break the destination invariant.
-            τ_conn = _T_K_factor(seg_authored, T_ref, α_lin)
-            if isnothing(τ_conn)
-                _resolve_at_placement(seg_authored, pos, frame, K_in_global)
-            else
-                baseline_L = arc_length(path.placed_segments[idx].segment)
-                _resolve_at_placement(seg_authored, pos, frame, K_in_global;
-                                      target_arc_length = τ_conn * baseline_L)
-            end
-        elseif seg_authored isa JumpBy
+        seg_new = if seg_authored isa JumpBy
             # JumpBy delta is fiber-relative; chord-and-arc both scale by τ.
             seg_resolved = _resolve_at_placement(seg_authored, pos, frame, K_in_global)
             _modify_segment(seg_resolved, T_ref, α_lin)
@@ -231,7 +199,6 @@ function _modified_rebuild(path::PathSpecCached, T_ref, α_lin)
             _resolve_at_placement(seg_authored, pos, frame, K_in_global)
         end
 
-        push!(spec_segments, seg_new)
         push!(placed, PlacedSegment(seg_new, s_eff, copy(pos), copy(frame)))
 
         pos_end_local         = end_position_local(seg_new)
@@ -250,15 +217,56 @@ function _modified_rebuild(path::PathSpecCached, T_ref, α_lin)
         s_eff = s_eff + L_seg
     end
 
-    new_spec = PathSpec(spec_segments, path.spec.s_start)
+    # Terminal connector — re-resolve from the subpath's jumpto fields.
+    if !isnothing(sub.jumpto_point)
+        frame    = hcat(N_frame, B_frame, T_frame)
+        p1_local = frame' * (collect(sub.jumpto_point) .- pos)
+        chord    = norm(p1_local)
+        t_hat_out = if isnothing(sub.jumpto_incoming_tangent)
+            chord > 1e-15 ? p1_local ./ chord : [0.0, 0.0, 1.0]
+        else
+            normalize(frame' * normalize(collect(sub.jumpto_incoming_tangent)))
+        end
+        K0_local = frame' * K_in_global
+        K1_local = isnothing(sub.jumpto_incoming_curvature) ? zeros(3) :
+                   frame' * collect(sub.jumpto_incoming_curvature)
+        connector_new = _build_quintic_connector(p1_local, t_hat_out, K0_local, K1_local;
+                            min_bend_radius = sub.jumpto_min_bend_radius,
+                            meta            = sub.jumpto_meta)
+        push!(placed, PlacedSegment(connector_new, s_eff, copy(pos), copy(frame)))
+        s_eff += arc_length(connector_new)
+    end
+
     has_twist = any(ps -> any(m -> m isa Twist, segment_meta(ps.segment)), placed)
     resolved_twists = has_twist ?
         _resolve_twists(placed, Float64(_qc_nominalize(s_eff))) :
         ResolvedTwistRate[]
-    return PathSpecCached(new_spec, placed, s_eff, resolved_twists)
+    return SubpathCached(sub, placed, s_eff, resolved_twists)
 end
 
-function _replace_segments(path::PathSpecCached, new_segments::Vector{<:AbstractPathSegment})
+function _replace_segments(path::SubpathCached, new_segments::Vector{<:AbstractPathSegment})
     @assert length(new_segments) == length(path.placed_segments)
-    return build(PathSpec(collect(new_segments), path.spec.s_start))
+    # Rebuild from the original subpath's origin, with new segments replacing the authored ones.
+    # Note: the terminal connector (if any) is re-resolved from sub.jumpto_point in build().
+    sub = path.subpath
+    # Build a new SubpathBuilder with the same origin and new segments, then build.
+    b = SubpathBuilder()
+    b.origin_point             = sub.origin_point
+    b.origin_outgoing_tangent  = sub.origin_outgoing_tangent
+    b.origin_outgoing_curvature = sub.origin_outgoing_curvature
+    # Strip the terminal connector out of new_segments: last segment is the connector
+    # if the original subpath had a jumpto_point.
+    n_segs = isnothing(sub.jumpto_point) ? length(new_segments) : length(new_segments) - 1
+    for seg in new_segments[1:n_segs]
+        push!(b.segments, seg)
+    end
+    if !isnothing(sub.jumpto_point)
+        b.jumpto_point             = sub.jumpto_point
+        b.jumpto_incoming_tangent  = sub.jumpto_incoming_tangent
+        b.jumpto_incoming_curvature = sub.jumpto_incoming_curvature
+        b.jumpto_min_bend_radius   = sub.jumpto_min_bend_radius
+        b.jumpto_conserve_path_length = sub.jumpto_conserve_path_length
+        b.jumpto_meta              = sub.jumpto_meta
+    end
+    return build(b)
 end

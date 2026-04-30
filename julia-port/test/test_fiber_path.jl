@@ -81,7 +81,7 @@ end
 
 function build_centerline_test_fiber(segments)
     @assert !isempty(segments) "Use build_straight_test_fiber for the straight case"
-    spec = PathSpecBuilder()
+    spec = SubpathBuilder()
     for raw_seg in segments
         seg = canonical_bend_segment(raw_seg)
         bend!(spec; radius = seg.R, angle = seg.θ, axis_angle = seg.α)
@@ -91,7 +91,7 @@ function build_centerline_test_fiber(segments)
 end
 
 function build_straight_test_fiber(length::Real)
-    spec = PathSpecBuilder()
+    spec = SubpathBuilder()
     straight!(spec; length = length)
     path = build(spec)
     return Fiber(path; cross_section = test_cross_section())
@@ -248,7 +248,7 @@ end
     xs = test_cross_section()
 
     function straight_fiber(; T_ref_K = DEFAULT_T_REF_K, length = 10.0)
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         straight!(spec; length = length)
         return Fiber(build(spec); cross_section = xs, T_ref_K = T_ref_K)
     end
@@ -270,7 +270,7 @@ end
     # TODO: twist refactor — the twist! call and twist breakpoints in this test
     # are pending the per-segment-meta twist subsystem.
     @testset "T-GUARDRAIL: domain, coverage, and breakpoint derivation" begin
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         straight!(spec; length = 1.0)
         bend!(spec; radius = 0.2, angle = π / 2)
         path = build(spec)
@@ -291,7 +291,7 @@ end
     end
 
     @testset "T-PHYSICS: straight path gives zero generators" begin
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         straight!(spec; length = 0.8)
         fiber = Fiber(build(spec); cross_section = xs)
 
@@ -303,7 +303,7 @@ end
         λ = 1550e-9
         T = 297.15
         R = 0.04
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         bend!(spec; radius = R, angle = π / 3)
         fiber = Fiber(build(spec); cross_section = xs, T_ref_K = T)
         K = generator_K(fiber, λ)(0.5 * fiber.s_end)
@@ -315,9 +315,5 @@ end
         @test K[2, 1] ≈ 0.0 atol = 1e-12
     end
 
-    # TODO: twist refactor — pending per-segment-meta twist subsystem.
-    @testset "T-PHYSICS: twist overlay uses twisting_birefringence" begin
-        @test_skip true
-    end
 
 end

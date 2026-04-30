@@ -30,7 +30,7 @@ function demo_path_geometry(;
     title::AbstractString = "Fiber path geometry: bends, catenary, twist",
 )
     PG = PathGeometry
-    spec = PG.PathSpecBuilder()
+    spec = PG.SubpathBuilder()
     L_lead = 0.10
     R1 = 0.05
     θ1 = π / 2
@@ -47,7 +47,7 @@ function demo_path_geometry(;
     println("Writhe: ", PG.writhe(path))
     plot_path = write_path_geometry_plot3d(
         path,
-        path.spec.s_start,
+        0.0,
         path.s_end;
         fidelity = fidelity,
         output = output,
@@ -63,7 +63,7 @@ function demo_path_geometry_segment_labels(;
     title::AbstractString = "Path geometry: segment nicknames",
 )
     PG = PathGeometry
-    spec = PG.PathSpecBuilder()
+    spec = PG.SubpathBuilder()
     PG.straight!(spec; length = 0.08, meta = [PG.Nickname("lead-in")])
     PG.bend!(spec; radius = 0.06, angle = π / 2, meta = [PG.Nickname("90° bend")])
     PG.straight!(spec; length = 0.06, meta = [PG.Nickname("spacer")])
@@ -74,7 +74,7 @@ function demo_path_geometry_segment_labels(;
     println("Arc length (effective): ", PG.path_length(path), " m")
     plot_path = write_path_geometry_plot3d(
         path,
-        path.spec.s_start,
+        0.0,
         path.s_end;
         fidelity = fidelity,
         output = output,
@@ -90,14 +90,14 @@ function demo_path_geometry_helix_0(;
     title::AbstractString = "HelixSegment: axis_angle = 0",
 )
     PG = PathGeometry
-    spec = PG.PathSpecBuilder()
+    spec = PG.SubpathBuilder()
     PG.straight!(spec; length = 0.05, meta = [PG.Nickname("Straight")])
     PG.helix!(spec; radius = 0.03, pitch = 0.02, turns = 2.0, axis_angle = 0.0, meta = [PG.Nickname("Helix")])
     PG.straight!(spec; length = 0.05, meta = [PG.Nickname("Straight")])
     path = PG.build(spec)
     println("Helix axis_angle=0: arc_length=$(round(PG.path_length(path), digits=4)) m")
     plot_path = write_path_geometry_plot3d(
-        path, path.spec.s_start, path.s_end;
+        path, 0.0, path.s_end;
         fidelity = fidelity, output = output, title = title,
     )
     println("Wrote helix demo to: ", plot_path)
@@ -110,14 +110,14 @@ function demo_path_geometry_helix_pi_3(;
     title::AbstractString = "HelixSegment: axis_angle = π/3",
 )
     PG = PathGeometry
-    spec = PG.PathSpecBuilder()
+    spec = PG.SubpathBuilder()
     PG.straight!(spec; length = 0.05, meta = [PG.Nickname("Straight")])
     PG.helix!(spec; radius = 0.03, pitch = 0.02, turns = 2.0, axis_angle = π/3, meta = [PG.Nickname("Helix")])
     PG.straight!(spec; length = 0.05, meta = [PG.Nickname("Straight")])
     path = PG.build(spec)
     println("Helix axis_angle=π/3: arc_length=$(round(PG.path_length(path), digits=4)) m")
     plot_path = write_path_geometry_plot3d(
-        path, path.spec.s_start, path.s_end;
+        path, 0.0, path.s_end;
         fidelity = fidelity, output = output, title = title,
     )
     println("Wrote helix demo to: ", plot_path)
@@ -130,14 +130,14 @@ function demo_path_geometry_helix_2pi_3(;
     title::AbstractString = "HelixSegment: axis_angle = 2π/3",
 )
     PG = PathGeometry
-    spec = PG.PathSpecBuilder()
+    spec = PG.SubpathBuilder()
     PG.straight!(spec; length = 0.05, meta = [PG.Nickname("Straight")])
     PG.helix!(spec; radius = 0.03, pitch = 0.02, turns = 2.0, axis_angle = 2π/3, meta = [PG.Nickname("Helix")])
     PG.straight!(spec; length = 0.05, meta = [PG.Nickname("Straight")])
     path = PG.build(spec)
     println("Helix axis_angle=2π/3: arc_length=$(round(PG.path_length(path), digits=4)) m")
     plot_path = write_path_geometry_plot3d(
-        path, path.spec.s_start, path.s_end;
+        path, 0.0, path.s_end;
         fidelity = fidelity, output = output, title = title,
     )
     println("Wrote helix demo to: ", plot_path)
@@ -150,7 +150,7 @@ function demo_path_geometry_jumps_min_radius(;
     title::AbstractString = "JumpBy and JumpTo: Hermite connectors, min_bend_radius",
 )
     PG = PathGeometry
-    spec = PG.PathSpecBuilder()
+    spec = PG.SubpathBuilder()
 
     PG.straight!(spec; length = 1, meta = [PG.Nickname("Straight")])
     PG.jumpto!(spec; destination = (1, 0.0, 1), tangent = (0.0, 0.0, -1.0),
@@ -168,7 +168,7 @@ function demo_path_geometry_jumps_min_radius(;
 
     path = PG.build(spec)
     plot_path = write_path_geometry_plot3d(
-        path, path.spec.s_start, path.s_end;
+        path, 0.0, path.s_end;
         fidelity = fidelity, output = output, title = title)
     return (; path, plot_path)
 end
@@ -178,7 +178,7 @@ end
 # =====================================================================
 
 # Sample a single placed segment's centerline in the global frame.
-function _sample_segment_xyz(path::PathSpecCached, seg_index::Int; n::Int = 128)
+function _sample_segment_xyz(path::SubpathCached, seg_index::Int; n::Int = 128)
     ps = path.placed_segments[seg_index]
     s0 = ps.s_offset_eff
     s1 = s0 + arc_length(ps.segment)
@@ -198,7 +198,7 @@ end
 # straight). Returns the modified path and the target segment index.
 function _build_modify_variant(L::Float64, R::Float64,
                                target_idx::Int, target_meta::AbstractVector{<:AbstractMeta})
-    spec = PathSpecBuilder()
+    spec = SubpathBuilder()
     straight!(spec; length = L, meta = target_idx == 1 ? target_meta : AbstractMeta[])
     bend!(spec; radius = R, angle = π, axis_angle = 0.0,
           meta = target_idx == 2 ? target_meta : AbstractMeta[])
@@ -221,7 +221,7 @@ const _MODIFY_HELIX_TURNS  = 1.5
 #   1 = first straight, 2 = bend, 3 = helix, 4 = second straight.
 function _build_modify_variant_helix(L::Float64, R::Float64,
                                      target_idx::Int, target_meta::AbstractVector{<:AbstractMeta})
-    spec = PathSpecBuilder()
+    spec = SubpathBuilder()
     straight!(spec; length = L, meta = target_idx == 1 ? target_meta : AbstractMeta[])
     bend!(spec; radius = R, angle = π, axis_angle = 0.0,
           meta = target_idx == 2 ? target_meta : AbstractMeta[])
@@ -273,7 +273,7 @@ function _modify_row_html(output::AbstractString, title::AbstractString;
   showlegend: $(i == 1)
 }""")
         end
-        p0 = position(path, path.spec.s_start)
+        p0 = position(path, 0.0)
         push!(start_xs, Float64(p0[1]) + dx)
         push!(start_ys, Float64(p0[2]))
         push!(start_zs, Float64(p0[3]))

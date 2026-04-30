@@ -293,7 +293,7 @@ end
     try
         # ---- Single uncertain bend, queried through the Path interface
         R_nom = 0.05
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         bend!(spec; radius = R_nom ± 0.005, angle = π/2)
         path = build(spec)
 
@@ -306,7 +306,7 @@ end
         @test tangent(path, 0.01) isa Vector{<:Particles}
 
         # ---- Mixed certain/uncertain: straight (Float64) + bend (Particles)
-        spec2 = PathSpecBuilder()
+        spec2 = SubpathBuilder()
         straight!(spec2; length = 0.02)
         bend!(spec2; radius = 0.05 ± 0.005, angle = π/2)
         path2 = build(spec2)
@@ -317,20 +317,20 @@ end
         @test curvature(path2, 0.03) isa Particles
 
         # ---- T-GUARDRAIL: segment creation helpers preserve Particles inputs
-        spec_straight = PathSpecBuilder()
+        spec_straight = SubpathBuilder()
         straight!(spec_straight; length = 0.1 ± 0.005)
         path_straight = build(spec_straight)
         @test arc_length(path_straight) isa Particles
         @test pmean(arc_length(path_straight)) ≈ 0.1 rtol=1e-3
 
-        spec_bend = PathSpecBuilder()
+        spec_bend = SubpathBuilder()
         bend!(spec_bend; radius = R_nom ± 0.005, angle = π/2,
               axis_angle = 0.1 ± 0.01)
         path_bend = build(spec_bend)
         @test curvature(path_bend, 0.01) isa Particles
         @test tangent(path_bend, 0.01) isa Vector{<:Particles}
 
-        spec_helix = PathSpecBuilder()
+        spec_helix = SubpathBuilder()
         helix!(spec_helix; radius = 0.03 ± 0.003, pitch = 0.01 ± 0.001,
                turns = 2.0)
         path_helix = build(spec_helix)
@@ -338,7 +338,7 @@ end
         @test curvature(path_helix, 0.01) isa Particles
         @test geometric_torsion(path_helix, 0.01) isa Particles
 
-        spec_catenary = PathSpecBuilder()
+        spec_catenary = SubpathBuilder()
         catenary!(spec_catenary; a = 0.1 ± 0.005, length = 0.05,
                   axis_angle = 0.2 ± 0.02)
         path_catenary = build(spec_catenary)
@@ -348,7 +348,7 @@ end
         @test_skip true
 
         # ---- T-PHYSICS: straight fiber with uncertain length → zero curvature everywhere
-        spec4 = PathSpecBuilder()
+        spec4 = SubpathBuilder()
         straight!(spec4; length = 0.1 ± 0.005)
         path4 = build(spec4)
         for s in (0.01, 0.05, 0.09)
@@ -377,7 +377,7 @@ end
         T_nom = 297.15
         T_ref = T_nom ± 2.0
 
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         bend!(spec; radius = 0.05, angle = π / 2, axis_angle = 0.1)
         # TODO: twist refactor — twist!(spec; s_start = 0.0, length = 0.05 * (π / 2), rate = 10.0)
         path = build(spec)
@@ -416,7 +416,7 @@ end
 @testset "MCM :: build() succeeds for MCM segment + Twist meta" begin
     MonteCarloMeasurements.unsafe_comparisons(true)
     try
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         bend!(spec; radius = 0.05 ± 0.005, angle = π/2,
               meta = [Twist(; rate = 1.0)])
         path = build(spec)   # was a hard crash before Tier 1.1
@@ -434,7 +434,7 @@ end
 @testset "MCM :: breakpoints are Float64 even for MCM paths" begin
     MonteCarloMeasurements.unsafe_comparisons(true)
     try
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         bend!(spec; radius = 0.05 ± 0.005, angle = π/2)
         bend!(spec; radius = 0.04, angle = π/4,
               meta = [Twist(; rate = 2.0)])
@@ -462,7 +462,7 @@ end
         λ = 1550e-9
         T_ref = 297.15 ± 2.0   # uncertain reference temperature
 
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         bend!(spec; radius = 0.05 ± 0.005, angle = π/2,
               meta = [Twist(; rate = 1.0)])
         path = build(spec)   # gated by Tier 1.1
@@ -487,7 +487,7 @@ end
         # HelixSegment with uncertain pitch → arc_length is Particles, τ_geom
         # is Particles. total_frame_rotation should return Particles with
         # non-degenerate spread.
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         helix!(spec; radius = 0.03, pitch = 0.01 ± 0.001, turns = 2.0)
         path = build(spec)
         ψ = total_frame_rotation(path)
@@ -501,7 +501,7 @@ end
 @testset "MCM :: total_material_twist returns Float64 with default endpoints (Tier 2.1)" begin
     MonteCarloMeasurements.unsafe_comparisons(true)
     try
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         bend!(spec; radius = 0.05 ± 0.005, angle = π/2,
               meta = [Twist(; rate = 1.0)])
         path = build(spec)   # path.s_end is Particles
@@ -518,7 +518,7 @@ end
 @testset "MCM :: visualization-layer queries don't crash on MCM paths (Tier 2.3)" begin
     MonteCarloMeasurements.unsafe_comparisons(true)
     try
-        spec = PathSpecBuilder()
+        spec = SubpathBuilder()
         bend!(spec; radius = 0.05 ± 0.005, angle = π/2)
         path = build(spec)
         @test_nowarn bounding_box(path; n = 32)

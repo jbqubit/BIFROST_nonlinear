@@ -392,7 +392,7 @@ end
 
 """
     _build_quintic_connector(p1_local, t_hat_out, K0_local, K1_local;
-                             min_bend_radius, target_arc_length,
+                             min_bend_radius, target_path_length,
                              n_table, meta) → QuinticConnector
 
 Construct a `QuinticConnector` from `JumpBy` / `JumpTo` resolve data.
@@ -404,7 +404,7 @@ are silently re-projected onto the plane perpendicular to their tangent.
 
 If `min_bend_radius` is set, performs an exponential-bracket / bisection
 search over the handle scale λ until the sampled peak curvature falls below
-`1/min_bend_radius`. If `target_arc_length` is set, instead searches λ until
+`1/min_bend_radius`. If `target_path_length` is set, instead searches λ until
 the connector's arc length matches the target — used by `modify(fiber)` to
 honor `:T_K` thermal expansion on a `JumpTo` whose endpoint is a lab-frame
 invariant. The two constraints can be combined: when both are set, λ is
@@ -418,7 +418,7 @@ function _build_quintic_connector(p1_local::AbstractVector,
                                   K0_local::AbstractVector,
                                   K1_local::AbstractVector;
                                   min_bend_radius::Union{Nothing, Real} = nothing,
-                                  target_arc_length::Union{Nothing, Real} = nothing,
+                                  target_path_length::Union{Nothing, Real} = nothing,
                                   n_table::Int = 256,
                                   n_check::Int = 128,
                                   growth::Float64 = 1.5,
@@ -458,10 +458,10 @@ function _build_quintic_connector(p1_local::AbstractVector,
     # in arc length over the typical range (chord-aligned baseline upward). If
     # both target and min_bend_radius are set, pick λ by arc length and verify
     # peak curvature post-hoc.
-    if !isnothing(target_arc_length)
-        target = Float64(_qc_nominalize(target_arc_length))
+    if !isnothing(target_path_length)
+        target = Float64(_qc_nominalize(target_path_length))
         target > 0.0 || throw(ArgumentError(
-            "target_arc_length must be positive; got $(target)"))
+            "target_path_length must be positive; got $(target)"))
         chord_nom = sqrt(Float64(_qc_nominalize(
             p1_local[1]^2 + p1_local[2]^2 + p1_local[3]^2)))
         target < chord_nom * (1 - rel_tol) && throw(ArgumentError(
@@ -533,7 +533,7 @@ function _build_quintic_connector(p1_local::AbstractVector,
         if isfinite(κ_limit)
             κ_final = _qc_peak_curvature(coeffs_final; n_check = n_check)
             κ_final > κ_limit + curvature_tol && throw(ArgumentError(
-                "target_arc_length=$(target) m and min_bend_radius=$(R_min) m " *
+                "target_path_length=$(target) m and min_bend_radius=$(R_min) m " *
                 "are jointly infeasible: peak curvature " *
                 "$(round(κ_final;digits=3)) m⁻¹ exceeds 1/R_min=" *
                 "$(round(κ_limit;digits=3)) m⁻¹"))

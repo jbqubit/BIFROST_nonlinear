@@ -13,11 +13,11 @@ Plotly CDN. It does not load or reference other `julia-port/` sources.
 
     include("path-geometry-plot.jl")
 
-    spec = PathGeometry.PathSpecBuilder()
+    spec = PathGeometry.SubpathBuilder()
     PathGeometry.straight!(spec; length = 0.2)
     PathGeometry.bend!(spec; radius = 0.4, angle = π / 2)
     path = PathGeometry.build(spec)
-    write_path_geometry_plot3d(path, path.spec.s_start, path.s_end; title = "Demo", fidelity = 1.0, output = "path.html")
+    write_path_geometry_plot3d(path, 0.0, path.s_end; title = "Demo", fidelity = 1.0, output = "path.html")
 """
 
 using LinearAlgebra
@@ -32,7 +32,7 @@ file is `include`d alongside unrelated code.
 module PathGeometry
 using LinearAlgebra
 include(joinpath(@__DIR__, "path-geometry.jl"))
-include(joinpath(@__DIR__, "fiber-path-meta.jl"))
+include(joinpath(@__DIR__, "path-geometry-meta.jl"))
 end
 
 # ---------------------------------------------------------------------------
@@ -134,7 +134,7 @@ Keyword `twist_n_quad` is passed to `total_material_twist` when building Φ at e
 (default 128).
 """
 function write_path_geometry_plot3d(
-    path::PathGeometry.PathSpecCached,
+    path::PathGeometry.SubpathCached,
     s1::Real,
     s2::Real;
     fidelity::Float64 = 3.0,

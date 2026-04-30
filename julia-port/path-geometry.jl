@@ -6,31 +6,57 @@ Three-dimensional path geometry for smooth space curves.
 
 # Three layers
 
-- `PathSpecBuilder` (mutable) — authoring target for the bang-DSL below.
-- `PathSpec` (immutable) — frozen snapshot: `segments` + `s_start`.
-- `PathSpecCached` (immutable) — derived layout: `spec` + `placed_segments` + `s_end`.
+- `SubpathBuilder` (mutable) — authoring target for the bang-DSL below.
+- `Subpath` (immutable) — frozen snapshot: `segments` + origin state + optional terminal connector.
+- `SubpathCached` (immutable) — derived layout: `subpath` + `placed_segments` + `s_end`.
 
-`build(builder_or_spec) → PathSpecCached` runs the placement loop. Queries
-(`position`, `tangent`, etc.) take a `PathSpecCached`.
+`build(builder_or_subpath) → SubpathCached` runs the placement loop. Queries
+(`position`, `tangent`, etc.) take a `SubpathCached`.
+
+A `PathCached` holds multiple `SubpathCached` values concatenated end-to-end.
 
 # Assembly
 
-Two approaches are supported and can be freely mixed on a `PathSpecBuilder`:
+Build a subpath by calling functions on a `SubpathBuilder` in lifecycle order:
 
-(1) Sliding-frame approach: each segment is specified relative to the frame left by
-    the previous segment. The tangent direction at the start of each new segment is
-    exactly the tangent at the end of the previous one, so continuity is structural.
+    spec = SubpathBuilder()
+    origin!(spec; point=(0,0,0), outgoing_tangent=(0,0,1))   # optional; defaults shown
+    straight!(spec; length=1.0)
+    bend!(spec; radius=0.05, angle=π/2, axis_angle=0.0)
+    helix!(spec; radius=0.03, pitch=0.01, turns=2.0)
+    catenary!(spec; a=0.1, length=0.05)
+    jumpby!(spec; delta=(0.0, 0.0, 0.5))                     # interior jump (not terminal)
+    jumpto!(spec; destination=(1.0, 0.0, 0.5),               # seals terminal connector
+            tangent=(0.0, 1.0, 0.0))
+    path = build(spec)                                        # → SubpathCached
 
-        spec = PathSpecBuilder()
-        straight!(spec; length=1.0)
-        bend!(spec; radius=0.05, angle=π/2)
+Call order rules:
 
-(2) Endpoint approach: specify the displacement (jumpby!) or absolute destination
-    (jumpto!) and an optional outgoing tangent. The connecting segment is an Euler
-    spiral (clothoid). The incoming tangent is always the current frame tangent.
+- `origin!` must come before any segments; omitting it defaults the start to
+  the origin pointing along +z.
+- `straight!`, `bend!`, `helix!`, `catenary!`, and `jumpby!` add interior
+  segments in sliding-frame order: each segment starts where the previous
+  one ended.
+- `jumpto!` seals the builder with a G2-continuous quintic connector to an
+  absolute lab-frame destination. No further segments may be added afterward.
+- `build(spec)` compiles the builder to an immutable `SubpathCached`.
 
-        jumpby!(spec; delta=(0.0, 0.0, 0.5))
-        jumpto!(spec; destination=(1.0, 0.0, 0.5), tangent=(0.0, 1.0, 0.0))
+To combine multiple subpaths into a single `PathCached` with a shared global
+arc-length coordinate:
+
+    sp1 = SubpathBuilder()
+    straight!(sp1; length=1.0)
+    jumpto!(sp1; destination=(0.0, 0.0, 2.0))
+
+    sp2 = SubpathBuilder()
+    origin!(sp2; point=(0.0, 0.0, 2.0), outgoing_tangent=(0.0, 0.0, 1.0))
+    bend!(sp2; radius=0.05, angle=π/2)
+
+    path = build([freeze(sp1), freeze(sp2)])   # → PathCached
+
+`freeze(builder) → Subpath` snapshots the builder without compiling geometry;
+`build(subpaths::Vector{Subpath}) → PathCached` compiles all subpaths and
+assembles global arc-length offsets.
 
 # Material twist
 
@@ -39,7 +65,7 @@ A `Twist` placed in a segment's `meta` vector starts a twist run at that
 segment's start and continues until the next `Twist`-bearing segment, or
 until the path ends.
 
-    spec = PathSpecBuilder()
+    spec = SubpathBuilder()
     straight!(spec; length = 1.0,
               meta = [Twist(; rate = 2π, phi_0 = 0.0)])           # constant rate
     straight!(spec; length = 1.0,
@@ -51,11 +77,6 @@ run-local arc length (`s_local = 0` at the start of the run). With
 `is_continuous = true` the resolver computes `phi_0` from the prior run's
 accumulated phase.
 
-# Shrinkage
-
-`path-geometry.jl` is intentionally free of shrinkage. A `Path` represents pure,
-temperature-independent geometry. Thermal contraction and related length-scaling
-are applied by `fiber-path-shrinkage.jl` as a `shrink(path, α) → Path` transform.
 
 # Interface
 
@@ -104,21 +125,27 @@ abstract type AbstractPathSegment end
 #   binormal_local(seg, s)            → Vector{T} unit, length 3
 #   end_position_local(seg)           → Vector{T} length 3
 #   end_frame_local(seg)              → (T, N, B) each Vector{T} length 3
-# JumpBy/JumpTo resolve at build() time into a parametric QuinticConnector{T}
+# JumpBy resolves at build() time into a parametric QuinticConnector{T}
 # that supports MCM Particles via nominalized-scalar branching.
+# jumpto! on a SubpathBuilder creates a terminal connector resolved in build().
 
 # -----------------------------------------------------------------------
 # AbstractMeta — per-segment annotations
 # -----------------------------------------------------------------------
 # Every segment carries a `meta::Vector{AbstractMeta}` bag. path-geometry.jl
 # is deliberately ignorant of what's inside; downstream layers define their
-# own `AbstractMeta` subtypes (see fiber-path-meta.jl) and decide how to act
+# own `AbstractMeta` subtypes (see path-geometry-meta.jl) and decide how to act
 # on them.
 
 abstract type AbstractMeta end
 
 segment_meta(seg::AbstractPathSegment) =
     :meta ∈ fieldnames(typeof(seg)) ? seg.meta : AbstractMeta[]
+
+# Hook for checking MCM perturbation meta.  Returns false by default; path-geometry-meta.jl
+# adds true-returning methods for MCMadd and MCMmul so the check works without coupling
+# path-geometry.jl to those concrete types.
+_has_mcm_perturbation(::AbstractMeta) = false
 
 # -----------------------------------------------------------------------
 # Twist  (per-segment material-twist annotation)
@@ -520,51 +547,17 @@ function JumpBy(delta; tangent_out = nothing, curvature_out = nothing,
     JumpBy(d, t, k, r, Vector{AbstractMeta}(meta))
 end
 
-"""
-    JumpTo(destination, tangent_out, curvature_out, min_bend_radius)
-
-Connects the current position to the fixed lab-frame `destination` using a
-quintic G2 Hermite connector. `tangent_out` and `curvature_out` are specified
-in the **global frame** and are rotated into the new segment's local frame at
-build time. `curvature_out` defaults to zero.
-
-`min_bend_radius` (metres, nothing = unconstrained) sets a lower bound on the
-radius of curvature of the connector.
-"""
-struct JumpTo <: AbstractPathSegment
-    destination::NTuple{3, Float64}
-    tangent_out::Union{Nothing, NTuple{3, Float64}}
-    curvature_out::Union{Nothing, NTuple{3, Float64}}
-    min_bend_radius::Union{Nothing, Float64}
-    meta::Vector{AbstractMeta}
-end
-
-function JumpTo(destination; tangent_out = nothing, curvature_out = nothing,
-                min_bend_radius = nothing, meta = AbstractMeta[])
-    d = (Float64(destination[1]), Float64(destination[2]), Float64(destination[3]))
-    t = isnothing(tangent_out) ? nothing :
-        (Float64(tangent_out[1]), Float64(tangent_out[2]), Float64(tangent_out[3]))
-    k = isnothing(curvature_out) ? nothing :
-        (Float64(curvature_out[1]), Float64(curvature_out[2]), Float64(curvature_out[3]))
-    r = isnothing(min_bend_radius) ? nothing : Float64(min_bend_radius)
-    JumpTo(d, t, k, r, Vector{AbstractMeta}(meta))
-end
-
-# JumpBy and JumpTo are context-dependent: geometry is resolved at build() time
-# into a QuinticConnector.  Calling these methods on the raw structs is unsupported.
-for T in (JumpBy, JumpTo)
-    @eval begin
-        arc_length(::$T)             = error($(string(T)) * ": call build() to resolve jump geometry")
-        curvature(::$T, ::Real)      = error($(string(T)) * ": call build() to resolve jump geometry")
-        geometric_torsion(::$T, ::Real) = 0.0
-        position_local(::$T, ::Real) = error($(string(T)) * ": call build() to resolve jump geometry")
-        tangent_local(::$T, ::Real)  = error($(string(T)) * ": call build() to resolve jump geometry")
-        normal_local(::$T, ::Real)   = error($(string(T)) * ": call build() to resolve jump geometry")
-        binormal_local(::$T, ::Real) = error($(string(T)) * ": call build() to resolve jump geometry")
-        end_position_local(::$T)     = error($(string(T)) * ": call build() to resolve jump geometry")
-        end_frame_local(::$T)        = error($(string(T)) * ": call build() to resolve jump geometry")
-    end
-end
+# JumpBy is context-dependent: geometry is resolved at build() time
+# into a QuinticConnector.  Calling these methods on the raw struct is unsupported.
+arc_length(::JumpBy)             = error("JumpBy: call build() to resolve jump geometry")
+curvature(::JumpBy, ::Real)      = error("JumpBy: call build() to resolve jump geometry")
+geometric_torsion(::JumpBy, ::Real) = 0.0
+position_local(::JumpBy, ::Real) = error("JumpBy: call build() to resolve jump geometry")
+tangent_local(::JumpBy, ::Real)  = error("JumpBy: call build() to resolve jump geometry")
+normal_local(::JumpBy, ::Real)   = error("JumpBy: call build() to resolve jump geometry")
+binormal_local(::JumpBy, ::Real) = error("JumpBy: call build() to resolve jump geometry")
+end_position_local(::JumpBy)     = error("JumpBy: call build() to resolve jump geometry")
+end_frame_local(::JumpBy)        = error("JumpBy: call build() to resolve jump geometry")
 
 # -----------------------------------------------------------------------
 # QuinticConnector  (resolved form of JumpBy / JumpTo)
@@ -593,28 +586,6 @@ function _resolve_at_placement(seg::JumpBy, pos::AbstractVector, frame_mat::Abst
                                     meta = seg.meta)
 end
 
-function _resolve_at_placement(seg::JumpTo, pos::AbstractVector, frame_mat::AbstractMatrix,
-                                K_in_global::AbstractVector;
-                                target_arc_length::Union{Nothing,Real} = nothing)
-    p1_local  = frame_mat' * (collect(seg.destination) .- pos)
-    chord     = norm(p1_local)
-    t_hat_out = if isnothing(seg.tangent_out)
-        chord > 1e-15 ? p1_local ./ chord : [0.0, 0.0, 1.0]
-    else
-        normalize(frame_mat' * normalize(collect(seg.tangent_out)))
-    end
-    K0_local = frame_mat' * K_in_global
-    K1_local = if isnothing(seg.curvature_out)
-        zeros(eltype(K0_local), 3)
-    else
-        frame_mat' * collect(seg.curvature_out)
-    end
-    return _build_quintic_connector(p1_local, t_hat_out, K0_local, K1_local;
-                                    min_bend_radius = seg.min_bend_radius,
-                                    target_arc_length = target_arc_length,
-                                    meta = seg.meta)
-end
-
 # Default fallback for non-Jump segments (ignores K_in_global).
 _resolve_at_placement(seg::AbstractPathSegment, ::AbstractVector, ::AbstractMatrix,
                       ::AbstractVector) = seg
@@ -632,114 +603,232 @@ struct PlacedSegment
 end
 
 # -----------------------------------------------------------------------
-# PathSpecBuilder (mutable authoring) → PathSpec (immutable spec)
+# _check_jumpto_meta
+# -----------------------------------------------------------------------
+# Validates that no MCMadd/MCMmul entries appear in the terminal connector
+# Default no-op. Overridden in a later phase by path-geometry-meta.jl to
+# prohibit MCMadd/MCMmul on the terminal connector meta.
+_check_jumpto_meta(::AbstractVector{<:AbstractMeta}) = nothing
+
+# -----------------------------------------------------------------------
+# _initial_frame — Gram-Schmidt from an outgoing tangent
+# -----------------------------------------------------------------------
+function _initial_frame(T::AbstractVector)
+    T_n = _safe_normalize(T)
+    ref = abs(dot(T_n, [1.0, 0.0, 0.0])) < 0.9 ? [1.0, 0.0, 0.0] : [0.0, 1.0, 0.0]
+    N_raw = ref .- dot(ref, T_n) .* T_n
+    N_n = _safe_normalize(N_raw)
+    B_n = cross(T_n, N_n)
+    return T_n, N_n, B_n
+end
+
+# -----------------------------------------------------------------------
+# SubpathBuilder / Subpath / SubpathCached / PathCached
 # -----------------------------------------------------------------------
 
-mutable struct PathSpecBuilder
+mutable struct SubpathBuilder
+    meta::Vector{AbstractMeta}
+    origin_point::Union{Nothing, NTuple{3, Float64}}
+    origin_outgoing_tangent::Union{Nothing, NTuple{3, Float64}}
+    origin_outgoing_curvature::Union{Nothing, NTuple{3, Float64}}
     segments::Vector{AbstractPathSegment}
-    s_start::Real
-    PathSpecBuilder() = new(AbstractPathSegment[], 0.0)
+    jumpto_point::Union{Nothing, NTuple{3, Float64}}
+    jumpto_incoming_tangent::Union{Nothing, NTuple{3, Float64}}
+    jumpto_incoming_curvature::Union{Nothing, NTuple{3, Float64}}
+    jumpto_min_bend_radius::Union{Nothing, Float64}
+    jumpto_conserve_path_length::Bool
+    jumpto_meta::Vector{AbstractMeta}
+
+    SubpathBuilder(; meta::AbstractVector{<:AbstractMeta} = AbstractMeta[]) =
+        new(Vector{AbstractMeta}(meta), nothing, nothing, nothing,
+            AbstractPathSegment[], nothing, nothing, nothing,
+            nothing, false, AbstractMeta[])
 end
 
-struct PathSpec
+struct Subpath
+    meta::Vector{AbstractMeta}
+    origin_point::NTuple{3, Float64}
+    origin_outgoing_tangent::NTuple{3, Float64}
+    origin_outgoing_curvature::NTuple{3, Float64}
     segments::Vector{AbstractPathSegment}
-    s_start::Real
+    jumpto_point::Union{Nothing, NTuple{3, Float64}}
+    jumpto_incoming_tangent::Union{Nothing, NTuple{3, Float64}}
+    jumpto_incoming_curvature::Union{Nothing, NTuple{3, Float64}}
+    jumpto_min_bend_radius::Union{Nothing, Float64}
+    jumpto_conserve_path_length::Bool
+    jumpto_meta::Vector{AbstractMeta}
+
+    function Subpath(b::SubpathBuilder)
+        _check_jumpto_meta(b.jumpto_meta)
+        op = isnothing(b.origin_point) ? (0.0, 0.0, 0.0) : b.origin_point
+        ot = isnothing(b.origin_outgoing_tangent) ? (0.0, 0.0, 1.0) : b.origin_outgoing_tangent
+        ok = isnothing(b.origin_outgoing_curvature) ? (0.0, 0.0, 0.0) : b.origin_outgoing_curvature
+        new(b.meta, op, ot, ok,
+            deepcopy(b.segments),
+            b.jumpto_point, b.jumpto_incoming_tangent, b.jumpto_incoming_curvature,
+            b.jumpto_min_bend_radius, b.jumpto_conserve_path_length, b.jumpto_meta)
+    end
 end
 
-"""
-    freeze(builder::PathSpecBuilder) → PathSpec
+struct SubpathCached
+    subpath::Subpath
+    placed_segments::Vector{PlacedSegment}
+    s_end::Real
+    resolved_twists::Vector{ResolvedTwistRate}
+end
 
-Snapshot a builder into an immutable `PathSpec`. The segment vector is
-deep-copied so subsequent mutation of `builder` does not affect the spec.
-"""
-freeze(b::PathSpecBuilder) = PathSpec(deepcopy(b.segments), b.s_start)
+struct PathCached
+    meta::Vector{AbstractMeta}
+    subpaths::Vector{SubpathCached}
+    s_offsets::Vector{Float64}
+    s_end::Float64
+end
 
-function straight!(spec::PathSpecBuilder; length, meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
+# Convenience: s_start is always 0 for a SubpathCached (local arc-length domain).
+s_start(::SubpathCached) = 0.0
+s_start(::PathCached) = 0.0
+
+"""
+    freeze(builder::SubpathBuilder) → Subpath
+
+Snapshot a builder into an immutable `Subpath`.
+"""
+freeze(b::SubpathBuilder) = Subpath(b)
+
+"""
+    origin!(builder; point=(0,0,0), outgoing_tangent=(0,0,1), outgoing_curvature=(0,0,0))
+
+Seal the start state of `builder`. Must be called before any segments are added.
+Calling it after segments have been added, or calling it twice, throws `ArgumentError`.
+"""
+function origin!(builder::SubpathBuilder;
+                 point = (0.0, 0.0, 0.0),
+                 outgoing_tangent = (0.0, 0.0, 1.0),
+                 outgoing_curvature = (0.0, 0.0, 0.0))
+    !isnothing(builder.origin_point) && throw(ArgumentError(
+        "origin!: already called on this builder"))
+    !isempty(builder.segments) && throw(ArgumentError(
+        "origin!: must be called before any segments are added"))
+    builder.origin_point =
+        (Float64(point[1]), Float64(point[2]), Float64(point[3]))
+    builder.origin_outgoing_tangent =
+        (Float64(outgoing_tangent[1]), Float64(outgoing_tangent[2]),
+         Float64(outgoing_tangent[3]))
+    builder.origin_outgoing_curvature =
+        (Float64(outgoing_curvature[1]), Float64(outgoing_curvature[2]),
+         Float64(outgoing_curvature[3]))
+    return builder
+end
+
+function straight!(spec::SubpathBuilder; length,
+                   meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
+    !isnothing(spec.jumpto_point) && throw(ArgumentError(
+        "straight!: cannot add segments after jumpto! has been called"))
     push!(spec.segments, StraightSegment(length; meta))
     return spec
 end
 
-function bend!(spec::PathSpecBuilder; radius::Real, angle::Real, axis_angle::Real = 0.0,
+function bend!(spec::SubpathBuilder; radius::Real, angle::Real, axis_angle::Real = 0.0,
                meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
+    !isnothing(spec.jumpto_point) && throw(ArgumentError(
+        "bend!: cannot add segments after jumpto! has been called"))
     push!(spec.segments, BendSegment(radius, angle, axis_angle; meta))
     return spec
 end
 
-function helix!(spec::PathSpecBuilder; radius::Real, pitch::Real, turns::Real,
+function helix!(spec::SubpathBuilder; radius::Real, pitch::Real, turns::Real,
                 axis_angle::Real = 0.0, meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
+    !isnothing(spec.jumpto_point) && throw(ArgumentError(
+        "helix!: cannot add segments after jumpto! has been called"))
     push!(spec.segments, HelixSegment(radius, pitch, turns, axis_angle; meta))
     return spec
 end
 
-function catenary!(spec::PathSpecBuilder; a::Real, length::Real, axis_angle::Real = 0.0,
+function catenary!(spec::SubpathBuilder; a::Real, length::Real, axis_angle::Real = 0.0,
                    meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
+    !isnothing(spec.jumpto_point) && throw(ArgumentError(
+        "catenary!: cannot add segments after jumpto! has been called"))
     push!(spec.segments, CatenarySegment(a, length, axis_angle; meta))
     return spec
 end
 
-function jumpby!(spec::PathSpecBuilder; delta, tangent = nothing,
+function jumpby!(spec::SubpathBuilder; delta, tangent = nothing,
                  curvature_out = nothing, min_bend_radius = nothing,
                  meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
+    !isnothing(spec.jumpto_point) && throw(ArgumentError(
+        "jumpby!: cannot add segments after jumpto! has been called"))
     push!(spec.segments, JumpBy(delta; tangent_out = tangent,
                                 curvature_out = curvature_out,
                                 min_bend_radius, meta))
     return spec
 end
 
-function jumpto!(spec::PathSpecBuilder; destination, tangent = nothing,
-                 curvature_out = nothing, min_bend_radius = nothing,
+"""
+    jumpto!(builder; jumpto_point, ...)
+
+Seal the terminal connector of `builder`. Calling it twice throws.
+Adding segments after this call throws.
+
+Accepts `destination` as a backward-compatible alias for `jumpto_point`,
+and `tangent`/`curvature_out` as aliases for `jumpto_incoming_tangent`/
+`jumpto_incoming_curvature`.
+"""
+function jumpto!(builder::SubpathBuilder;
+                 jumpto_point = nothing, destination = nothing,
+                 jumpto_incoming_tangent = nothing, tangent = nothing,
+                 jumpto_incoming_curvature = nothing, curvature_out = nothing,
+                 jumpto_min_bend_radius = nothing, min_bend_radius = nothing,
+                 jumpto_conserve_path_length::Bool = false,
                  meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
-    push!(spec.segments, JumpTo(destination; tangent_out = tangent,
-                                curvature_out = curvature_out,
-                                min_bend_radius, meta))
-    return spec
+    !isnothing(builder.jumpto_point) && throw(ArgumentError(
+        "jumpto!: terminal connector already set (called twice)"))
+    _check_jumpto_meta(meta)
+    point = !isnothing(jumpto_point) ? jumpto_point : destination
+    isnothing(point) && throw(ArgumentError(
+        "jumpto!: jumpto_point (or destination) is required"))
+    incoming_tangent   = !isnothing(jumpto_incoming_tangent) ? jumpto_incoming_tangent : tangent
+    incoming_curvature = !isnothing(jumpto_incoming_curvature) ? jumpto_incoming_curvature :
+                         curvature_out
+    R_min = !isnothing(jumpto_min_bend_radius) ? jumpto_min_bend_radius : min_bend_radius
+    builder.jumpto_point = (Float64(point[1]), Float64(point[2]), Float64(point[3]))
+    if !isnothing(incoming_tangent)
+        t = incoming_tangent
+        builder.jumpto_incoming_tangent = (Float64(t[1]), Float64(t[2]), Float64(t[3]))
+    end
+    if !isnothing(incoming_curvature)
+        k = incoming_curvature
+        builder.jumpto_incoming_curvature = (Float64(k[1]), Float64(k[2]), Float64(k[3]))
+    end
+    builder.jumpto_min_bend_radius = isnothing(R_min) ? nothing : Float64(R_min)
+    builder.jumpto_conserve_path_length = jumpto_conserve_path_length
+    builder.jumpto_meta = Vector{AbstractMeta}(meta)
+    return builder
 end
-
-# -----------------------------------------------------------------------
-# PathSpecCached  (immutable derived layout)
-# -----------------------------------------------------------------------
-
-struct PathSpecCached
-    spec::PathSpec
-    placed_segments::Vector{PlacedSegment}
-    s_end::Real
-    resolved_twists::Vector{ResolvedTwistRate}
-end
-
-# Convenience accessor: callers historically read `path.spec.s_start`. Provided
-# as a function so external code can be retyped without reaching into
-# `path.spec.s_start` everywhere.
-s_start(path::PathSpecCached) = path.spec.s_start
 
 # -----------------------------------------------------------------------
 # build()
 # -----------------------------------------------------------------------
 
 """
-    build(builder_or_spec) → PathSpecCached
+    build(builder_or_subpath) → SubpathCached
 
-Compile a `PathSpecBuilder` or `PathSpec` into an immutable `PathSpecCached`.
+Compile a `SubpathBuilder` or `Subpath` into an immutable `SubpathCached`.
 """
 _safe_normalize(v::AbstractVector) = v ./ sqrt(sum(abs2, v))
 
-build(b::PathSpecBuilder) = build(freeze(b))
+build(b::SubpathBuilder) = build(Subpath(b))
 
-function build(spec::PathSpec)
-    pos     = zeros(3)
-    N_frame = [1.0, 0.0, 0.0]
-    B_frame = [0.0, 1.0, 0.0]
-    T_frame = [0.0, 0.0, 1.0]
+function build(sub::Subpath)
+    pos         = collect(sub.origin_point)
+    T_frame, N_frame, B_frame = _initial_frame(collect(sub.origin_outgoing_tangent))
+    K_in_global = collect(sub.origin_outgoing_curvature)
+    s_eff       = 0.0
+    placed      = PlacedSegment[]
 
-    isempty(spec.segments) && error("build: PathSpec contains no segments")
+    isempty(sub.segments) && isnothing(sub.jumpto_point) &&
+        error("build: Subpath contains no segments and no jumpto! connector")
 
-    s_eff  = Float64(spec.s_start)
-    placed = PlacedSegment[]
-    # Curvature vector at the end of the prior segment, in the global frame.
-    # Threaded into _resolve_at_placement so JumpBy/JumpTo can match endpoint
-    # curvature (G2 join). Zero for the first segment.
-    K_in_global = zeros(3)
-
-    for seg_orig in spec.segments
+    for seg_orig in sub.segments
         frame      = hcat(N_frame, B_frame, T_frame)   # columns: [N | B | T]
         seg_placed = _resolve_at_placement(seg_orig, pos, frame, K_in_global)
         push!(placed, PlacedSegment(seg_placed, s_eff, copy(pos), copy(frame)))
@@ -764,6 +853,26 @@ function build(spec::PathSpec)
         s_eff += L_seg
     end
 
+    # Terminal connector (from jumpto!)
+    if !isnothing(sub.jumpto_point)
+        frame     = hcat(N_frame, B_frame, T_frame)
+        p1_local  = frame' * (collect(sub.jumpto_point) .- pos)
+        chord     = norm(p1_local)
+        t_hat_out = if isnothing(sub.jumpto_incoming_tangent)
+            chord > 1e-15 ? p1_local ./ chord : [0.0, 0.0, 1.0]
+        else
+            normalize(frame' * normalize(collect(sub.jumpto_incoming_tangent)))
+        end
+        K0_local = frame' * K_in_global
+        K1_local = isnothing(sub.jumpto_incoming_curvature) ? zeros(3) :
+                   frame' * collect(sub.jumpto_incoming_curvature)
+        connector = _build_quintic_connector(p1_local, t_hat_out, K0_local, K1_local;
+                        min_bend_radius = sub.jumpto_min_bend_radius,
+                        meta            = sub.jumpto_meta)
+        push!(placed, PlacedSegment(connector, s_eff, copy(pos), copy(frame)))
+        s_eff += arc_length(connector)
+    end
+
     # Twist runs are anchored at the *nominal* arc-length boundaries. Twist
     # data (rate, phi_0) is deterministic by design; nominalizing the anchors
     # via _qc_nominalize lets MCM-typed segments (Particles s_eff) coexist
@@ -773,7 +882,20 @@ function build(spec::PathSpec)
     resolved_twists = has_twist ?
         _resolve_twists(placed, Float64(_qc_nominalize(s_eff))) :
         ResolvedTwistRate[]
-    return PathSpecCached(spec, placed, s_eff, resolved_twists)
+    return SubpathCached(sub, placed, s_eff, resolved_twists)
+end
+
+function build(subpaths::Vector{Subpath};
+               meta::AbstractVector{<:AbstractMeta} = AbstractMeta[])
+    isempty(subpaths) && error("build: empty subpath vector")
+    cached = [build(sp) for sp in subpaths]
+    s_offsets = Vector{Float64}(undef, length(cached))
+    s_acc = 0.0
+    for (i, sc) in enumerate(cached)
+        s_offsets[i] = s_acc
+        s_acc += Float64(_qc_nominalize(sc.s_end))
+    end
+    return PathCached(Vector{AbstractMeta}(meta), cached, s_offsets, s_acc)
 end
 
 # -----------------------------------------------------------------------
@@ -840,7 +962,7 @@ end
 # Segment lookup helpers
 # -----------------------------------------------------------------------
 
-function _find_placed_segment(path::PathSpecCached, s)
+function _find_placed_segment(path::SubpathCached, s)
     n = length(path.placed_segments)
     for i in 1:n
         ps = path.placed_segments[i]
@@ -851,7 +973,7 @@ function _find_placed_segment(path::PathSpecCached, s)
             return ps, s_local
         end
     end
-    error("s = $s out of path bounds [$(path.spec.s_start), $(path.s_end)]")
+    error("s = $s out of path bounds [0.0, $(path.s_end)]")
 end
 
 function _local_to_global(ps::PlacedSegment, v_local::AbstractVector)
@@ -859,22 +981,22 @@ function _local_to_global(ps::PlacedSegment, v_local::AbstractVector)
 end
 
 # -----------------------------------------------------------------------
-# Differential geometry interface on Path
+# Differential geometry interface on SubpathCached
 # -----------------------------------------------------------------------
 
-arc_length(path::PathSpecCached) = path.s_end - path.spec.s_start
+arc_length(path::SubpathCached) = path.s_end
 
-function arc_length(::PathSpecCached, s1, s2)
+function arc_length(::SubpathCached, s1, s2)
     @assert s2 >= s1 "arc_length: require s2 >= s1"
     return s2 - s1
 end
 
-function curvature(path::PathSpecCached, s::Real)
+function curvature(path::SubpathCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return curvature(ps.segment, s_local)
 end
 
-function geometric_torsion(path::PathSpecCached, s::Real)
+function geometric_torsion(path::SubpathCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return geometric_torsion(ps.segment, s_local)
 end
@@ -886,7 +1008,7 @@ Material twist rate (rad/m) at effective arc length `s`, summed over all
 resolved twist runs that contain `s`. Runs are disjoint by construction; the
 sum exists only as a robustness guard.
 """
-function material_twist(path::PathSpecCached, s)
+function material_twist(path::SubpathCached, s)
     τ = zero(s isa AbstractFloat ? s : Float64(s))
     for r in path.resolved_twists
         if r.s_eff_start <= s <= r.s_eff_end
@@ -896,27 +1018,27 @@ function material_twist(path::PathSpecCached, s)
     return τ
 end
 
-function position(path::PathSpecCached, s::Real)
+function position(path::SubpathCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return ps.origin + _local_to_global(ps, position_local(ps.segment, s_local))
 end
 
-function tangent(path::PathSpecCached, s::Real)
+function tangent(path::SubpathCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return _local_to_global(ps, tangent_local(ps.segment, s_local))
 end
 
-function normal(path::PathSpecCached, s::Real)
+function normal(path::SubpathCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return _local_to_global(ps, normal_local(ps.segment, s_local))
 end
 
-function binormal(path::PathSpecCached, s::Real)
+function binormal(path::SubpathCached, s::Real)
     ps, s_local = _find_placed_segment(path, s)
     return _local_to_global(ps, binormal_local(ps.segment, s_local))
 end
 
-function frame(path::PathSpecCached, s::Real)
+function frame(path::SubpathCached, s::Real)
     T = tangent(path, s)
     N = normal(path, s)
     B = binormal(path, s)
@@ -931,23 +1053,23 @@ end
 # Endpoint access
 # -----------------------------------------------------------------------
 
-start_point(path::PathSpecCached)   = position(path, path.spec.s_start)
-end_point(path::PathSpecCached)     = position(path, path.s_end)
-start_tangent(path::PathSpecCached) = tangent(path, path.spec.s_start)
-end_tangent(path::PathSpecCached)   = tangent(path, path.s_end)
+start_point(path::SubpathCached)   = position(path, 0.0)
+end_point(path::SubpathCached)     = position(path, path.s_end)
+start_tangent(path::SubpathCached) = tangent(path, 0.0)
+end_tangent(path::SubpathCached)   = tangent(path, path.s_end)
 
 # -----------------------------------------------------------------------
 # Path measures
 # -----------------------------------------------------------------------
 
-path_length(path::PathSpecCached) = arc_length(path)
+path_length(path::SubpathCached) = arc_length(path)
 
-function cartesian_distance(path::PathSpecCached, s1::Real, s2::Real)
+function cartesian_distance(path::SubpathCached, s1::Real, s2::Real)
     return norm(position(path, s2) - position(path, s1))
 end
 
-function bounding_box(path::PathSpecCached; n::Int = 512)
-    s0 = Float64(_qc_nominalize(path.spec.s_start))
+function bounding_box(path::SubpathCached; n::Int = 512)
+    s0 = 0.0
     s1 = Float64(_qc_nominalize(path.s_end))
     ss = range(s0, s1; length = n)
     pts = [position(path, s) for s in ss]
@@ -956,7 +1078,7 @@ function bounding_box(path::PathSpecCached; n::Int = 512)
     return (; lo, hi)
 end
 
-function total_turning_angle(path::PathSpecCached)
+function total_turning_angle(path::SubpathCached)
     # ∫κ ds  — for analytic segments computed exactly where possible
     total = 0.0
     for ps in path.placed_segments
@@ -978,7 +1100,7 @@ function total_turning_angle(path::PathSpecCached)
     return total
 end
 
-function total_torsion(path::PathSpecCached)
+function total_torsion(path::SubpathCached)
     total = 0.0
     for ps in path.placed_segments
         seg = ps.segment
@@ -1000,15 +1122,14 @@ end
     total_material_twist(path; s_start, s_end, rtol = 1e-8, atol = 0.0) → Float64
 
 Integrated material twist ``∫ τ_{\\mathrm{mat}}(s) \\, ds`` over effective arc length from
-`s_start` to `s_end` (defaults: full path).  Both
-endpoints must lie in `[path.spec.s_start, path.s_end]`.
+`s_start` to `s_end` (defaults: full path). Both endpoints must lie in `[0, path.s_end]`.
 
 Constant twist rates integrate analytically; `Function` rates use adaptive
 Gauss–Kronrod (QuadGK) at the supplied `rtol`/`atol`.
 """
 function total_material_twist(
-    path::PathSpecCached;
-    s_start::Real = path.spec.s_start,
+    path::SubpathCached;
+    s_start::Real = 0.0,
     s_end::Real   = path.s_end,
     rtol::Real    = 1e-8,
     atol::Real    = 0.0,
@@ -1019,7 +1140,7 @@ function total_material_twist(
         throw(ArgumentError(
             "total_material_twist: require s_start ≤ s_end; got s_start=$(s_lo), s_end=$(s_hi)"))
     end
-    ps0 = Float64(_qc_nominalize(path.spec.s_start))
+    ps0 = 0.0
     ps1 = Float64(_qc_nominalize(path.s_end))
     if !(ps0 - 1e-12 <= s_lo <= ps1 + 1e-12) || !(ps0 - 1e-12 <= s_hi <= ps1 + 1e-12)
         throw(ArgumentError(
@@ -1057,8 +1178,8 @@ See `path-geometry.md` for a discussion of how this differs from `total_torsion`
 `total_material_twist` individually.
 """
 function total_frame_rotation(
-    path::PathSpecCached;
-    s_start::Real = path.spec.s_start,
+    path::SubpathCached;
+    s_start::Real = 0.0,
     s_end::Real   = path.s_end,
     rtol::Real    = 1e-8,
     atol::Real    = 0.0,
@@ -1069,7 +1190,7 @@ function total_frame_rotation(
         throw(ArgumentError(
             "total_frame_rotation: require s_start ≤ s_end; got s_start=$(s_lo), s_end=$(s_hi)"))
     end
-    ps0 = Float64(_qc_nominalize(path.spec.s_start))
+    ps0 = 0.0
     ps1 = Float64(_qc_nominalize(path.s_end))
     if !(ps0 - 1e-12 <= s_lo <= ps1 + 1e-12) || !(ps0 - 1e-12 <= s_hi <= ps1 + 1e-12)
         throw(ArgumentError(
@@ -1144,8 +1265,8 @@ centerline.  See: Berry (1984) Proc. R. Soc. A 392, and Ross (1984) for the
 fiber optics context.  This contribution should be added to the output of the
 polarization propagator in path-integral.jl whenever the fiber forms a loop.
 """
-function writhe(path::PathSpecCached; n::Int = 256)
-    s0 = Float64(_qc_nominalize(path.spec.s_start))
+function writhe(path::SubpathCached; n::Int = 256)
+    s0 = 0.0
     s1 = Float64(_qc_nominalize(path.s_end))
     ss = collect(range(s0, s1; length = n))
     rs = [position(path, s) for s in ss]
@@ -1264,7 +1385,7 @@ The point budget is the maximum of the two rules.
 """
 function _segment_point_budget(
     ps::PlacedSegment,
-    path::PathSpecCached,
+    path,
     s_lo::Float64,
     s_hi::Float64,
     fidelity::Float64,
@@ -1315,7 +1436,8 @@ where each budget is `ceil(fidelity · Δφ / (2π) · 32)` (minimum 2), with:
 segments with no twist get 2 points (endpoints only). Junction points between
 segments are always included and shared (no duplicates).
 """
-function sample_path(path::PathSpecCached, s1::Real, s2::Real; fidelity::Float64 = 1.0)
+function sample_path(path::SubpathCached, s1::Real, s2::Real;
+                     fidelity::Float64 = 1.0)
     @assert s2 > s1    "sample_path: require s2 > s1"
     @assert fidelity > 0.0 "sample_path: fidelity must be positive"
 
@@ -1375,8 +1497,8 @@ function normalize_breakpoints(breakpoints::AbstractVector{<:Real})
     return sort(unique(copy(breakpoints)))
 end
 
-function path_segment_breakpoints(path::PathSpecCached)
-    points = Float64[Float64(_qc_nominalize(path.spec.s_start))]
+function path_segment_breakpoints(path::SubpathCached)
+    points = Float64[0.0]
     for ps in path.placed_segments
         push!(points, Float64(_qc_nominalize(ps.s_offset_eff)))
         push!(points, Float64(_qc_nominalize(
@@ -1386,9 +1508,8 @@ function path_segment_breakpoints(path::PathSpecCached)
     return normalize_breakpoints(points)
 end
 
-function path_twist_breakpoints(path::PathSpecCached)
-    points = Float64[Float64(_qc_nominalize(path.spec.s_start)),
-                     Float64(_qc_nominalize(path.s_end))]
+function path_twist_breakpoints(path::SubpathCached)
+    points = Float64[0.0, Float64(_qc_nominalize(path.s_end))]
     for r in path.resolved_twists
         push!(points, r.s_eff_start)
         push!(points, r.s_eff_end)
@@ -1396,15 +1517,125 @@ function path_twist_breakpoints(path::PathSpecCached)
     return normalize_breakpoints(points)
 end
 
-function breakpoints(path::PathSpecCached)
-    return normalize_breakpoints(vcat(path_segment_breakpoints(path), path_twist_breakpoints(path)))
+function breakpoints(path::SubpathCached)
+    return normalize_breakpoints(
+        vcat(path_segment_breakpoints(path), path_twist_breakpoints(path)))
 end
 
-function sample(path::PathSpecCached, s_values)
+function sample(path::SubpathCached, s_values)
     return [frame(path, s) for s in s_values]
 end
 
-function sample_uniform(path::PathSpecCached; n::Int = 256)
-    ss = range(path.spec.s_start, path.s_end; length = n)
+function sample_uniform(path::SubpathCached; n::Int = 256)
+    ss = range(0.0, path.s_end; length = n)
     return sample(path, ss)
 end
+
+# -----------------------------------------------------------------------
+# PathCached — multi-subpath container queries
+# -----------------------------------------------------------------------
+
+function _find_subpath(path::PathCached, s::Real)
+    n = length(path.subpaths)
+    for i in 1:n
+        s_hi = path.s_offsets[i] + Float64(_qc_nominalize(path.subpaths[i].s_end))
+        if s <= s_hi + 1e-12 || i == n
+            s_local = clamp(s - path.s_offsets[i],
+                            zero(s - path.s_offsets[i]),
+                            path.subpaths[i].s_end)
+            return path.subpaths[i], s_local
+        end
+    end
+    error("s = $s out of PathCached bounds [0, $(path.s_end)]")
+end
+
+arc_length(path::PathCached) = path.s_end
+arc_length(::PathCached, s1, s2) = s2 - s1
+
+function curvature(path::PathCached, s::Real)
+    sp, sl = _find_subpath(path, s); return curvature(sp, sl)
+end
+function geometric_torsion(path::PathCached, s::Real)
+    sp, sl = _find_subpath(path, s); return geometric_torsion(sp, sl)
+end
+function material_twist(path::PathCached, s)
+    sp, sl = _find_subpath(path, s); return material_twist(sp, sl)
+end
+function position(path::PathCached, s::Real)
+    sp, sl = _find_subpath(path, s); return position(sp, sl)
+end
+function tangent(path::PathCached, s::Real)
+    sp, sl = _find_subpath(path, s); return tangent(sp, sl)
+end
+function normal(path::PathCached, s::Real)
+    sp, sl = _find_subpath(path, s); return normal(sp, sl)
+end
+function binormal(path::PathCached, s::Real)
+    sp, sl = _find_subpath(path, s); return binormal(sp, sl)
+end
+function frame(path::PathCached, s::Real)
+    sp, sl = _find_subpath(path, s); return frame(sp, sl)
+end
+
+start_point(path::PathCached)   = position(path, 0.0)
+end_point(path::PathCached)     = position(path, path.s_end)
+start_tangent(path::PathCached) = tangent(path, 0.0)
+end_tangent(path::PathCached)   = tangent(path, path.s_end)
+
+path_length(path::PathCached) = path.s_end
+cartesian_distance(path::PathCached, s1::Real, s2::Real) =
+    norm(position(path, s2) - position(path, s1))
+
+function bounding_box(path::PathCached; n::Int = 512)
+    ss = range(0.0, path.s_end; length = n)
+    pts = [position(path, s) for s in ss]
+    lo = minimum(reduce(hcat, pts); dims = 2) |> vec
+    hi = maximum(reduce(hcat, pts); dims = 2) |> vec
+    return (; lo, hi)
+end
+
+function path_segment_breakpoints(path::PathCached)
+    points = Float64[0.0]
+    for (i, sc) in enumerate(path.subpaths)
+        off = path.s_offsets[i]
+        for bp in path_segment_breakpoints(sc)
+            push!(points, off + bp)
+        end
+    end
+    push!(points, path.s_end)
+    return normalize_breakpoints(points)
+end
+
+function path_twist_breakpoints(path::PathCached)
+    points = Float64[0.0, path.s_end]
+    for (i, sc) in enumerate(path.subpaths)
+        off = path.s_offsets[i]
+        for bp in path_twist_breakpoints(sc)
+            push!(points, off + bp)
+        end
+    end
+    return normalize_breakpoints(points)
+end
+
+function breakpoints(path::PathCached)
+    return normalize_breakpoints(
+        vcat(path_segment_breakpoints(path), path_twist_breakpoints(path)))
+end
+
+function sample(path::PathCached, s_values)
+    return [frame(path, s) for s in s_values]
+end
+
+function sample_uniform(path::PathCached; n::Int = 256)
+    ss = range(0.0, path.s_end; length = n)
+    return sample(path, ss)
+end
+
+# -----------------------------------------------------------------------
+# Backward-compatibility aliases (Phase 2 → Phase 4 migration shim)
+# -----------------------------------------------------------------------
+# These aliases preserve the pre-Phase-2 public names so that existing
+# call sites (tests, demos, fiber-path.jl) continue to work without
+# change during the transition to SubpathBuilder / Subpath / SubpathCached.
+const PathSpecBuilder = SubpathBuilder
+const PathSpecCached  = SubpathCached
