@@ -1,20 +1,13 @@
-# AGENT.md — Guidance for Automated Agents
-
-## Orientation
-
-Start here, then read ARCHITECTURE.md and README.md.
+# AGENTS.md — Guidance for Automated Agents
 
 ## Running Tests
+All test files live under `julia-port/test/`. 
 
-From the shell:
+The test orchestrator is `julia-port/test/runtests.jl`. 
 
-```bash
-julia --project=. julia-port/test/runtests.jl
-```
-
-The test orchestrator is `julia-port/test/runtests.jl`. All test files live under
-`julia-port/test/`. The test for the path-integral solver (`test_path_integral.jl`) is a
-known work in progress.
+    ```bash
+    julia --project=. julia-port/test/runtests.jl
+    ```
 
 ## Test Taxonomy
 
@@ -84,14 +77,28 @@ thresholds.
 
 These are tests that generate a plot or other visual output for debugging by humans.
 They are currently implemented in demo*.jl. 
-- Code duplication is tolerated here if it is in the interest of readability.
-For example, if the intent of a demonstration is exercising an api or testing edge cases,
-don't add layers of abstraction that obscure the atomic steps. 
+- Demos are not reusable library code; resist extracting shared helpers unless
+  two demos are truly identical in structure and the duplication is large.   
+  - **Inline `Nickname` meta directly on every segment call** rather than
+    deriving names at render time from type information.  The name lives with the
+    segment definition, not in a helper function.
+
+    ```julia
+    # good
+    PG.straight!(spec; length = 0.1, meta = [PG.Nickname("Straight")])
+    PG.bend!(spec;   radius = 0.05, angle = π/2, meta = [PG.Nickname("Bend")])
+
+    # bad — abstracts what should be readable at a glance
+    function _segment_type_label(seg) ... end
+    ```
+  - For segments whose role is obvious from context (lead-in, sag, etc.) use a
+  descriptive nickname instead of just the type name:
+  `PG.Nickname("lead-in")`, `PG.Nickname("90° bend")`.
 - Abstraction related to visual presentation is fine and prefered. 
 - One function, one output file. Each demo function produces exactly one HTML file  and returns its path. No aggregator functions that internally loop over scenes.
 - Names derived from outputs. Function names are demo_ + the HTML filename stem  (hyphens → underscores), so the mapping between function and artifact is unambiguous and mechanical.                                                                 
 - File order mirrors index order.                               
-- Descriptions live next to implementations.              
+- Descriptions live next to implementations.     
 
 ## Key Invariants
 

@@ -8,8 +8,7 @@
   areas.
 - Use `/plan` mode for non-trivial tasks before executing.
 
-## Project Guidance
-
-See `AGENT.md` for project-specific guidance including test taxonomy, key invariants, and
-what requires user authorization. `AGENT.md` is the authoritative shared spec for all
-agents on this project.
+## Dependencies
+<!-- The @FILE.md forces claude to read these files into context. -->
+@ARCHITECTURE.md
+@AGENTS.md

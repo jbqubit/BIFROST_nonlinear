@@ -1,9 +1,4 @@
-# BIFROST Architecture
-
-This document describes the high-level architecture of the repository, with emphasis on
-the Julia port used for modernized polarization-transfer and DGD simulation.
-
-# structure
+# Project structure
 
 This is the project file structure. This is a high level schematic. Do not update it to
 reflect the location of all files.
@@ -37,7 +32,7 @@ reflect the location of all files.
 ```
 
 - [2] Notes for tooling workflows (for agents).
-- [3] Primary project overview and scientific context (for humans).
+- [3] Primary project overview and scientific context (for humans). 
 - [4L] Legacy Python implementation for birefringence simulation.
 - [5L] Python regression and behavior checks.
 - [6L] Interactive notebook example for exploration and demos.
@@ -55,23 +50,12 @@ reflect the location of all files.
 - [18] Output of all demo*.jl methods goes here.
 
 Certain files must have no cross-dependencies.
-
 - path-geometry.jl
 - path-integral.jl
 - material-properties.jl
 
-## Getting Started
-
-If you are a new agent working with this repository read the following.
-
-- AGENT.md
-- README.md is to be treated as user onboarding and system-level design.
-
-Also
-
-- Do not read files marked [*L] unless motivated by a workflow as these are legacy files
-  for an old python version.
-- The files marked [xL] are authoritative as regards physics and must never be modified.
+Do not read files marked [*L] unless motivated by a specific workflow as these are legacy files
+for an old python version. These files authoritative as regards physics and must never be modified.
 
 ## Architectural Intent
 
