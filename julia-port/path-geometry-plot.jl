@@ -97,6 +97,7 @@ function _js_string_array(xs::AbstractVector{<:AbstractString})
     return "[" * join(["\"" * x * "\"" for x in escaped], ", ") * "]"
 end
 
+
 """
     write_path_geometry_plot3d(path::PathGeometry.Path, s1, s2; fidelity, output, title, plane_extent_frac, axis_extent_frac, segment_label_nudge_frac, twist_n_quad)
 

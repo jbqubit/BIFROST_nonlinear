@@ -2,7 +2,7 @@
 # demo2.jl — JumpBy / JumpTo visual experiments
 # =====================================================================
 #
-# Companion file to demo.jl, dedicated to illustrating `JumpBy` and
+# Companion file to demo1.jl, dedicated to illustrating `JumpBy` and
 # `JumpTo`. Two flavours:
 #
 #   * 2D scenes (inline SVG, no external library):
@@ -15,9 +15,9 @@
 #     surrounding fixed segments drawn in green.
 #
 # `demo2_all()` runs every demo in `DEMO2_INDEX` and writes
-# `output/index2.html` with the groups under separate headings.
+# `output/demo2.html` with the groups under separate headings.
 #
-# This file expects to be `include`d after demo.jl is in scope (it
+# This file expects to be `include`d after demo1.jl is in scope (it
 # reuses `_sample_segment_xyz` and the path-builder API).
 #
 # Each demo function builds its path inline using PathSpecBuilder — no
@@ -25,7 +25,7 @@
 # per AGENTS.md §5 (Visual Tests): clarity over abstraction.
 
 if !isdefined(Main, :_sample_segment_xyz)
-    include(joinpath(@__DIR__, "demo.jl"))
+    include(joinpath(@__DIR__, "demo1.jl"))
 end
 
 # =====================================================================
@@ -637,26 +637,45 @@ function demo_modify_jumpto_anchor_thermal_2d(;
                  "endpoints stay pinned (TD001 length-constrained " *
                  "resolve)."
 
+    PG = PathGeometry()
+    
+    # initial curve with no meta ΔT
     spec = PathSpecBuilder()
-    straight!(spec; length = 0.3)
-    helix!(spec; radius = 0.10, pitch = 0.5, turns = 3.0, axis_angle = 0.0)
-    straight!(spec; length = 0.3)
-    jumpto!(spec; destination = (1.5, 0.0, 2.4),
-            tangent = (0.0, 0.0, 1.0),
-            min_bend_radius = 0.30)
-    straight!(spec; length = 0.5)
+    straight!(spec; length = 1)
+    bend!(spec; radius = 0.5, angle = π/2, axis_angle = 0.0)
+    bend!(spec; radius = 0.5, angle = π/2, axis_angle = π)
+    straight!(spec; length = 1)
     baseline = build(spec)
+    baseline_length = PG.path_length(baseline)
+    baseline_end = PG.end_point(baseline)
 
     α_lin   = cte(_DEMO2_MODIFY_XS.cladding_material, _DEMO2_T_REF)
     ΔT_5pct = 0.05 / α_lin
+    mdt = [MCMadd(:T_K, ΔT_5pct)]
+
+    # warm curve with ΔT
     spec = PathSpecBuilder()
-    straight!(spec; length = 0.3)
-    helix!(spec; radius = 0.10, pitch = 0.5, turns = 3.0, axis_angle = 0.0,
-           meta = [MCMmul(:radius, 1.25), MCMadd(:T_K, ΔT_5pct)])
-    straight!(spec; length = 0.3)
-    jumpto!(spec; destination = (1.5, 0.0, 2.4),
-            tangent = (0.0, 0.0, 1.0),
-            min_bend_radius = 0.30)
+    straight!(spec; length = 1, meta = mdt)
+    bend!(spec; radius = 0.5, angle = π/2, axis_angle = 0.0, meta = mdt)
+    bend!(spec; radius = 0.5, angle = π/2, axis_angle = π, meta = mdt)
+    straight!(spec; length = 1, meta = mdt)
+    warm = build(spec)
+    warm_length = PG.path_length(warm)
+    warm_end = PG.end_point(warm)
+
+    # warm curve with ΔT with connstrained JumpTo
+    spec = PathSpecBuilder()
+    straight!(spec; length = 1, meta = mdt)
+    bend!(spec; radius = 0.5, angle = π/2, axis_angle = 0.0, meta = mdt)
+    bend!(spec; radius = 0.5, angle = π/2, axis_angle = π, meta = mdt)
+    jumpto!(spec; destination = warm_end, tangent = (0.0, 0.0, 1.0), min_bend_radius = 0.30, meta = mdt)   
+    warm = build(spec)
+    warm_length = PG.path_length(warm)
+    warm_end = PG.end_point(warm)
+
+
+    
+
     straight!(spec; length = 0.5)
     modified = modify(Fiber(build(spec);
         cross_section = _DEMO2_MODIFY_XS, T_ref_K = _DEMO2_T_REF))
@@ -1205,7 +1224,7 @@ function demo_jumpto_routing(;
 end
 
 # ---------------------------------------------------------------------
-# Index page (index2.html)
+# Index page (demo2.html)
 # ---------------------------------------------------------------------
 
 const DEMO2_INDEX = [
@@ -1254,14 +1273,15 @@ const DEMO2_INDEX = [
 """
     demo2_all(; index_output)
 
-Run every demo in `DEMO2_INDEX` and write `index2.html` linking each
+Run every demo in `DEMO2_INDEX` and write `demo2.html` linking each
 output file with a short description.
 """
-function demo2_all(; index_output::AbstractString = joinpath(@__DIR__, "..", "output", "index2.html"))
+function demo2_all(; index_output::AbstractString = joinpath(@__DIR__, "..", "output", "demo2.html"))
     # Each entry: (group, title, path, desc).
     entries = Tuple{String, String, String, String}[]
 
     for d in DEMO2_INDEX
+        println("[ demo2 ] $(d.fn)")
         result = d.fn(; d.kwargs...)
         # Prefer `desc` provided inline by the demo function (kept next
         # to the implementation it describes); otherwise fall back to
@@ -1287,16 +1307,24 @@ function demo2_all(; index_output::AbstractString = joinpath(@__DIR__, "..", "ou
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BIFROST JumpBy / JumpTo demos</title>
   <style>
-    body { font-family: sans-serif; max-width: 800px; margin: 2em auto; color: #222; }
-    h1   { font-size: 1.5em; border-bottom: 1px solid #ccc; padding-bottom: 0.3em; }
-    h2   { font-size: 1.15em; margin-top: 1.8em; color: #1a6; }
+    body { font-family: sans-serif; max-width: 800px; margin: 2em auto; background: #111; color: #ddd; }
+    h1   { font-size: 1.5em; border-bottom: 1px solid #444; padding-bottom: 0.3em; }
+    h2   { font-size: 1.15em; margin-top: 1.8em; color: #4db87a; }
     ul   { padding-left: 1.2em; }
     li   { margin: 1em 0; }
-    a    { font-weight: bold; color: #1a6; }
-    p.desc { margin: 0.3em 0 0 0; color: #555; font-size: 0.95em; }
+    a    { font-weight: bold; color: #4db87a; }
+    p.desc { margin: 0.3em 0 0 0; color: #999; font-size: 0.95em; }
+    nav.index-nav { font-size: 0.85em; margin-bottom: 1em; color: #666; }
+    nav.index-nav a { font-weight: normal; color: #4db87a; margin-right: 0.8em; }
   </style>
 </head>
 <body>
+  <nav class="index-nav">
+    <a href="demo1.html">demo1</a>
+    <a href="demo2.html">demo2</a>
+    <a href="demo3mcm.html">demo3mcm</a>
+    <a href="demo3benchmark.html">demo3benchmark</a>
+  </nav>
   <h1>BIFROST JumpBy / JumpTo demos</h1>""")
 
         seen_groups = String[]
