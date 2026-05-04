@@ -1,12 +1,11 @@
-# Project structure
+# Project Structure
 
-This is the project file structure. This is a high level schematic. Do not update it to
-reflect the location of all files.
+This is a high-level schematic. Do not update it to reflect every file.
 
 ```text
 .
 ├── .cursor                          [1]
-├── AGENT.md                         [2]
+├── AGENTS.md                        [2]
 ├── ARCHITECTURE.md
 ├── README.md                        [3]
 ├── TODO.md                          [17]
@@ -14,146 +13,179 @@ reflect the location of all files.
 ├── test_fibers.py                   [5L]
 ├── Example-Fibers.ipynb             [6L]
 ├── brillouin.py, demo_wdm_with_raman.py, raman*.py [16L]
-├── Papers                           [7]
+├── Papers                           [7L]
 ├── julia-port                       [8]
-│   ├── README.md                    [16]
+│   ├── README.md                    [18]
 │   ├── Project.toml
 │   ├── Manifest.toml
 │   ├── material-properties.jl       [9]
-│   ├── fiber-cross-section.jl       [10]
-│   ├── fiber-path.jl                [11]
-│   ├── path-integral.jl             [12]
-|   ├── path-geometry.jl
-│   ├── fiber-path-plot.jl           [13]
-│   ├── demo*.jl                      [14]
-│   └── test                         [15]
-│   output                           [18] 
+│   ├── path-geometry.jl             [10]
+│   ├── path-integral.jl             [11]
+│   ├── fiber-cross-section.jl       [12]
+│   ├── fiber-path.jl                [13]
+│   ├── fiber-path-plot.jl           [14]
+│   ├── demo*.jl                     [15]
+│   └── test                         [19]
+├── output                           [20]
 └── *.py / *.jl supporting scripts
 ```
 
-- [2] Notes for tooling workflows (for agents).
-- [3] Primary project overview and scientific context (for humans). 
+- [2] Notes for tooling workflows.
+- [3] Primary project overview and scientific context.
 - [4L] Legacy Python implementation for birefringence simulation.
 - [5L] Python regression and behavior checks.
 - [6L] Interactive notebook example for exploration and demos.
 - [7L] Research references and source material.
 - [8] Active Julia refactor and solver architecture.
-- [9] Material models and refractive-index behavior.
-- [10] Cross-sectional physics and birefringence calculations.
-- [11] Fiber authoring/specification layer and source assembly.
-- [12] Adaptive propagation engine and DGD sensitivity solver.
-- [13] 3D geometry and visualization output pipeline.
-- [14] Tests with visual output designed to be checked by humans.
-- [15] Julia tests.
-- [16] User guide for the julia port (for humans and agents).
-- [17] TODO list for humans.
-- [18] Output of all demo*.jl methods goes here.
+- [9] Standalone material models and refractive-index behavior.
+- [10] Standalone path construction and differential geometry.
+- [11] Generic adaptive propagation for callable Jones generators.
+- [12] Cross-sectional fiber optics and local birefringence responses.
+- [13] Path-backed fiber assembly and generator construction.
+- [14] 3D geometry and propagation visualization pipeline.
+- [15] Runnable Julia demos; visual demos write HTML files to `output/`.
+- [16L] Legacy Raman and Brillouin Python scripts.
+- [17] TODO list for humans. Starting TODO items requires user authorization.
+- [18] User guide for the Julia port.
+- [19] Julia tests.
+- [20] Output of demo methods and generated visual artifacts.
 
-Certain files must have no cross-dependencies.
-- path-geometry.jl
-- path-integral.jl
-- material-properties.jl
-
-Do not read files marked [*L] unless motivated by a specific workflow as these are legacy files
-for an old python version. These files authoritative as regards physics and must never be modified.
+Files marked `[L]` are legacy files for the old Python implementation. Do not
+read them unless a specific workflow requires it. They are authoritative for
+legacy behavior and must not be modified without explicit user authorization.
 
 ## Architectural Intent
 
-- Separate **physics modeling**, **material & artifact specifications** and **numerical
-  solving** into distinct modules.
-- Keep propagation methods stable under non-commuting generator terms through Lie-group
-  style exponential stepping.
-- Support continuous/function-valued fiber definitions instead of only fixed pre-sliced
-  segment grids.
-- Make extensibility explicit: new birefringence mechanisms plug in as typed sources with
-  shared contracts.
+- Separate material physics, path geometry, fiber assembly, and numerical
+  propagation.
+- Keep the core propagation API usable with any callable `K(s)` and `Kω(s)`.
+- Support continuous/function-valued geometry and twist rather than only fixed
+  pre-sliced segment grids.
+- Keep lossless Jones propagation isolated from any future gain/loss model.
+- Preserve MCM compatibility on uncertainty-carrying code paths.
+
+## Standalone Building Blocks
+
+These files are intentionally useful on their own:
+
+| File | Standalone role |
+| --- | --- |
+| `material-properties.jl` | Material constants and spectra; no path or fiber geometry. |
+| `path-geometry.jl` | Three-dimensional path construction and geometric queries; no optics. |
+| `path-integral.jl` | Adaptive propagation for callable `K(s)` and `Kω(s)` generators. |
+
+The fiber-specific layers combine those pieces:
+
+| File | How it extends the standalone pieces |
+| --- | --- |
+| `fiber-cross-section.jl` | Adds step-index fiber optics and birefringence responses. |
+| `fiber-path.jl` | Binds path geometry to a cross section and assembles bend/twist `K` and `Kω`. |
 
 ## Layered Design
 
-0. **Geometry layer**  (`path-geometry.jl`, `path-geometry-plot.jl`)
+0. **Geometry layer** (`path-geometry.jl`, `path-geometry-connector.jl`,
+   `path-geometry-plot.jl`)
 
-    - `path-geometry.jl`  describes the shape of a 3D curve and its associated
-      differential geometry.
-    - `path-geometry-plot.jl` supports visualization of path geometry in 3D.
+   - Builds and queries three-dimensional paths.
+   - Provides straight, bend, catenary, helix, `JumpBy`, and `JumpTo` authoring.
+   - Resolves material twist metadata into path-coordinate twist runs.
+   - Resolves `JumpBy` and `JumpTo` into G2 quintic connectors.
 
 1. **Material layer** (`material-properties.jl`)
 
-   - Encodes intrinsic optical material properties and optional spectral derivatives.
+   - Encodes intrinsic optical material properties.
+   - Provides spectral responses and derivatives needed by DGD calculations.
 
 2. **Cross-section layer** (`fiber-cross-section.jl`)
 
-   - Encodes transverse step-index fiber geometry and local birefringence response laws.
-   - Bridges material properties into physically meaningful local response coefficients.
+   - Encodes transverse step-index fiber geometry.
+   - Converts material properties into guided-index, dispersion, nonlinearity,
+     and local birefringence response coefficients.
 
-3. **Fiber specification layer** (`fiber-path.jl`)
+3. **Fiber assembly layer** (`fiber-path.jl`, `fiber-path-meta.jl`,
+   `fiber-path-modify.jl`)
 
-   - This layer considers 3D extrusions of the fiber cross-section specified in the
-     previous layer.
-   - Enforces coverage and breakpoint validity over fiber domain.
-   - Assembles fiber-level `K(s)` and `Kω(s)` through source contribution composition.
+   - Binds a built `PathSpecCached` to a `FiberCrossSection` and `T_ref_K`.
+   - Keeps operating wavelength as a per-query argument rather than `Fiber`
+     state.
+   - Assembles fiber-level bend and twist generators `K(s)` and `Kω(s)`.
+   - Interprets per-segment metadata such as `Nickname`, `MCMadd`, and
+     `MCMmul`.
+   - Applies meta-driven path perturbations and thermal length scaling through
+     `modify(fiber)`.
 
 4. **Propagation layer** (`path-integral.jl`)
 
-   - Solves `dJ/ds = K(s)J` with adaptive step-doubling exponential midpoint integration.
-   - Solves coupled sensitivity system for `G = ∂ωJ` and derives DGD from `J` and `G`.
+   - Solves `dJ/ds = K(s)J` with adaptive step-doubling exponential midpoint
+     integration.
+   - Solves the coupled sensitivity system for `G = ∂ωJ`.
+   - Derives DGD from `J` and `G`.
    - Uses breakpoint-aware interval decomposition to avoid integrating across
      discontinuities.
+   - Uses phase-insensitive error metrics for Jones propagation.
 
-5. **Presentation layer** (`fiber-path-plot.jl`, `demo.jl`)
+5. **Presentation layer** (`fiber-path-plot.jl`, `demo*.jl`)
 
    - Generates visual diagnostics and runnable examples.
-   - Demonstrates typical composition + propagation workflow.
+   - Keeps visual demos as human-inspected outputs rather than reusable library
+     code.
 
 ## Runtime Flow
 
-0. See demo.jl as an example of how to setup a simluation.
-1. Build a `FiberSpec` with domain, cross-section, and wavelength.
-2. Author bend/twist segments (`bend!`, `twist!`) with scalar or function-valued profiles.
-3. Compile to a `Fiber` (source objects + coverage + breakpoints).
-4. Propagate with `propagate_fiber` for Jones output or `propagate_fiber_sensitivity` for
-   DGD.
-5. Post-process outputs for diagnostics, plots, and regression checks.
+0. See `julia-port/demo-smallest.jl` for the smallest runnable example.
+1. Build a `PathSpecBuilder` with path primitives and optional metadata.
+2. Compile it with `build(...)`, producing a `PathSpecCached`.
+3. Bind it into `Fiber(path; cross_section, T_ref_K)`.
+4. Propagate with `propagate_fiber(fiber; λ_m=...)` for Jones output.
+5. Use `propagate_fiber_sensitivity(fiber; λ_m=...)` when DGD is needed.
+6. Post-process outputs for diagnostics, plots, demos, and regression checks.
 
 ## Contracts and Invariants
 
-- Each source must cover the full fiber domain; uncovered intervals are validation
-  failures.
-- Breakpoints are normalized and globally merged before piecewise propagation.
-- Numerical tolerances (`rtol`, `atol`, step controls) are explicit API inputs, not hidden
-  globals.
-- Global phase-insensitive error metrics are used in adaptive acceptance checks for
-  physically meaningful convergence behavior.
+- Path breakpoints are normalized and globally merged before piecewise
+  propagation.
+- The propagator must not step across path segment or twist-run boundaries.
+- Numerical tolerances (`rtol`, `atol`, step controls) are explicit API inputs,
+  not hidden globals.
+- Global phase-insensitive error metrics are used in adaptive acceptance checks.
+- `path-integral.jl` assumes lossless Jones propagation.
+- MCM-compatible paths must avoid scalar coercions and particle-dependent
+  conditionals on uncertainty-carrying values.
 
 ## Testing Strategy
 
-- Test entrypoint: `julia-port/test/runtests.jl`.
+- Test entrypoint: `julia --project=. julia-port/test/runtests.jl`.
 - Emphasis areas:
-  - source composition and domain validation,
-  - material/cross-section calculations,
+  - path geometry and connector invariants,
+  - material and cross-section calculations,
+  - fiber assembly and breakpoint behavior,
   - propagation behavior and DGD computation,
+  - MCM compatibility,
   - paddle-like path construction.
-- Current status note: the committed test harness references
-  `test_path_integral_sources.jl`, while ongoing work is transitioning toward
-  `test_path_integral.jl`. Keep test wiring aligned as files evolve.
+- Tests should follow the taxonomy in `AGENTS.md`: `T-PHYSICS`,
+  `T-VALIDATION`, `T-SIM-REGRESSION`, `T-GUARDRAIL`, and visual demos.
+- Validation against published fiber data and direct legacy `fiber.py`
+  comparisons is still limited.
 
 ## Extension Guidance
 
-- Add new birefringence mechanisms by introducing a new `AbstractBirefringenceSource`
-  subtype plus:
-  - `generator_K_contribution`,
-  - `generator_Kω_contribution`,
-  - coverage and breakpoint declarations.
-- Keep source logic pure and local; avoid coupling source behavior to solver internals.
-- Prefer adding validation tests for new source invariants before tuning solver
-  parameters.
-- Preserve separation between lossless Jones propagation assumptions and any future
-  loss/attenuation model.
+- Add new path shapes by implementing the `AbstractPathSegment` local geometry
+  interface in `path-geometry.jl`.
+- Add new per-segment annotations by extending the `AbstractMeta` vocabulary and
+  keeping interpretation in the consuming layer.
+- Add new fiber-level birefringence mechanisms by extending generator assembly
+  in `fiber-path.jl` and adding guardrail tests first.
+- Keep solver changes in `path-integral.jl` deliberate; step controller, error
+  metric, and exponential formulas are core numerical contracts.
+- Preserve separation between lossless Jones propagation and any future
+  attenuation, gain, or polarization-dependent loss model.
 
 ## Operational Best Practices
 
-- Keep architecture docs schematic; avoid drifting into exhaustive file inventory.
-- When implementing a new feature hold off on updating docs, tests and interfaces until
-  things have settled.
-- When a feature looks to be settled ask the user if it is time to update docs, tests, and
-  interfaces when changing source contracts or solver semantics.
-- Favor deterministic demos and tests so numerical regressions are quickly detectable.
+- Keep architecture docs schematic; avoid drifting into exhaustive file
+  inventory.
+- When a feature is still moving, delay broad docs/interface updates until the
+  design has settled.
+- When a feature settles, update docs and tests together.
+- Favor deterministic demos and tests so numerical regressions are quickly
+  detectable.

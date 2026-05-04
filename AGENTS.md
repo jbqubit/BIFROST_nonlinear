@@ -1,4 +1,6 @@
-# AGENTS.md — Guidance for Automated Agents
+# Guidance for Automated Agents
+AGENTS.md is read by Codex by default. 
+Read @ARCHITECTURE.md. 
 
 ## Running Tests
 All test files live under `julia-port/test/`. 

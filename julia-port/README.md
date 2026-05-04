@@ -1,325 +1,435 @@
-**path-integral approach to birefringence propagation**
+# Julia port: path-integral birefringence propagation
 
-J. Britton, 4/13/2026 
+J. Britton, updated 2026-05-04
 
----
+This directory contains the current Julia prototype for calculating the
+end-to-end polarization transfer function (PTF) and differential group delay
+(DGD) of a single-mode optical fiber link. It is a refactoring of the
+`fiber.py` polarization model from the BIFROST paper into a path-backed Julia
+implementation.
 
-These julia files describe a different approach to calculating the end-to-end polarization 
-transfer function (PTF) and differential group delay (DGD) of an optical fiber link. It is a refactoring 
-of `fiber.py` from the published BIFROST paper. The core elements of this new version is that it's in julia
-and it relies on a Magnus-type Lie-group integrator which automatically subdivides the calculation to 
-keep errors due to non-commuting terms bounded (eg birefringence and twist).
+The major architectural change is that the optical fiber is not represented as
+a pre-sliced list of Jones matrices. Instead, the code builds a continuous
+centerline path, binds it to a transverse fiber cross section, and integrates a
+local Jones generator:
 
-# current approach
-The approach in BIFROST paper calculates
-$$J_{\text{total}}=\prod_{i}J_{i}$$
-with the matrix order matching the order light encounters along the length of the fiber. There is no consideration of the non-commutative behavior of eg linear birefringence and fiber twist. Therefore it's hard to put a bound on the PTF error. 
-
-# a new approach using generator $K(s)$
-This approach is refactored around a generator $K(s)$, not around pre-sliced segments. The generator is defined by
-
-$$\frac{dJ}{ds}=K(s)\,J,\qquad J(0)=I. \tag{1}$$
-
-The design is
-- The physical inputs describing the fiber must be available as functions so that the fiber is described parametrically (not just on a coarse sampled grid). 
-- Each birefringence mechanism returns a local generator contribution $K_m(s)$.
-- The solver assembles $K(s)=\sum_m K_m(s)$.
-- The physical model is organized as a `Fiber` made from typed birefringence sources, rather than one monolithic fiber-input struct.
-- Each source carries its own parametric description and declares the points where its behavior can change discontinuously.
-- The fiber computes the global breakpoint set automatically by taking the union of the breakpoints declared by its sources.
-- The propagator advances $J$ adaptively over smooth intervals. 
-- The interval size is selected dynamically to keep error below a specified threshold.
-    - smooth fiber → large steps,
-    - rapidly changing bend/twist → small steps,
-    - discontinuities → explicit interval boundaries.
-    - Net: The computational effort is concentrated where the physics actually varies.
-
-
-## simple analytic case
-If the length of a fiber segment is short, its Jones matrix is close to identity $J\approx I+K(s)\,\Delta s,$ where $K(s)$ is the local generator of polarization evolution.
-
-$$ J(L)\approx\prod_{i=1}^{N}\bigl(I+K(s_{i})\Delta s\bigr)$$
-
-If the matrices commute you can integrate analytically. $$\prod_{i}\bigl(I+K(s_{i})\Delta s\bigr)\to\exp\!\left(\int_{0}^{L}K(s)\,ds\right)$$
- 
-
-## numerical solving
-
-The most natural framework is a Magnus-type Lie-group integrator. These methods are built for non-autonomous linear matrix ODEs and propagate by products of exponentials, such as Jones matrices. The simplest useful version is the exponential midpoint rule 
-
-$$J_{n+1}=e^{h\,K(s_{n}+h/2)}J_{n}$$
-
-where $h$ is a small step. 
-
-> **INSIGHT** The use of this exponential is motivated by a simple geometric idea. The solution of a constant-coefficient ODE over one interval is exactly an exponential. By using exponentials step by step, the method respects the multiplicative structure of Jones propagation rather than approximating it as an additive update. If the fiber is lossless and you factor out common phase, $K$ lives in the Lie algebra of $SU(2)$, so exponential-based propagation preserves the physical structure much better than a generic entrywise ODE solver.
-
-Use a posteriori error estimator for adaptive step-size control, such as adaptive step-doubling. Adaptive solvers do this automatically (eg RK45). For exponential midpoint, the simplest is:
-- one full step of size $h$,
-- two half steps of size $h/2$,
-- compare the results,
-- accept/reject and update $h$.
-
-There is some additional detail to the algorithm. 
-
-- Because the error behaves roughly like $h^3$, the next step size is chosen with a cubic-root controller:
-    
-$$h_{\text{new}} \sim h \left(\frac{\text{tol}}{\text{err}}\right)^{1/3}$$
-
-- In the interest of accuracy the adaptive mechanism for choosing $h$ is not permitted to cross discontinuities in $K$. For example, if the bend radius jumps from one value to another, the algorithm integrates on each side and then combines. 
-
-In the current code this breakpoint logic is part of the fiber-specification layer rather than the propagator itself. Each birefringence source declares its own breakpoints, and the assembled fiber computes
-
-$$\text{breakpoints}(F)=\{s_{\mathrm{start}},s_{\mathrm{end}}\}\cup\bigcup_m \text{breakpoints}(m).$$
-
-The propagator then integrates separately on each interval between consecutive breakpoints.
-
-> **INSIGHT** It turns out there is a closed-form exponential for a $2×2$ Jones generator. More generally, for an exactly traceless matrix $A$ the Cayley-Hamilton theorem gives $A^2 = -\det(A) I$, so
-> $$\exp(A) = \cosh(μ) I + \sinh(μ)/μ * A$$
-> where  $μ^2 = -\det(A)$. This is exact, not an approximation. See Appendix A.1.
-
-> **INSIGHT** Jones matrices are physically meaningful only up to an overall global phase in many applications. Two matrices differing only by a scalar phase factor often represent the same observable polarization action. So the step-doubling comparison should not use a raw matrix difference alone. Instead, align the phases first:
-> $$\text{err} = \|A-e^{i\phi}B\|,$$
->where $e^{i\phi}$ is chosen to best match $A$ and $B$.
->
->This prevents the adaptive controller from wasting effort on irrelevant common-phase differences. It's implemented in `phase_insensitive_error(A, B)`.
-
-
-# Integrate $\partial_\omega J$ directly for DGD
-
-For a polarization maintaining fiber the differential group delay (DGD) is a measure of the difference in transit time for light launched into the fast axis and light launched in the slow axis. It can be shown that DGD can be written as 
-
-$$ G(s, \omega) \equiv  \frac{\partial J(s, \omega)}{\partial \omega}$$
-
-The BIFROST paper’s DGD formulation is Eq (19) (BIFROST `calcDGD()`) 
-
-$$\partial_\omega J \approx \frac{J(\omega + \Delta\omega) - J(\omega)}{\Delta\omega}.$$
-
-This relies on an additional numerical parameter $\Delta \omega$ and the finite difference is subject to round-off error. 
-
-An alternate approach removes this avoidable source of numerical error and puts DGD under the same adaptive tolerance as the main propagator. Recall the definition of the propagator where we make the frequency dependence explicit. 
-
-$$\frac{dJ}{ds}=K(s,\omega)\,J,\qquad J(0,\omega)=I. $$
-
-Differentiate with respect to $\omega$. We get a coupled system
-
-$$\frac{dJ}{ds} = KJ,\quad J(0) = I,\tag{2}$$
-
-$$\frac{dG}{ds} = K_\omega J + KG,\quad G(0) = 0. \tag{3}$$
-
-Then form $J^{-1}G$ directly at the end. 
-
-
-
-
-# Code overview
-
-The code is now split into several new layers.
-
-**Overview of the files**
-- `material-properties.jl` :: intrinsic material properties (makes no mention of fiber)
-- `fiber-cross-section.jl` :: mode a single transverse slice of step-index fiber of infinitesimal length
-- `fiber-path.jl` :: assemble piecewise an optical fiber from extruded fiber cross sections 
-- `path-integra.jl` :: compute the PTF and DGD of a fiber
-- `test/` :: unit tests
-
-**CAUTION**
-- Unit tests do not yet compare the output of `fiber.py` with the julia-port
-- See the header of the unit tests for other notable gaps in test coverage.
-
-## Julia techniques
-There are several programming techniques used in this codebase that are distinct to Julia (especially in contrast with python). 
-
-### multiple dispatch
-In python data and methods are combined in classes. In Julia data lives in structs and instead of many individually named methods, Julia uses a single method name and multiple dispatch. 
-
-Here's an example from material-properties.md. Where the single method call to refractive_index() just returns the index with default call parametrs. But with other arguments it also optionally $d\omega$ which is needed for DGD. Which method is dipatched is determined at compile time. 
-
-```julia
-refractive_index(material::AbstractMaterial, λ_meters::Real, T_kelvin::Real) =
-    refractive_index(ValueOnly(), material, λ_meters, T_kelvin)
-
-refractive_index(::ValueOnly, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)
-
-refractive_index(::ValueOnly, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)
-
-refractive_index(::WithDerivative, glass::GermaniaSilicaGlass, λ_meters::Real, T_kelvin::Real)
-
-refractive_index(::WithDerivative, glass::FluorinatedSilicaGlass, λ_meters::Real, T_kelvin::Real)
+```math
+\frac{dJ}{ds}=K(s,\omega)J,\qquad J(s_0)=I.
 ```
 
-- plus others... for `material::GeO2` and `material::SiO2`
+Propagation uses an adaptive exponential-midpoint, Lie-group style integrator.
+The adaptive controller never steps across path breakpoints, and its error
+metric is insensitive to physically irrelevant global Jones phase.
 
-## Fiber specification layer
+## Quick Start
 
-`fiber-path.jl` defines the compiled optical object that sits on top of a built
-geometric `Path`.
+From the repository root:
 
-- `Fiber` owns the immutable built `Path`.
-- `Fiber` stores the optical metadata needed to interpret that path:
-  `cross_section`, `λ_m`, and `T_K`.
-- `Fiber` caches the global breakpoint set derived from the path segment
-  boundaries and resolved twist overlays.
+```bash
+cd julia-port
+julia --project=. test/runtests.jl
+```
 
-At the fiber level, the local Jones generator is assembled from two path-derived
-mechanisms:
+The demo files write standalone HTML artifacts under `../output/`:
 
-$$K(s)=K_{\mathrm{bend}}(s)+K_{\mathrm{twist}}(s),$$
+```bash
+julia --project=. demo-smallest.jl
+julia --project=. demo1.jl
+julia --project=. demo2.jl
+julia --project=. demo3mcm.jl
+julia --project=. demo3benchmark.jl
+```
 
-with the same decomposition for $K_\omega(s)$.
+The code is currently organized as include-based Julia scripts rather than a
+packaged module. Most tests and demos include only the files they need.
 
-### Propagation layer
+## Building Blocks
 
-`path-integral.jl` sits on top of that specification layer and implements the actual propagators.
+These files are intentionally useful on their own:
 
-- `generator_K(f)` assembles the total local generator $K(s)$ from the path and
-  optical metadata stored in a `Fiber`.
-- `generator_Kω(f)` assembles the total frequency derivative $K_\omega(s)$ from
-  the same `Fiber`.
-- `exp_jones_generator(A)` computes $\exp(A)$ for a $2\times2$ generator using the closed-form Cayley-Hamilton formula.
-- `exp_midpoint_step(K, s, h, J)` is one exponential-midpoint step for the Jones propagator.
-- `propagate_interval!()` is the adaptive controller on one smooth interval. It takes one full step and two half steps, compares them with `phase_insensitive_error`, accepts or rejects the step, and updates $h$ with the cubic-root rule $(\text{tol}/\text{err})^{1/3}$.
-- `propagate_piecewise()` performs the same propagation on a prescribed breakpoint partition.
-- `propagate_fiber()` is the fiber-level convenience wrapper: it reads the
-  breakpoints cached in the `Fiber` and then calls the piecewise propagator.
+| File | Standalone role |
+| --- | --- |
+| `material-properties.jl` | Material constants and spectra; no path or fiber geometry. |
+| `path-geometry.jl` | Three-dimensional path construction and geometric queries, with no optics. |
+| `path-integral.jl` | Generic adaptive propagation for callable `K(s)` and `Kω(s)` generators. |
 
-### DGD extension
-The original code was built around a very specialized solver for one 2x2 matrix ODE.
-Once you add the pair of equations (2)-(3), this becomes a coupled block system. It requires extending the machinery for $J$ to now include both $J$ and $G$. This is implemented as
-- `exp_sensitivity_midpoint_step()` propagates the coupled ($J$, $G$) system over one midpoint step
-- `propagate_interval_sensitivity!()` adaptive step-doubling over smooth intervals
-- `propagate_piecewise_sensitivity()` adaptive step-doubling over breakpoints
-- `propagate_fiber_sensitivity()` computes the breakpoints from the `Fiber`, assembles both $K(s)$ and $K_\omega(s)$, and propagates the coupled system
-- `pmd_generator(J, G)` forms -im * J^{-1}G
-- `output_dgd(J, G)` extracts the DGD 
+The fiber layers combine and specialize those pieces:
 
-At the API level, the important change is that $K_\omega(s)$ is part of the
-compiled `Fiber` view, alongside $K(s)$. The DGD propagator always has both
-derived operators available from the same stored path and optical metadata.
+| File | How it extends the standalone pieces |
+| --- | --- |
+| `fiber-cross-section.jl` | Adds step-index fiber optics and birefringence responses. |
+| `fiber-path.jl` | Binds path geometry to a cross section and assembles bend/twist `K` and `Kω`. |
 
-# Example demo.jl
-`demo.jl` is just a thin driver on top of that stack. It builds a `Path`,
-binds it into a `Fiber`, then calls `propagate_fiber()` to get the final Jones
-matrix and per-interval stats. The demo no longer carries a separate manually
-maintained `breaks` array through the propagation API; the breakpoints are
-derived automatically from the compiled path stored in the `Fiber`.
+## Current Model
 
+High-level authoring is path based:
 
-## Simplified physics encoded in the generator K(s)
+1. Build geometry with `PathSpecBuilder`.
+2. Freeze and place it with `build(...)`, producing a `PathSpecCached`.
+3. Bind that path to a `FiberCrossSection` with `Fiber(path; cross_section,
+   T_ref_K)`.
+4. Propagate at a requested wavelength with `propagate_fiber(fiber; λ_m=...)`.
 
-*Bending → linear birefringence*
+The current path primitives include:
 
-For a bend of radius $R(s)$, the fiber experiences stress-induced birefringence with magnitude proportional to $1/R(s)^2$ in the simplest bending model. In the paper, the bend-induced birefringence is given by Eq. (9).  ￼The bend axis has an orientation in the transverse plane. If the bend angle is $\theta_b(s)$ in turns, the corresponding physical axis angle is
+- `StraightSegment`
+- `BendSegment`
+- `CatenarySegment`
+- `HelixSegment`
+- `JumpBy`
+- `JumpTo`
 
-$$\phi_b(s)=2\pi\,\theta_b(s).$$
+`JumpBy` and `JumpTo` are authoring conveniences. At build time they are
+resolved into a G2 quintic connector implemented in
+`path-geometry-connector.jl`.
 
-Linear birefringence aligned with this axis gives a generator proportional to a rotated Pauli-matrix combination. The double-angle dependence appears because Jones matrices represent polarization axes modulo $180^\circ$, not $360^\circ$.
+Material twist is attached as per-segment metadata using `Twist`. A twist run
+starts on the segment carrying the annotation and continues until the next
+twist annotation or the end of the path. Twist rates may be constant or
+callable functions of run-local arc length.
 
-*Twisting → circular birefringence*
+The optical `Fiber` stores:
 
-Twisting creates circular birefringence proportional to the local twist rate $\tau(s)$. In the paper, the left-right circular propagation-constant difference is linear in $\tau$ [Eq. (11)], and the corresponding Jones matrix has the circular-birefringence form shown in Eq. (16).  ￼
+- the built `PathSpecCached`,
+- the `FiberCrossSection`,
+- a reference temperature `T_ref_K`,
+- the fiber domain `[s_start, s_end]`.
 
-If $\text{twist}(s)$ is the accumulated twist angle in turns, then the solver really needs
-$\tau(s)=2\pi \frac{d}{ds}\text{twist}(s)$,
-in rad/m.
+The operating wavelength is not stored on `Fiber`. It is supplied per query to
+`generator_K(fiber, λ_m)`, `generator_Kω(fiber, λ_m)`, `propagate_fiber`, and
+`propagate_fiber_sensitivity`.
 
-**Combined generator**
+## Example
 
-The total local generator is the sum
+The smallest runnable example is kept in `demo-smallest.jl`:
 
-$$K(s)=K_{\text{bend}}(s)+K_{\text{twist}}(s).$$
+```bash
+julia --project=. demo-smallest.jl
+```
 
-Because the bending and twisting terms generally point along different Pauli directions, they do not commute:
-$[K_{\text{bend}}(s),K_{\text{twist}}(s)]\neq 0$. That noncommutation is why one cannot usually collapse the whole problem into a single scalar integral.
+```julia
+include("material-properties.jl")
+include("fiber-cross-section.jl")
+include("path-geometry.jl")
+include("path-integral.jl")
 
-**Fiber representation**
+xs = FiberCrossSection(
+    GermaniaSilicaGlass(0.036),
+    GermaniaSilicaGlass(0.0),
+    8.2e-6,
+    125e-6;
+    manufacturer = "Corning",
+    model_number = "SMF-like",
+)
 
-The adaptive solver evaluates the fiber at arbitrary points such as $s+h/2$, $s+h/4$, and so on. Therefore the physical inputs must be available as functions, not just a coarse sampled grid.
+spec = PathSpecBuilder()
+straight!(spec; length = 0.5, meta = [Nickname("lead-in")])
+bend!(spec; radius = 0.05, angle = pi / 2, meta = [Nickname("90 deg bend")])
+straight!(spec; length = 0.5, meta = [Nickname("lead-out")])
 
-The clean representation is now path-based rather than one large input struct.
+path = build(spec)
+fiber = Fiber(path; cross_section = xs, T_ref_K = 297.15)
 
-- A `PathSpec` / `Path` owns the centerline geometry and material twist.
-- A `Fiber` binds that path to a cross section, wavelength, and temperature profile.
+J, stats = propagate_fiber(fiber; λ_m = 1550e-9, rtol = 1e-9, verbose = false)
+```
 
-For the present bend/twist model, the bend source is naturally described by
+For DGD:
 
-	•	$R_b(s)$: bend radius
-	•	$\theta_b(s)$: bend-axis orientation
+```julia
+J, G, stats = propagate_fiber_sensitivity(
+    fiber;
+    λ_m = 1550e-9,
+    rtol = 1e-9,
+    verbose = false,
+)
 
-and the twist source by
+dgd = output_dgd(J, G)
+```
 
-	•	$d(\text{twist})/ds$: twist gradient
+For Monte Carlo Measurements (MCM) paths, prefer `output_dgd_2x2(J, G)` over
+`output_dgd(J, G)` because it avoids `eigvals`.
 
-These are then converted internally into solver-friendly quantities:
+## Generator Formulation
 
-$$\kappa_x(s)=\frac{\cos(2\pi\theta_b(s))}{R_b(s)},\qquad
-\kappa_y(s)=\frac{\sin(2\pi\theta_b(s))}{R_b(s)},$$
+The original BIFROST-style sliced approach calculates
 
-and
+```math
+J_{\mathrm{total}}=\prod_i J_i,
+```
 
-$$\tau(s)=2\pi\,\frac{d}{ds}\text{twist}(s).$$
+with matrix order matching the order light encounters along the fiber. That
+approach is simple, but it is difficult to attach a meaningful error bound when
+linear birefringence, twist, and other non-commuting terms vary along the path.
 
-This formulation is numerically better because it avoids angle singularities when the bend goes to zero and makes straight fiber simply $\kappa_x=\kappa_y=0$.
+The Julia implementation instead assembles a local generator:
 
-The same source abstraction also carries the data needed for DGD. In addition to its contribution to $K(s)$, each source also contributes its piece of $K_\omega(s)$. That keeps the PMD/DGD machinery aligned with the ordinary Jones propagation machinery: the fiber assembles both objects from the same list of sources, and the sensitivity propagator uses the same breakpoint structure and the same adaptive error-control strategy.
+```math
+K(s,\omega)=K_{\mathrm{bend}}(s,\omega)+K_{\mathrm{twist}}(s,\omega).
+```
 
-# Next steps for BIFROST port
-- add intrinsic material properties -- prakriti
-- add real sources of birefringence -- bifrost paper
-- add unit tests from physics papers
-- add fiber loss -- prakriti
-  - the fiber loss ought to rely on fiber-path.jl for geometry specification
-  - the fiber loss calculation functionality needs to be fully isolated from the path-integral.jl techniques which rely on zero-loss assumptions
+The bending contribution comes from path curvature. For a local bend radius
+`R(s)`, the implemented perturbation uses the bending birefringence response
+from `fiber-cross-section.jl`; in the simplest stress model the magnitude
+scales like `1/R(s)^2`.
 
+The twist contribution uses the total frame twist rate:
 
+```math
+\tau_{\mathrm{path}}(s)=\tau_{\mathrm{geom}}(s)+\tau_{\mathrm{material}}(s).
+```
 
+Here `geometric_torsion(path, s)` comes from the centerline, while
+`material_twist(path, s)` comes from resolved `Twist` metadata.
 
+The same decomposition exists for the frequency derivative:
 
+```math
+K_\omega(s,\omega)
+=K_{\mathrm{bend},\omega}(s,\omega)+K_{\mathrm{twist},\omega}(s,\omega).
+```
 
-# APPENDICES
+That keeps ordinary Jones propagation and DGD sensitivity propagation aligned:
+both use the same `Fiber`, wavelength, breakpoint partition, and adaptive
+integration strategy.
 
-## A1 Cayley–Hamilton
+## Propagation
 
-For any $2\times2$ matrix $A$, Cayley–Hamilton gives
-$$
-A^2-(\operatorname{tr}A)A+(\det A)I=0.
-$$
-If $A$ is exactly traceless, $\operatorname{tr}A=0$, so
-$$
-A^2=-(\det A)I.
-$$
-Define
-$$
-\mu^2=-\det A.
-$$
-Then
-$$
-A^2=\mu^2 I,\qquad A^3=\mu^2 A,\qquad A^4=\mu^4 I,\ \dots
-$$
-So the exponential series splits into even and odd powers:
-$$
-e^A=\sum_{n=0}^\infty \frac{A^n}{n!}
-=\sum_{k=0}^\infty \frac{A^{2k}}{(2k)!}
-+\sum_{k=0}^\infty \frac{A^{2k+1}}{(2k+1)!}.
-$$
-Using $A^{2k}=\mu^{2k}I$ and $A^{2k+1}=\mu^{2k}A$,
-$$
-e^A=
-\left(\sum_{k=0}^\infty \frac{\mu^{2k}}{(2k)!}\right)I
-+\left(\sum_{k=0}^\infty \frac{\mu^{2k}}{(2k+1)!}\right)A.
-$$
-Recognizing the series,
-$$
-\sum_{k=0}^\infty \frac{\mu^{2k}}{(2k)!}=\cosh\mu,
-\qquad
-\sum_{k=0}^\infty \frac{\mu^{2k}}{(2k+1)!}=\frac{\sinh\mu}{\mu},
-$$
-we get
-$$
-e^A=\cosh(\mu),I+\frac{\sinh(\mu)}{\mu},A,
-\qquad \mu^2=-\det A.
-$$
+The exponential midpoint step is
 
-At $\mu=0$, interpret $\sinh(\mu)/\mu\to1$, so
-$$
-e^A=I+A.
-$$
+```math
+J_{n+1}=\exp\!\left(hK(s_n+h/2)\right)J_n.
+```
+
+It is useful here because the solution of a constant-coefficient matrix ODE is
+exactly an exponential. Step by step, the method preserves the multiplicative
+structure of Jones propagation. Under the lossless assumption, after removing
+common phase, the Jones matrices live in `SU(2)`.
+
+The adaptive controller uses step doubling:
+
+- take one full step of size `h`,
+- take two half steps of size `h/2`,
+- compare the two results using `phase_insensitive_error`,
+- accept or reject the step,
+- update `h` with a cubic-root controller because the estimate scales as
+  `O(h^3)`.
+
+Path breakpoints come from the built path:
+
+```julia
+fiber_breakpoints(fiber) = breakpoints(fiber.path)
+```
+
+Those breakpoints include path segment boundaries and resolved twist-run
+boundaries. `propagate_fiber` calls `propagate_piecewise`, which integrates
+independently over each smooth interval.
+
+The 2x2 Jones exponential uses a closed form based on Cayley-Hamilton. The
+implementation also factors out small numerical trace drift before applying the
+traceless formula:
+
+```math
+\exp(A)=\exp(\operatorname{tr}(A)/2)
+\left[\cosh(\mu)I+\operatorname{sinhc}(\mu)\tilde A\right],
+\qquad \mu^2=-\det(\tilde A).
+```
+
+Here `sinhc(mu) = sinh(mu) / mu`, with a Taylor branch near zero.
+
+## DGD Sensitivity Propagation
+
+The finite-difference DGD estimate used by the legacy implementation has the
+form
+
+```math
+\partial_\omega J
+\approx \frac{J(\omega+\Delta\omega)-J(\omega)}{\Delta\omega}.
+```
+
+The Julia propagator instead integrates the sensitivity matrix
+`G = partial_omega J` directly:
+
+```math
+\frac{dJ}{ds}=KJ,\qquad J(s_0)=I,
+```
+
+```math
+\frac{dG}{ds}=K_\omega J+KG,\qquad G(s_0)=0.
+```
+
+At the output, the PMD generator is
+
+```math
+H_{\mathrm{PMD}}=-iJ^{-1}G.
+```
+
+`output_dgd(J, G)` returns the eigenvalue spread of that generator. For 2x2
+MCM-valued matrices, `output_dgd_2x2(J, G)` computes the same spread using a
+closed-form Hermitian 2x2 formula, avoiding `LinearAlgebra.eigvals`.
+
+The coupled sensitivity step is implemented using a closed-form Frechet
+derivative of the 2x2 exponential:
+
+```math
+\exp\!\left(h\begin{bmatrix}K & K_\omega\\0 & K\end{bmatrix}\right)
+=
+\begin{bmatrix}E & F\\0 & E\end{bmatrix}.
+```
+
+This is implemented by `exp_block_upper_triangular_2x2`. Avoiding generic 4x4
+`LinearAlgebra.exp` is important for MCM compatibility and is also faster for
+ordinary `Float64` cases.
+
+## Monte Carlo Measurements Compatibility
+
+Several files are written to lift through
+`MonteCarloMeasurements.Particles`:
+
+- `material-properties.jl`
+- `fiber-cross-section.jl`
+- `path-geometry.jl`
+- `fiber-path.jl`
+- `fiber-path-modify.jl`
+- `path-integral.jl`
+
+Important conventions:
+
+- avoid `::Real` annotations on uncertain-input slots,
+- avoid `Float64(...)` coercions on paths that may carry `Particles`,
+- avoid conditionals that would need to branch independently per particle,
+- use `MonteCarloMeasurements.unsafe_comparisons(true)` in MCM tests,
+- reduce ensemble-wide adaptive decisions through `scalar_reduce`.
+
+`scalar_reduce` currently uses the maximum particle value when reducing an
+MCM-valued scalar error metric. That makes the adaptive controller conservative:
+the whole ensemble takes one step size selected by the worst particle. A
+`pmean`-style reduction is the documented performance compromise if worst-case
+step counts become too high.
+
+Per-segment uncertainty and annotations live in the `meta` vector:
+
+- `Nickname(label)` labels a segment for visual diagnostics,
+- `MCMadd(symbol, distribution)` applies additive perturbations,
+- `MCMmul(symbol, distribution)` applies multiplicative perturbations.
+
+`fiber-path-modify.jl` interprets those annotations. For example, `:T_K`
+metadata is converted into thermal length scaling using the cladding material
+CTE at the fiber reference temperature.
+
+## File Overview
+
+- `material-properties.jl`: material refractive index, thermo-optic behavior,
+  CTE, and nonlinear index helpers.
+- `fiber-cross-section.jl`: step-index cross-section quantities, guided index,
+  dispersion, nonlinear coefficient, and perturbative birefringence responses.
+- `path-geometry.jl`: path authoring, placement, differential geometry,
+  material twist resolution, sampling, and global path diagnostics.
+- `path-geometry-connector.jl`: quintic G2 connector used by `JumpBy` and
+  `JumpTo`.
+- `path-geometry-plot.jl`: path plotting and HTML helpers.
+- `fiber-path-meta.jl`: concrete per-segment metadata vocabulary.
+- `fiber-path.jl`: `Fiber`, bend/twist generator assembly, and fiber-level
+  diagnostics.
+- `fiber-path-modify.jl`: meta-driven path perturbation and thermal scaling.
+- `fiber-path-plot.jl`: fiber and propagation visualization helpers.
+- `path-integral.jl`: Jones propagation, sensitivity propagation, DGD, and
+  MCM-aware exponential formulas.
+- `demo1.jl`: path geometry, segment labels, helix, modification, and
+  adaptive-step visual demos.
+- `demo2.jl`: `JumpBy` and `JumpTo` connector demos.
+- `demo3mcm.jl`: MCM temperature/PTF demos.
+- `demo3benchmark.jl`: MCM propagation benchmark demos.
+- `test/`: unit and regression tests.
+
+## Tests
+
+The test orchestrator is:
+
+```bash
+julia --project=. test/runtests.jl
+```
+
+It currently includes:
+
+- `test_path_geometry.jl`
+- `test_fiber_path.jl`
+- `test_fiber_path_modify.jl`
+- `test_material_properties.jl`
+- `test_mcm_compatability.jl`
+- `test_paddle_transfer.jl`
+- `test_dgd.jl`
+- `test_fiber_cross_section.jl`
+- `test_path_integral.jl`
+
+Tests are intended to fall into the taxonomy described in the repository
+`AGENTS.md`: `T-PHYSICS`, `T-VALIDATION`, `T-SIM-REGRESSION`,
+`T-GUARDRAIL`, and visual demos. In practice, the strongest current coverage
+is physics-motivated and guardrail testing. Validation against published fiber
+data and direct legacy `fiber.py` comparisons is still limited.
+
+MCM test blocks must use `MonteCarloMeasurements.unsafe_comparisons(true)`.
+Under unsafe comparisons, structural checks such as sorted breakpoints are
+reduced through particle means rather than failing on particle-valued booleans.
+
+## Known Limitations
+
+- `path-integral.jl` assumes lossless Jones propagation. Do not introduce
+  gain, loss, or polarization-dependent loss there without a separate design.
+- The model is intended for single-mode, weakly guiding, nearly circular fibers
+  in the wavelength and temperature ranges described in the repository
+  guidance.
+- External stress, cladding noncircularity, non-concentric cores, nonlinear
+  scattering, electric/magnetic effects, and polarization-dependent loss are
+  not modeled.
+- `modify(fiber)` handles geometry and metadata perturbations, including
+  thermal scaling, but twist remapping through modification remains a known
+  caveat area.
+- The Julia port has substantial internal tests, but it is not yet a validated
+  replacement for the legacy Python model or for published fiber data.
+
+## Appendix: Cayley-Hamilton 2x2 Exponential
+
+For any 2x2 matrix `A`, Cayley-Hamilton gives
+
+```math
+A^2-\operatorname{tr}(A)A+\det(A)I=0.
+```
+
+If `A` is traceless, then
+
+```math
+A^2=-\det(A)I.
+```
+
+Define `mu^2 = -det(A)`. Then
+
+```math
+A^2=\mu^2 I,\qquad A^3=\mu^2 A,\qquad A^4=\mu^4 I,\ldots
+```
+
+The exponential series splits into even and odd powers:
+
+```math
+e^A
+=\sum_{k=0}^{\infty}\frac{A^{2k}}{(2k)!}
+ +\sum_{k=0}^{\infty}\frac{A^{2k+1}}{(2k+1)!}.
+```
+
+Using `A^(2k) = mu^(2k) I` and `A^(2k+1) = mu^(2k) A`:
+
+```math
+e^A
+=
+\left(\sum_{k=0}^{\infty}\frac{\mu^{2k}}{(2k)!}\right)I
++
+\left(\sum_{k=0}^{\infty}\frac{\mu^{2k}}{(2k+1)!}\right)A.
+```
+
+Therefore
+
+```math
+e^A=\cosh(\mu)I+\frac{\sinh(\mu)}{\mu}A,
+\qquad \mu^2=-\det(A).
+```
+
+At `mu = 0`, interpret `sinh(mu) / mu -> 1`, so `e^A = I + A`.
