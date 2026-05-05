@@ -1,10 +1,9 @@
 """
-fiber-path-meta.jl
+path-geometry-meta.jl
 
-Concrete `AbstractMeta` subtypes for per-segment annotations. `path-geometry.jl`
-defines only the abstract slot (`AbstractMeta`) and the `meta` field on each
-segment; the concrete vocabulary lives here so path-geometry stays ignorant of
-what annotations mean.
+Concrete `AbstractMeta` subtypes for per-segment and per-Subpath annotations.
+`path-geometry.jl` defines only the abstract slot (`AbstractMeta`) and the
+`meta` fields; the concrete vocabulary lives here.
 
 ## Vocabulary
 

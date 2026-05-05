@@ -1,11 +1,9 @@
 if !isdefined(Main, :FiberCrossSection)
     include("fiber-cross-section.jl")
 end
-if !isdefined(Main, :PathSpecCached)
+if !isdefined(Main, :SubpathBuilt)
     include("path-geometry.jl")
 end
-
-include("fiber-path-meta.jl")
 
 """
 Fiber assembly on top of `path-geometry.jl`.

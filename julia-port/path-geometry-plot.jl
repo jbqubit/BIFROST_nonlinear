@@ -1,10 +1,10 @@
 """
 path-geometry-plot.jl
 
-Interactive Plotly HTML for a [`Path`](path-geometry.jl): 3D centerline, a draggable cursor
+Interactive Plotly HTML for a `SubpathBuilt`: 3D centerline, a draggable cursor
 driven by horizontal mouse position, a movable transverse square (normal–binormal plane),
 short tangent/normal/binormal axes at the cursor, and optional per-segment nickname labels when
-authoring segments with a `nickname` string.
+authoring segments with a `Nickname` meta.
 
 This file depends only on `path-geometry.jl` (via the nested `PathGeometry` module) and the
 Plotly CDN. It does not load or reference other `julia-port/` sources.
@@ -13,11 +13,14 @@ Plotly CDN. It does not load or reference other `julia-port/` sources.
 
     include("path-geometry-plot.jl")
 
-    spec = PathGeometry.PathSpecBuilder()
-    PathGeometry.straight!(spec; length = 0.2)
-    PathGeometry.bend!(spec; radius = 0.4, angle = π / 2)
-    path = PathGeometry.build(spec)
-    write_path_geometry_plot3d(path, path.spec.s_start, path.s_end; title = "Demo", fidelity = 1.0, output = "path.html")
+    sb = PathGeometry.SubpathBuilder()
+    PathGeometry.start!(sb)
+    PathGeometry.straight!(sb; length = 0.2)
+    PathGeometry.bend!(sb; radius = 0.4, angle = π / 2)
+    PathGeometry.jumpto!(sb; point = (0.0, 0.0, 0.6))
+    b = PathGeometry.build(sb)
+    write_path_geometry_plot3d(b, 0.0, PathGeometry.s_end(b); title = "Demo",
+                               fidelity = 1.0, output = "path.html")
 """
 
 using LinearAlgebra
@@ -32,7 +35,6 @@ file is `include`d alongside unrelated code.
 module PathGeometry
 using LinearAlgebra
 include(joinpath(@__DIR__, "path-geometry.jl"))
-include(joinpath(@__DIR__, "fiber-path-meta.jl"))
 end
 
 # ---------------------------------------------------------------------------
@@ -134,7 +136,7 @@ Keyword `twist_n_quad` is passed to `total_material_twist` when building Φ at e
 (default 128).
 """
 function write_path_geometry_plot3d(
-    path::PathGeometry.PathSpecCached,
+    path::PathGeometry.SubpathBuilt,
     s1::Real,
     s2::Real;
     fidelity::Float64 = 3.0,
@@ -173,6 +175,7 @@ function write_path_geometry_plot3d(
     seg_by = Float64[]
     seg_bz = Float64[]
     seg_bound_hover = String[]
+    # Boundary markers between adjacent placed (interior) segments.
     placed = path.placed_segments
     if length(placed) >= 2
         for i in 2:length(placed)
@@ -190,13 +193,26 @@ function write_path_geometry_plot3d(
             )
         end
     end
+    # Boundary marker between the last interior segment and the terminal connector.
+    sj_t = path.jumpto_placed.s_offset_eff
+    if sj_t >= s1f && sj_t <= s2f
+        p = PathGeometry.position(path, sj_t)
+        push!(seg_bx, p[1])
+        push!(seg_by, p[2])
+        push!(seg_bz, p[3])
+        push!(
+            seg_bound_hover,
+            "Terminal connector start<br>s = $(sj_t) m<br>x, y, z = $(p[1]), $(p[2]), $(p[3])"
+        )
+    end
 
     label_x = Float64[]
     label_y = Float64[]
     label_z = Float64[]
     label_strs = String[]
     nudge = Float64(segment_label_nudge_frac) * diag
-    for ps in placed
+    # Iterate interior placed segments + the terminal connector.
+    for ps in vcat(placed, PathGeometry.PlacedSegment[path.jumpto_placed])
         nick = PathGeometry.segment_nickname(ps.segment)
         isnothing(nick) && continue
         s_lo = ps.s_offset_eff

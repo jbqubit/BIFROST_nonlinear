@@ -84,7 +84,7 @@ if !@isdefined(Fiber)
     include("fiber-path.jl")
 end
 if !@isdefined(MCMadd)
-    include("fiber-path-meta.jl")
+    include("path-geometry-meta.jl")
 end
 
 # ----------------------------
