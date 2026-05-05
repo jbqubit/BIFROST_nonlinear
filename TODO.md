@@ -82,6 +82,16 @@ upcoming features. Agents should not start work on these without explicit author
       this is the intended physical meaning before any downstream consumer
       (polarization propagator, plotting, etc.) starts relying on `phi_0`.
 
+- [ ] Add a `resolved::Bool` flag (or similar mechanism) to `AbstractMeta`
+      so the system can certify that all meta on a `SubpathBuilt` /
+      `PathBuilt` has been fully processed. Some meta is interpreted by code
+      internal to `path-geometry*.jl` (e.g. `Twist`); other meta is
+      interpreted by external code (e.g. `MCMadd`/`MCMmul` in
+      `fiber-path-modify.jl`). A `resolved` flag would let downstream
+      consumers (or a `complete(::SubpathBuilt)` / `complete(::PathBuilt)`
+      check) verify that no meta has been silently ignored before a built
+      structure is treated as authoritative.
+
 #########################
 #### path-geometry ######
 #########################
@@ -110,3 +120,40 @@ While it's outside the context of the current refactoring it's important to note
 
 Please help me think which is the right approach of if there is another that's better. 
 
+##################################
+### true Subpath-local storage ###
+##################################
+
+- [ ] TODO20260505 PlacedSegment.origin and PlacedSegment.frame are stored in 
+  global coordinates, evolving forward as segments are added.   
+  The "first and last point anchored globally" part of your 
+  vision is correct, and "coordinate frame evolving per segment"
+   is correct — the frame on segment N is the global frame at
+  the start of segment N. But the storage is global, not
+  Subpath-local. The path just happens to start at global
+  (0,0,0) because there's no Subpath start_point concept yet.
+
+  What the new plan currently says                              
+   
+  Same as today, except pos starts at collect(sub.start_point)  
+  (still global, just anchored at the Subpath's start_point 
+  instead of (0,0,0)). PlacedSegments still hold global         
+  origin/frame.                                             
+
+  What "true Subpath-local storage" would mean
+
+  PlacedSegment.origin would be the offset from start_point     
+  (Subpath-local), and PlacedSegment.frame would be a rotation
+  matrix whose columns are local N/B/T axes (with local +z =    
+  start_outgoing_tangent). Global queries would compute     
+  start_point + R_start · ps.origin + R_start · ps.frame ·
+  v_segment_local, where R_start is the rotation taking
+  Subpath-local axes to global.
+
+  This is genuinely stronger independence: a SubpathBuilt could 
+  be "relocated" by mutating its Subpath's start_point without
+  rebuilding, and the internal data is invariant to where in    
+  space the Subpath sits. The cost is more careful build() math
+  (rotating jumpto_point into local before solving the
+  connector) and a query layer that does R_start · ...
+  everywhere.
