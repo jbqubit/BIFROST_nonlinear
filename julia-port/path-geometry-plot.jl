@@ -135,8 +135,146 @@ quadrature.
 Keyword `twist_n_quad` is passed to `total_material_twist` when building Φ at each sample index
 (default 128).
 """
+# -----------------------------------------------------------------------
+# Type-specific helpers: collect segment-boundary marker positions and
+# segment nickname labels for a SubpathBuilt or PathBuilt within
+# [s1f, s2f]. Returned as plain Float64/String vectors ready for HTML
+# embedding.
+# -----------------------------------------------------------------------
+
+function _collect_segment_boundaries(path::PathGeometry.SubpathBuilt,
+                                     s1f::Float64, s2f::Float64)
+    seg_bx = Float64[]; seg_by = Float64[]; seg_bz = Float64[]
+    seg_bound_hover = String[]
+    placed = path.placed_segments
+    if length(placed) >= 2
+        for i in 2:length(placed)
+            sj = Float64(PathGeometry._qc_nominalize(placed[i].s_offset_eff))
+            (sj < s1f || sj > s2f) && continue
+            p = PathGeometry.position(path, sj)
+            push!(seg_bx, p[1]); push!(seg_by, p[2]); push!(seg_bz, p[3])
+            push!(seg_bound_hover,
+                  "Segment boundary<br>s = $(sj) m<br>x, y, z = $(p[1]), $(p[2]), $(p[3])")
+        end
+    end
+    sj_t = Float64(PathGeometry._qc_nominalize(path.jumpto_placed.s_offset_eff))
+    if sj_t >= s1f && sj_t <= s2f
+        p = PathGeometry.position(path, sj_t)
+        push!(seg_bx, p[1]); push!(seg_by, p[2]); push!(seg_bz, p[3])
+        push!(seg_bound_hover,
+              "Terminal connector start<br>s = $(sj_t) m<br>x, y, z = $(p[1]), $(p[2]), $(p[3])")
+    end
+    return (; seg_bx, seg_by, seg_bz, seg_bound_hover)
+end
+
+function _collect_segment_boundaries(path::PathGeometry.PathBuilt,
+                                     s1f::Float64, s2f::Float64)
+    seg_bx = Float64[]; seg_by = Float64[]; seg_bz = Float64[]
+    seg_bound_hover = String[]
+    offs = PathGeometry.s_offsets(path)
+    n = length(path.subpaths)
+
+    for (i, sp) in enumerate(path.subpaths)
+        sp_off = offs[i]
+        # Interior segment joins inside Subpath i.
+        placed = sp.placed_segments
+        if length(placed) >= 2
+            for k in 2:length(placed)
+                sj = sp_off + Float64(PathGeometry._qc_nominalize(placed[k].s_offset_eff))
+                (sj < s1f || sj > s2f) && continue
+                p = PathGeometry.position(path, sj)
+                push!(seg_bx, p[1]); push!(seg_by, p[2]); push!(seg_bz, p[3])
+                push!(seg_bound_hover,
+                      "Subpath $i segment join<br>s = $(sj) m<br>x, y, z = $(p[1]), $(p[2]), $(p[3])")
+            end
+        end
+        # Terminal connector start of Subpath i.
+        sj_t = sp_off +
+            Float64(PathGeometry._qc_nominalize(sp.jumpto_placed.s_offset_eff))
+        if sj_t >= s1f && sj_t <= s2f
+            p = PathGeometry.position(path, sj_t)
+            push!(seg_bx, p[1]); push!(seg_by, p[2]); push!(seg_bz, p[3])
+            push!(seg_bound_hover,
+                  "Subpath $i terminal connector start<br>s = $(sj_t) m<br>x, y, z = $(p[1]), $(p[2]), $(p[3])")
+        end
+    end
+    # Subpath-to-Subpath boundary markers (start of subpath i+1 = end of subpath i).
+    if n >= 2
+        for i in 2:n
+            sj = offs[i]
+            (sj < s1f || sj > s2f) && continue
+            p = PathGeometry.position(path, sj)
+            push!(seg_bx, p[1]); push!(seg_by, p[2]); push!(seg_bz, p[3])
+            push!(seg_bound_hover,
+                  "Subpath $(i-1) → $i boundary<br>s = $(sj) m<br>x, y, z = $(p[1]), $(p[2]), $(p[3])")
+        end
+    end
+    return (; seg_bx, seg_by, seg_bz, seg_bound_hover)
+end
+
+function _collect_segment_labels(path::PathGeometry.SubpathBuilt,
+                                 s1f::Float64, s2f::Float64, nudge::Float64)
+    label_x = Float64[]; label_y = Float64[]; label_z = Float64[]
+    label_strs = String[]
+    placed = path.placed_segments
+    for ps in vcat(placed, PathGeometry.PlacedSegment[path.jumpto_placed])
+        nick = PathGeometry.segment_nickname(ps.segment)
+        isnothing(nick) && continue
+        s_lo = Float64(PathGeometry._qc_nominalize(ps.s_offset_eff))
+        s_hi = s_lo + Float64(PathGeometry._qc_nominalize(
+            PathGeometry.arc_length(ps.segment)))
+        s_a = max(s_lo, s1f)
+        s_b = min(s_hi, s2f)
+        s_a >= s_b - 1e-15 && continue
+        s_mid = (s_a + s_b) / 2
+        fr = PathGeometry.frame(path, s_mid)
+        r = collect(fr.position); N = collect(fr.normal)
+        nn = norm(N)
+        if nn >= 1e-12
+            N ./= nn
+            r .+= nudge .* N
+        end
+        push!(label_x, r[1]); push!(label_y, r[2]); push!(label_z, r[3])
+        push!(label_strs, nick)
+    end
+    return (; label_x, label_y, label_z, label_strs)
+end
+
+function _collect_segment_labels(path::PathGeometry.PathBuilt,
+                                 s1f::Float64, s2f::Float64, nudge::Float64)
+    label_x = Float64[]; label_y = Float64[]; label_z = Float64[]
+    label_strs = String[]
+    offs = PathGeometry.s_offsets(path)
+    for (i, sp) in enumerate(path.subpaths)
+        sp_off = offs[i]
+        for ps in vcat(sp.placed_segments,
+                       PathGeometry.PlacedSegment[sp.jumpto_placed])
+            nick = PathGeometry.segment_nickname(ps.segment)
+            isnothing(nick) && continue
+            s_lo = sp_off +
+                Float64(PathGeometry._qc_nominalize(ps.s_offset_eff))
+            s_hi = s_lo + Float64(PathGeometry._qc_nominalize(
+                PathGeometry.arc_length(ps.segment)))
+            s_a = max(s_lo, s1f)
+            s_b = min(s_hi, s2f)
+            s_a >= s_b - 1e-15 && continue
+            s_mid = (s_a + s_b) / 2
+            fr = PathGeometry.frame(path, s_mid)
+            r = collect(fr.position); N = collect(fr.normal)
+            nn = norm(N)
+            if nn >= 1e-12
+                N ./= nn
+                r .+= nudge .* N
+            end
+            push!(label_x, r[1]); push!(label_y, r[2]); push!(label_z, r[3])
+            push!(label_strs, nick)
+        end
+    end
+    return (; label_x, label_y, label_z, label_strs)
+end
+
 function write_path_geometry_plot3d(
-    path::PathGeometry.SubpathBuilt,
+    path::Union{PathGeometry.SubpathBuilt, PathGeometry.PathBuilt},
     s1::Real,
     s2::Real;
     fidelity::Float64 = 3.0,
@@ -171,69 +309,13 @@ function write_path_geometry_plot3d(
 
     s1f = Float64(s1)
     s2f = Float64(s2)
-    seg_bx = Float64[]
-    seg_by = Float64[]
-    seg_bz = Float64[]
-    seg_bound_hover = String[]
-    # Boundary markers between adjacent placed (interior) segments.
-    placed = path.placed_segments
-    if length(placed) >= 2
-        for i in 2:length(placed)
-            sj = placed[i].s_offset_eff
-            if sj < s1f || sj > s2f
-                continue
-            end
-            p = PathGeometry.position(path, sj)
-            push!(seg_bx, p[1])
-            push!(seg_by, p[2])
-            push!(seg_bz, p[3])
-            push!(
-                seg_bound_hover,
-                "Segment boundary<br>s = $(sj) m<br>x, y, z = $(p[1]), $(p[2]), $(p[3])"
-            )
-        end
-    end
-    # Boundary marker between the last interior segment and the terminal connector.
-    sj_t = path.jumpto_placed.s_offset_eff
-    if sj_t >= s1f && sj_t <= s2f
-        p = PathGeometry.position(path, sj_t)
-        push!(seg_bx, p[1])
-        push!(seg_by, p[2])
-        push!(seg_bz, p[3])
-        push!(
-            seg_bound_hover,
-            "Terminal connector start<br>s = $(sj_t) m<br>x, y, z = $(p[1]), $(p[2]), $(p[3])"
-        )
-    end
-
-    label_x = Float64[]
-    label_y = Float64[]
-    label_z = Float64[]
-    label_strs = String[]
     nudge = Float64(segment_label_nudge_frac) * diag
-    # Iterate interior placed segments + the terminal connector.
-    for ps in vcat(placed, PathGeometry.PlacedSegment[path.jumpto_placed])
-        nick = PathGeometry.segment_nickname(ps.segment)
-        isnothing(nick) && continue
-        s_lo = ps.s_offset_eff
-        s_hi = s_lo + PathGeometry.arc_length(ps.segment)
-        s_a = max(s_lo, s1f)
-        s_b = min(s_hi, s2f)
-        s_a >= s_b - 1e-15 && continue
-        s_mid = (s_a + s_b) / 2
-        fr = PathGeometry.frame(path, s_mid)
-        r = collect(fr.position)
-        N = collect(fr.normal)
-        nn = norm(N)
-        if nn >= 1e-12
-            N ./= nn
-            r .+= nudge .* N
-        end
-        push!(label_x, r[1])
-        push!(label_y, r[2])
-        push!(label_z, r[3])
-        push!(label_strs, nick)
-    end
+    bnd = _collect_segment_boundaries(path, s1f, s2f)
+    seg_bx = bnd.seg_bx; seg_by = bnd.seg_by; seg_bz = bnd.seg_bz
+    seg_bound_hover = bnd.seg_bound_hover
+    lbl = _collect_segment_labels(path, s1f, s2f, nudge)
+    label_x = lbl.label_x; label_y = lbl.label_y; label_z = lbl.label_z
+    label_strs = lbl.label_strs
 
     title_html = replace(replace(title, "&" => "&amp;"), "<" => "&lt;")
 

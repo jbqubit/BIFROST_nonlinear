@@ -1781,3 +1781,58 @@ function sample_uniform(p::PathBuilt; n::Int = 256)
     ss = range(0.0, s_end(p); length = n)
     return sample(p, ss)
 end
+
+"""
+    sample_path(p::PathBuilt, s1, s2; fidelity = 1.0) → PathSample
+
+Adaptive sampling of a `PathBuilt` over `[s1, s2]`. Walks each constituent
+`SubpathBuilt`'s clipped interval and concatenates samples with adjacent-
+duplicate suppression at Subpath boundaries. Sample positions/tangents/etc.
+are taken via `frame(p, s)` so they live in the global frame.
+"""
+function sample_path(p::PathBuilt, s1::Real, s2::Real; fidelity::Float64 = 1.0)
+    @assert s2 > s1 "sample_path: require s2 > s1"
+    @assert fidelity > 0.0 "sample_path: fidelity must be positive"
+
+    s_lo = Float64(_qc_nominalize(s1))
+    s_hi = Float64(_qc_nominalize(s2))
+
+    offs = s_offsets(p)
+    all_s = Float64[]
+    for i in eachindex(p.subpaths)
+        L = Float64(_qc_nominalize(arc_length(p.subpaths[i])))
+        a = max(s_lo, offs[i])
+        b = min(s_hi, offs[i] + L)
+        b <= a && continue
+        ps = sample_path(p.subpaths[i], a - offs[i], b - offs[i]; fidelity = fidelity)
+        for sm in ps.samples
+            sg = sm.s + offs[i]
+            if isempty(all_s) || !(sg ≈ all_s[end])
+                push!(all_s, sg)
+            end
+        end
+    end
+
+    if isempty(all_s)
+        all_s = [s_lo, s_hi]
+    elseif length(all_s) == 1
+        push!(all_s, s_hi)
+    end
+
+    n = length(all_s)
+    samples = Vector{Sample}(undef, n)
+    for i in eachindex(all_s)
+        fr = frame(p, all_s[i])
+        samples[i] = Sample(
+            all_s[i],
+            fr.position,
+            fr.tangent,
+            fr.normal,
+            fr.binormal,
+            fr.curvature,
+            fr.geometric_torsion,
+            fr.material_twist,
+        )
+    end
+    return PathSample(samples, s_lo, s_hi, n)
+end
