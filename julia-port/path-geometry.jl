@@ -869,7 +869,7 @@ function build(sub::Subpath)
     chord     = norm(p1_local)
     t_hat_out = isnothing(sub.jumpto_incoming_tangent) ?
         (chord > 1e-15 ? p1_local ./ chord : [0.0, 0.0, 1.0]) :
-        normalize(frame' * normalize(collect(sub.jumpto_incoming_tangent)))
+        _safe_normalize(frame' * _safe_normalize(collect(sub.jumpto_incoming_tangent)))
     K0_local = frame' * K_in_global
     K1_local = isnothing(sub.jumpto_incoming_curvature) ?
         zeros(eltype(K0_local), 3) :
@@ -885,7 +885,8 @@ function build(sub::Subpath)
 
     # Resolve twists local to this Subpath. If the first twist anchor has
     # is_continuous=true it is left pending for the PathBuilt build to fix up.
-    resolved, pending = _resolve_twists_subpath_local(placed, connector, s_eff,
+    resolved, pending = _resolve_twists_subpath_local(placed, connector,
+                                                      Float64(_qc_nominalize(s_eff)),
                                                       Float64(_qc_nominalize(s_end_eff)))
     return SubpathBuilt(sub, placed, connector, jumpto_placed, resolved, pending)
 end
@@ -1415,6 +1416,10 @@ function total_frame_rotation(
             # τ_geom = 0
         elseif seg isa HelixSegment
             τ_total += geometric_torsion(seg, zero(L_seg)) * (b_loc - a_loc)
+        elseif seg isa QuinticConnector
+            # QuinticConnector returns geometric_torsion(::QuinticConnector, ::Real)
+            # = 0.0 identically (planar treatment); skip without QuadGK so the
+            # MCM Particles arc-length bounds don't trigger a kronrod method error.
         else
             val, _ = QuadGK.quadgk(s -> geometric_torsion(seg, s), a_loc, b_loc;
                                    rtol = rtolf, atol = atolf)

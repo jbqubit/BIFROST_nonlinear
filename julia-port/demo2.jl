@@ -28,6 +28,145 @@ if !isdefined(Main, :_sample_segment_xyz)
     include(joinpath(@__DIR__, "demo1.jl"))
 end
 
+# ---------------------------------------------------------------------
+# Compatibility proxy: lets demo closures keep using the old
+# `PathSpecBuilder()` + `straight!/bend!/jumpby!/jumpto!` + `build(spec)`
+# idiom while producing a SubpathBuilt or PathBuilt under the new API.
+#
+# Each `jumpto!` call seals the current Subpath and starts a new one at
+# the just-sealed endpoint; the proxy trial-builds to copy the actual end
+# tangent into the next Subpath's `start_outgoing_tangent` so the
+# PathBuilt conformity check passes by construction.
+#
+# Old kwargs are translated:
+#   destination= → point=
+#   tangent=     → incoming_tangent=
+#   curvature_out= → incoming_curvature=
+#
+# `meta` on the terminal jumpto is discarded — the new architecture's
+# terminal connector is structural and carries no meta.
+# ---------------------------------------------------------------------
+
+mutable struct _PathProxy
+    subpaths::Vector{SubpathBuilder}
+    current::Union{SubpathBuilder, Nothing}
+end
+
+function PathSpecBuilder()
+    sb = SubpathBuilder(); start!(sb)
+    return _PathProxy(SubpathBuilder[], sb)
+end
+
+# Forward interior-segment builders to the current Subpath.
+function straight!(p::_PathProxy; kwargs...)
+    @assert !isnothing(p.current) "PathSpecBuilder proxy already finalized"
+    straight!(p.current; kwargs...)
+    return p
+end
+function bend!(p::_PathProxy; kwargs...)
+    @assert !isnothing(p.current) "PathSpecBuilder proxy already finalized"
+    bend!(p.current; kwargs...)
+    return p
+end
+function helix!(p::_PathProxy; kwargs...)
+    @assert !isnothing(p.current) "PathSpecBuilder proxy already finalized"
+    helix!(p.current; kwargs...)
+    return p
+end
+function catenary!(p::_PathProxy; kwargs...)
+    @assert !isnothing(p.current) "PathSpecBuilder proxy already finalized"
+    catenary!(p.current; kwargs...)
+    return p
+end
+function jumpby!(p::_PathProxy; kwargs...)
+    @assert !isnothing(p.current) "PathSpecBuilder proxy already finalized"
+    jumpby!(p.current; kwargs...)
+    return p
+end
+
+# jumpto! seals the current Subpath and starts a new one.
+function jumpto!(p::_PathProxy;
+                 destination = nothing,
+                 point = nothing,
+                 tangent = nothing,
+                 incoming_tangent = nothing,
+                 curvature_out = nothing,
+                 incoming_curvature = nothing,
+                 min_bend_radius = nothing,
+                 conserve_path_length::Bool = false,
+                 meta = AbstractMeta[])
+    @assert !isnothing(p.current) "PathSpecBuilder proxy already finalized"
+    pt = isnothing(destination) ? point : destination
+    @assert !isnothing(pt) "jumpto!: must provide destination or point"
+    inc_tan_user  = isnothing(tangent)       ? incoming_tangent   : tangent
+    inc_curv_user = isnothing(curvature_out) ? incoming_curvature : curvature_out
+
+    jumpto!(p.current;
+        point                = pt,
+        incoming_tangent     = inc_tan_user,
+        incoming_curvature   = inc_curv_user,
+        min_bend_radius      = min_bend_radius,
+        conserve_path_length = conserve_path_length,
+    )
+
+    # Use the user-supplied jumpto_point exactly for the next Subpath's
+    # start_point so the conformity check passes despite the connector
+    # solver's finite tolerance (~1e-6 rel).
+    pt_tup = (Float64(pt[1]), Float64(pt[2]), Float64(pt[3]))
+
+    # For the start tangent: if the user supplied an explicit tangent, use
+    # that (it matches the jumpto_incoming_tangent exactly). Otherwise
+    # trial-build to read the actual connector exit tangent, which equals
+    # the chord direction.
+    sealed = Subpath(p.current)
+    sealed_built = build(sealed)
+    out_tan = if isnothing(inc_tan_user)
+        end_tan_global = collect(end_tangent(sealed_built))
+        (Float64(end_tan_global[1]),
+         Float64(end_tan_global[2]),
+         Float64(end_tan_global[3]))
+    else
+        (Float64(inc_tan_user[1]),
+         Float64(inc_tan_user[2]),
+         Float64(inc_tan_user[3]))
+    end
+
+    push!(p.subpaths, p.current)
+
+    next = SubpathBuilder()
+    out_curv = isnothing(inc_curv_user) ?
+        (0.0, 0.0, 0.0) :
+        (Float64(inc_curv_user[1]),
+         Float64(inc_curv_user[2]),
+         Float64(inc_curv_user[3]))
+    start!(next;
+        point              = pt_tup,
+        outgoing_tangent   = out_tan,
+        outgoing_curvature = out_curv,
+    )
+    p.current = next
+    return p
+end
+
+# build(::_PathProxy): seal the trailing Subpath at its natural exit (if
+# it has any segments), then assemble. Returns SubpathBuilt for one Subpath
+# or PathBuilt for many.
+function build(p::_PathProxy)
+    @assert !isnothing(p.current) "build: proxy already finalized"
+    if !isempty(p.current.segments)
+        _seal_natural!(p.current)
+        push!(p.subpaths, p.current)
+    end
+    p.current = nothing  # mark finalized
+
+    if isempty(p.subpaths)
+        error("build(::_PathProxy): no segments authored")
+    end
+
+    subs = [Subpath(sb) for sb in p.subpaths]
+    return length(subs) == 1 ? build(subs[1]) : build(subs)
+end
+
 # =====================================================================
 # 2D GROUP — inline-SVG scenes
 # =====================================================================
@@ -47,7 +186,8 @@ end
 # (xs, zs, is_red) tuples — one per segment.
 function _sample_path_2d(path, red_indices::Vector{Int})
     rows = Tuple{Vector{Float64}, Vector{Float64}, Bool}[]
-    for i in 1:length(path.placed_segments)
+    n = length(_all_placed(path))
+    for i in 1:n
         s = _sample_segment_xyz(path, i)
         push!(rows, (s.x, s.z, i in red_indices))
     end
@@ -83,7 +223,7 @@ function _jump_row_svg(output::AbstractString, title::AbstractString;
             xmin = min(xmin, minimum(xs2)); xmax = max(xmax, maximum(xs2))
             zmin = min(zmin, minimum(zs));  zmax = max(zmax, maximum(zs))
         end
-        p0 = position(path, path.spec.s_start)
+        p0 = position(path, 0.0)
         push!(starts, (Float64(p0[1]) + dx, Float64(p0[3])))
         # Label sits just above each variant.
         x_label = dx
@@ -193,32 +333,72 @@ function _path(f::Function; red::Vector{Int} = Int[])
     return (build(spec), red)
 end
 
-# Build a path one segment at a time, stopping at the first segment whose
+# Build a path one builder call at a time, trapping the first call whose
 # `build()` throws. Returns `(partial_path_or_nothing, n_built, error_or_nothing)`.
 # Used by `min_bend_radius` demos to display a partial path with the
-# infeasible segment missing.
+# infeasible step missing.
 #
-# `f(spec)` should call atomic builders (straight!, bend!, jumpby!, etc.).
-# Each call must append exactly one segment to `spec.segments`; we trial-
-# build after every append and roll back the last segment if it fails.
+# Each `f(probe)` invocation should call atomic builders. We replay the call
+# log step-by-step, building a fresh proxy each iteration and stopping at
+# the first failure.
 function _build_with_failure(f::Function)
-    probe_spec = PathSpecBuilder()
-    f(probe_spec)
-    declared = copy(probe_spec.segments)
+    # Record builder calls via a recorder proxy.
+    recorded = Vector{Tuple{Symbol, Tuple, Dict{Symbol, Any}}}()
+    rec = _RecorderProxy(recorded)
+    f(rec)
 
-    spec = PathSpecBuilder()
+    n = length(recorded)
     last_good = nothing
-    for (i, seg) in enumerate(declared)
-        push!(spec.segments, seg)
+    last_n = 0
+    for i in 1:n
+        # Replay the first i calls.
+        spec = PathSpecBuilder()
+        ok = true
+        local err
+        for j in 1:i
+            (sym, args, kw) = recorded[j]
+            try
+                _replay_call(spec, sym, args, kw)
+            catch e
+                ok = false
+                err = e
+                break
+            end
+        end
+        if !ok
+            return (last_good, last_n, err)
+        end
         try
             last_good = build(spec)
+            last_n = i
         catch e
-            pop!(spec.segments)  # discard the failing segment
-            partial = isempty(spec.segments) ? nothing : build(spec)
-            return (partial, i - 1, e)
+            return (last_good, last_n, e)
         end
     end
-    return (last_good, length(declared), nothing)
+    return (last_good, n, nothing)
+end
+
+# Recorder proxy: captures (symbol, args, kwargs) for each builder call.
+mutable struct _RecorderProxy
+    log::Vector{Tuple{Symbol, Tuple, Dict{Symbol, Any}}}
+end
+straight!(p::_RecorderProxy; kwargs...) = (push!(p.log, (:straight, (), Dict{Symbol,Any}(kwargs))); p)
+bend!(p::_RecorderProxy; kwargs...)     = (push!(p.log, (:bend,     (), Dict{Symbol,Any}(kwargs))); p)
+helix!(p::_RecorderProxy; kwargs...)    = (push!(p.log, (:helix,    (), Dict{Symbol,Any}(kwargs))); p)
+catenary!(p::_RecorderProxy; kwargs...) = (push!(p.log, (:catenary, (), Dict{Symbol,Any}(kwargs))); p)
+jumpby!(p::_RecorderProxy; kwargs...)   = (push!(p.log, (:jumpby,   (), Dict{Symbol,Any}(kwargs))); p)
+jumpto!(p::_RecorderProxy; kwargs...)   = (push!(p.log, (:jumpto,   (), Dict{Symbol,Any}(kwargs))); p)
+
+function _replay_call(spec::_PathProxy, sym::Symbol, args::Tuple, kw::Dict{Symbol, Any})
+    f = sym === :straight ? straight! :
+        sym === :bend     ? bend! :
+        sym === :helix    ? helix! :
+        sym === :catenary ? catenary! :
+        sym === :jumpby   ? jumpby! :
+        sym === :jumpto   ? jumpto! :
+        error("unknown builder symbol $sym")
+    f(spec; kw...)
+    return spec
 end
 
 # =====================================================================
@@ -369,7 +549,7 @@ function demo_jumpto_2d_min_radius(;
             straight!(spec; length = 1.0)
         end
         partial === nothing && continue
-        red   = length(partial.placed_segments) >= 2 ? [2] : Int[]
+        red   = length(_all_placed(partial)) >= 2 ? [2] : Int[]
         label = err === nothing ?
                 "mbr = $(mbr)" :
                 "mbr = $(mbr) (infeasible — $(n_built)/3 built)"
@@ -415,7 +595,7 @@ const _DEMO2_T_REF = 297.15
 # per segment with `.x` and `.z` arrays.
 function _demo2_path_segments_xz(path)
     return [_sample_segment_xyz(path, i)
-            for i in 1:length(path.placed_segments)]
+            for i in 1:length(_all_placed(path))]
 end
 
 # Render baseline (black) and modified (red) overlay on a light background.
@@ -563,7 +743,7 @@ function demo_modify_jumpby_drift_2d(;
     jumpby!(spec; delta = (0.0, 0.0, 0.8))
     straight!(spec; length = 1)
     modified = modify(Fiber(build(spec);
-        cross_section = _DEMO2_MODIFY_XS, T_ref_K = _DEMO2_T_REF))
+        cross_section = _DEMO2_MODIFY_XS, T_ref_K = _DEMO2_T_REF)).path
 
     out = joinpath(output_dir, "modify-jumpby-drift-2d.html")
     path = _modify_overlay_svg(out, desc_short;
@@ -614,7 +794,7 @@ function demo_modify_jumpto_anchor_2d(;
     straight!(spec; length = 0.3)
     jumpto!(spec; destination = destination)
     modified = modify(Fiber(build(spec);
-        cross_section = _DEMO2_MODIFY_XS, T_ref_K = _DEMO2_T_REF))
+        cross_section = _DEMO2_MODIFY_XS, T_ref_K = _DEMO2_T_REF)).path
 
     out = joinpath(output_dir, "modify-jumpto-anchor-2d.html")
     path = _modify_overlay_svg(out, desc_short;
@@ -630,55 +810,38 @@ end
 function demo_modify_jumpto_anchor_thermal_2d(;
     output_dir::AbstractString = joinpath(@__DIR__, "..", "output"),
 )
-    desc_short = "Meta + :T_K on helix + JumpTo: connector arc tracks τ·baseline"
-    desc_long  = "Helix + JumpTo with `:T_K` and `:radius` on the helix. " *
-                 "With the JumpTo anchor active, the connector's arc " *
-                 "length is constrained to `τ·baseline_L` while its " *
-                 "endpoints stay pinned (TD001 length-constrained " *
-                 "resolve)."
+    desc_short = "Meta + :T_K + JumpTo with conserve_path_length: total Subpath length pinned"
+    desc_long  = "Lead-in straight with `:T_K`, sealed by a transverse " *
+                 "JumpTo carrying `conserve_path_length=true`. The " *
+                 "transverse chord leaves the connector with an " *
+                 "appreciable arc-length-vs-chord margin, so the " *
+                 "connector can absorb the upstream thermal expansion " *
+                 "while keeping the destination pinned and the *total* " *
+                 "Subpath arc length matched to the baseline."
 
-    PG = PathGeometry()
-    
-    # initial curve with no meta ΔT
+    α_lin = cte(_DEMO2_MODIFY_XS.cladding_material, _DEMO2_T_REF)
+    # 5% length perturbation. The transverse-chord geometry has plenty of
+    # connector slack so this stays feasible.
+    ΔT = 0.05 / α_lin
+    mdt = [MCMadd(:T_K, ΔT)]
+
+    # Geometry: a 0.5 m straight followed by a transverse JumpTo to
+    # (1.0, 0, 0.5) with outgoing tangent (1, 0, 0). The connector is
+    # ~1.6 m long for a chord of ~1.0 m → ~60% slack to absorb expansion.
+    destination = (1.0, 0.0, 0.5)
+
     spec = PathSpecBuilder()
-    straight!(spec; length = 1)
-    bend!(spec; radius = 0.5, angle = π/2, axis_angle = 0.0)
-    bend!(spec; radius = 0.5, angle = π/2, axis_angle = π)
-    straight!(spec; length = 1)
-    baseline = build(spec)
-    baseline_length = PG.path_length(baseline)
-    baseline_end = PG.end_point(baseline)
-
-    α_lin   = cte(_DEMO2_MODIFY_XS.cladding_material, _DEMO2_T_REF)
-    ΔT_5pct = 0.05 / α_lin
-    mdt = [MCMadd(:T_K, ΔT_5pct)]
-
-    # warm curve with ΔT
-    spec = PathSpecBuilder()
-    straight!(spec; length = 1, meta = mdt)
-    bend!(spec; radius = 0.5, angle = π/2, axis_angle = 0.0, meta = mdt)
-    bend!(spec; radius = 0.5, angle = π/2, axis_angle = π, meta = mdt)
-    straight!(spec; length = 1, meta = mdt)
-    warm = build(spec)
-    warm_length = PG.path_length(warm)
-    warm_end = PG.end_point(warm)
-
-    # warm curve with ΔT with connstrained JumpTo
-    spec = PathSpecBuilder()
-    straight!(spec; length = 1, meta = mdt)
-    bend!(spec; radius = 0.5, angle = π/2, axis_angle = 0.0, meta = mdt)
-    bend!(spec; radius = 0.5, angle = π/2, axis_angle = π, meta = mdt)
-    jumpto!(spec; destination = warm_end, tangent = (0.0, 0.0, 1.0), min_bend_radius = 0.30, meta = mdt)   
-    warm = build(spec)
-    warm_length = PG.path_length(warm)
-    warm_end = PG.end_point(warm)
-
-
-    
-
     straight!(spec; length = 0.5)
+    jumpto!(spec; destination = destination, tangent = (1.0, 0.0, 0.0),
+            conserve_path_length = true)
+    baseline = build(spec)
+
+    spec = PathSpecBuilder()
+    straight!(spec; length = 0.5, meta = mdt)
+    jumpto!(spec; destination = destination, tangent = (1.0, 0.0, 0.0),
+            conserve_path_length = true)
     modified = modify(Fiber(build(spec);
-        cross_section = _DEMO2_MODIFY_XS, T_ref_K = _DEMO2_T_REF))
+        cross_section = _DEMO2_MODIFY_XS, T_ref_K = _DEMO2_T_REF)).path
 
     out = joinpath(output_dir, "modify-jumpto-anchor-thermal-2d.html")
     path = _modify_overlay_svg(out, desc_short;
@@ -713,7 +876,7 @@ function _jump_row_html(output::AbstractString, title::AbstractString;
         path, red_spec = build_fn()
         red_indices = red_spec isa Integer ? Int[red_spec] : Int.(collect(red_spec))
         dx = (k - 1) * variant_spacing
-        n_segs = length(path.placed_segments)
+        n_segs = length(_all_placed(path))
         for i in 1:n_segs
             s     = _sample_segment_xyz(path, i)
             xs    = s.x .+ dx
@@ -731,7 +894,7 @@ function _jump_row_html(output::AbstractString, title::AbstractString;
   showlegend: $(i == 1)
 }""")
         end
-        p0 = position(path, path.spec.s_start)
+        p0 = position(path, 0.0)
         push!(start_xs, Float64(p0[1]) + dx)
         push!(start_ys, Float64(p0[2]))
         push!(start_zs, Float64(p0[3]))
@@ -1320,6 +1483,7 @@ function demo2_all(; index_output::AbstractString = joinpath(@__DIR__, "..", "ou
 </head>
 <body>
   <nav class="index-nav">
+    <a href="demo-path-geometry-index.html">demo-path-geometry</a>
     <a href="demo1.html">demo1</a>
     <a href="demo2.html">demo2</a>
     <a href="demo3mcm.html">demo3mcm</a>
@@ -1343,7 +1507,7 @@ function demo2_all(; index_output::AbstractString = joinpath(@__DIR__, "..", "ou
             for (eg, title, path, desc) in entries
                 eg == g || continue
                 println(io, "    <li>")
-                println(io, "      <a href=\"$(path)\">$(title)</a>")
+                println(io, "      <a href=\"$(basename(path))\">$(title)</a>")
                 println(io, "      <p class=\"desc\">$(desc)</p>")
                 println(io, "    </li>")
             end

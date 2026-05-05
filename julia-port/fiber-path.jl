@@ -9,24 +9,24 @@ end
 Fiber assembly on top of `path-geometry.jl`.
 
 High-level authoring happens in `path-geometry.jl`:
-- build piecewise geometry with `PathSpecBuilder`
-- compile it to `PathSpecCached` with `build(path_spec)`
+- build a Subpath spec with `SubpathBuilder` (sealed by `start!` and `jumpto!`)
+- compile to `SubpathBuilt` with `build(sb)`; multi-Subpath bundles compile
+  to `PathBuilt` via `build([sub1, sub2, ...])`
 - bind geometry to a cross section with `Fiber(path; cross_section, T_ref_K)`
 
 `Fiber` is the compiled query object consumed downstream by `path-integral.jl`.
 It owns:
-- the immutable built `PathSpecCached`
+- the immutable built `SubpathBuilt` or `PathBuilt`
 - the `FiberCrossSection`
-- a single reference temperature `T_ref_K` that is the reference for both the
-  path geometry (segment lengths/radii valid at `T_ref_K`) and the cross-section
-  dimensions (core/cladding diameters valid at `T_ref_K`).
-- the fiber domain `[s_start, s_end]`
+- a single reference temperature `T_ref_K` (reference for path geometry and
+  cross-section dimensions)
+- the fiber domain `[s_start, s_end]` — a `SubpathBuilt`'s domain starts at
+  0 and runs to `arc_length(path)`
 
 Operating wavelength `λ_m` is NOT stored on `Fiber`; it is an argument to
 `generator_K` / `generator_Kω` (and to `propagate_fiber` in `path-integral.jl`),
 so the same `Fiber` can be queried at multiple wavelengths. Temperature is
-fixed at `T_ref_K` for all queries; per-segment temperature overrides will be
-introduced later via segment metadata (MetaList / MCMadd), not via a T(s) closure.
+fixed at `T_ref_K` for all queries.
 
 # ----------------------------
 # Example Use
@@ -41,20 +41,21 @@ xs = FiberCrossSection(
     model_number = "SMF-like"
 )
 
-path_spec = PathSpecBuilder()
-straight!(path_spec; length = 5.0)
-bend!(path_spec;
+sb = SubpathBuilder(); start!(sb)
+straight!(sb; length = 5.0)
+bend!(sb;
     radius = 4.458, angle = π / 2, axis_angle = 0.0,
     meta = [
         Nickname("90° bend"),
         MCMadd(:T_K, Normal(0.0, 2.0)),   # +ΔT_K ~ N(0, 2 K) on this segment
     ],
 )
-straight!(path_spec; length = 8.0)
-# twist!(path_spec; s_start = 0.0, length = 13.0, rate = 0.15)  # TODO: twist refactor
+straight!(sb; length = 8.0)
+# Seal the Subpath at the natural exit point; tests/demos commonly use a
+# helper to compute the natural exit.
+jumpto!(sb; point = (..., ..., ...))
 
-path = build(path_spec)
-fiber = Fiber(path; cross_section = xs, T_ref_K = 297.15)
+fiber = Fiber(build(sb); cross_section = xs, T_ref_K = 297.15)
 
 # Operating wavelength is supplied per query; temperature is f.T_ref_K.
 K  = generator_K(fiber, 1550e-9)
@@ -65,16 +66,15 @@ if !isdefined(Main, :DEFAULT_T_REF_K)
     const DEFAULT_T_REF_K = 297.15
 end
 
-function bend_components(path::PathSpecCached, s::Real)
+# Path-backed fibers use the path's local normal/binormal frame. The bend
+# axis is the curvature normal, so the local transverse bend components are
+# (κ, 0) in that frame. Frame rotation enters through the path twist rate.
+function bend_components(path::Union{SubpathBuilt, PathBuilt}, s::Real)
     κ = curvature(path, s)
     if κ == zero(κ)
         z = zero(κ)
         return (kx = z, ky = z, k2 = z)
     end
-
-    # Path-backed fibers use the path's local normal/binormal frame. The bend
-    # axis is the curvature normal, so the local transverse bend components are
-    # (κ, 0) in that frame. Frame rotation enters through the path twist rate.
     z = zero(κ)
     return (kx = κ, ky = z, k2 = κ * κ)
 end
@@ -88,11 +88,13 @@ struct Fiber{P,T,S}
 end
 
 function Fiber(
-    path::PathSpecCached;
+    path::Union{SubpathBuilt, PathBuilt};
     cross_section::FiberCrossSection,
     T_ref_K = DEFAULT_T_REF_K,
 )
-    s_start, s_end = promote(path.spec.s_start, path.s_end)
+    s_start_val = 0.0
+    s_end_val   = Float64(_qc_nominalize(arc_length(path)))
+    s_start, s_end = promote(s_start_val, s_end_val)
     @assert s_end > s_start "Fiber requires s_end > s_start"
     return Fiber{typeof(path),typeof(T_ref_K),typeof(s_start)}(
         path,
@@ -103,9 +105,8 @@ function Fiber(
     )
 end
 
-# TODO: twist refactor — material_twist is currently a stub; restore once the
-# per-segment-meta twist subsystem lands.
-path_twist_rate(path::PathSpecCached, s::Real) = geometric_torsion(path, s) + material_twist(path, s)
+path_twist_rate(path::Union{SubpathBuilt, PathBuilt}, s::Real) =
+    geometric_torsion(path, s) + material_twist(path, s)
 
 fiber_path(f::Fiber) = f.path
 

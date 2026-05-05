@@ -1,7 +1,7 @@
 using Test
 using LinearAlgebra
 
-if !isdefined(Main, :PathSpecCached)
+if !isdefined(Main, :SubpathBuilt)
     include("../path-geometry.jl")
 end
 if !isdefined(Main, :Fiber)
@@ -30,47 +30,85 @@ const _MODIFY_ALPHA_LIN  = cte(_MODIFY_TEST_XS.cladding_material, _MODIFY_TEST_T
 _ΔT_for(α) = (α - 1) / _MODIFY_ALPHA_LIN
 _mcm(α)    = [MCMadd(:T_K, _ΔT_for(α))]
 
+# Trial-build a SubpathBuilder, read the natural exit position/tangent, and
+# seal the builder with a jumpto! at that point. Used by tests whose paths
+# don't naturally have a global-anchored endpoint.
+function _seal_natural!(sb::SubpathBuilder)
+    @assert isnothing(sb.jumpto_point) "_seal_natural!: builder already sealed"
+    tmp = deepcopy(sb)
+    jumpto!(tmp; point = (1e9, 1e9, 1e9))
+    b_tmp = build(Subpath(tmp))
+    s_end_int = Float64(_qc_nominalize(b_tmp.jumpto_placed.s_offset_eff))
+    if s_end_int <= 0.0
+        natural_pos = collect(sb.start_point::NTuple{3, Float64})
+        natural_tan = collect(sb.start_outgoing_tangent::NTuple{3, Float64})
+    else
+        natural_pos = collect(position(b_tmp, s_end_int))
+        natural_tan = collect(tangent(b_tmp, s_end_int))
+    end
+    jumpto!(sb;
+        point = (natural_pos[1], natural_pos[2], natural_pos[3]),
+        incoming_tangent = (natural_tan[1], natural_tan[2], natural_tan[3]),
+    )
+    return sb
+end
+
+# Build a sealed SubpathBuilt from a do-block that authors interior
+# segments. Seals at the natural exit if no jumpto! was called.
+function _build_path(f::Function)
+    sb = SubpathBuilder(); start!(sb)
+    f(sb)
+    if isnothing(sb.jumpto_point)
+        _seal_natural!(sb)
+    end
+    return build(Subpath(sb))
+end
+
 _modify_fiber_path(path) = modify(Fiber(path;
-    cross_section = _MODIFY_TEST_XS, T_ref_K = _MODIFY_TEST_T_REF))
+    cross_section = _MODIFY_TEST_XS, T_ref_K = _MODIFY_TEST_T_REF)).path
 
 # -----------------------------------------------------------------------
-# Uniform thermal shrinkage via :T_K
+# Uniform thermal scaling via :T_K
 # -----------------------------------------------------------------------
 
 @testset "modify — :T_K uniform scales path length" begin
-    # T-PHYSICS: uniform α on every segment multiplies total arc length by α
-    spec = PathSpecBuilder()
-    straight!(spec; length = 1.0, meta = _mcm(1.05))
-    bend!(spec; radius = 0.1, angle = π / 2, meta = _mcm(1.05))
-    path = build(spec)
-
+    # T-PHYSICS: uniform α on every segment multiplies total interior arc
+    # length by α. The terminal connector (degenerate) is essentially
+    # zero-length; check arc length of the interior segments only.
+    α = 1.05
+    path = _build_path() do sb
+        straight!(sb; length = 1.0, meta = _mcm(α))
+        bend!(sb; radius = 0.1, angle = π / 2, meta = _mcm(α))
+    end
+    interior_baseline = sum(arc_length(ps.segment) for ps in path.placed_segments)
     path_scaled = _modify_fiber_path(path)
-    @test path_length(path_scaled) ≈ path_length(path) * 1.05 atol = 1e-10
+    interior_scaled = sum(arc_length(ps.segment)
+                          for ps in path_scaled.placed_segments)
+    @test interior_scaled ≈ α * interior_baseline atol = 1e-9
 end
 
 @testset "modify — :T_K preserves joint tangent continuity" begin
     # T-GUARDRAIL
-    spec = PathSpecBuilder()
-    straight!(spec; length = 0.5, meta = _mcm(0.98))
-    bend!(spec; radius = 0.1, angle = π / 3, meta = _mcm(0.98))
-    path = _modify_fiber_path(build(spec))
-
-    ps = path.placed_segments
+    path = _build_path() do sb
+        straight!(sb; length = 0.5, meta = _mcm(0.98))
+        bend!(sb; radius = 0.1, angle = π / 3, meta = _mcm(0.98))
+    end
+    path_s = _modify_fiber_path(path)
+    ps = path_s.placed_segments
     for i in 1:(length(ps) - 1)
-        s_joint = ps[i + 1].s_offset_eff
-        T_before = tangent(path, s_joint - 1e-9)
-        T_after  = tangent(path, s_joint + 1e-9)
+        s_joint = Float64(_qc_nominalize(ps[i + 1].s_offset_eff))
+        T_before = tangent(path_s, s_joint - 1e-9)
+        T_after  = tangent(path_s, s_joint + 1e-9)
         @test norm(T_before - T_after) < 1e-6
     end
 end
 
 @testset "modify — :T_K on BendSegment preserves angle, scales radius" begin
     # T-PHYSICS: α scales R_eff = α·R; swept angle preserved.
-    spec = PathSpecBuilder()
-    bend!(spec; radius = 0.1, angle = π / 3, axis_angle = 0.0, meta = _mcm(1.1))
-    path1 = build(spec)
+    path1 = _build_path() do sb
+        bend!(sb; radius = 0.1, angle = π / 3, axis_angle = 0.0, meta = _mcm(1.1))
+    end
     path2 = _modify_fiber_path(path1)
-
     seg1 = path1.placed_segments[1].segment
     seg2 = path2.placed_segments[1].segment
     @test seg2.radius ≈ 1.1 * seg1.radius
@@ -80,11 +118,10 @@ end
 
 @testset "modify — :T_K on CatenarySegment scales arc length and parameter a" begin
     # T-PHYSICS
-    spec = PathSpecBuilder()
-    catenary!(spec; a = 0.2, length = 1.0, meta = _mcm(0.95))
-    path = build(spec)
+    path = _build_path() do sb
+        catenary!(sb; a = 0.2, length = 1.0, meta = _mcm(0.95))
+    end
     path_s = _modify_fiber_path(path)
-
     seg = path.placed_segments[1].segment
     seg_s = path_s.placed_segments[1].segment
     @test seg_s.a ≈ 0.95 * seg.a
@@ -93,11 +130,10 @@ end
 end
 
 @testset "modify — :T_K on HelixSegment scales arc length but preserves turns" begin
-    spec = PathSpecBuilder()
-    helix!(spec; radius = 0.03, pitch = 0.01, turns = 2.0, meta = _mcm(0.9))
-    path = build(spec)
+    path = _build_path() do sb
+        helix!(sb; radius = 0.03, pitch = 0.01, turns = 2.0, meta = _mcm(0.9))
+    end
     path_s = _modify_fiber_path(path)
-
     seg = path.placed_segments[1].segment
     seg_s = path_s.placed_segments[1].segment
     @test seg_s.turns == seg.turns
@@ -106,13 +142,15 @@ end
     @test arc_length(seg_s) ≈ 0.9 * arc_length(seg)
 end
 
-@testset "modify — :T_K on JumpBy endpoint scales" begin
-    # T-PHYSICS: uniform α scales all positions
-    spec = PathSpecBuilder()
-    jumpby!(spec; delta = (0.0, 0.0, 1.0), meta = _mcm(0.8))
-    path = build(spec)
+@testset "modify — :T_K on JumpBy scales connector arc length" begin
+    # T-PHYSICS: JumpBy's resolved QuinticConnector arc length scales by α.
+    path = _build_path() do sb
+        jumpby!(sb; delta = (0.0, 0.0, 1.0), meta = _mcm(0.8))
+    end
+    L_jumpby_baseline = arc_length(path.placed_segments[1].segment)
     path_s = _modify_fiber_path(path)
-    @test end_point(path_s) ≈ [0.0, 0.0, 0.8] atol = 1e-10
+    L_jumpby_modified = arc_length(path_s.placed_segments[1].segment)
+    @test L_jumpby_modified ≈ 0.8 * L_jumpby_baseline rtol = 1e-12
 end
 
 # -----------------------------------------------------------------------
@@ -120,99 +158,94 @@ end
 # -----------------------------------------------------------------------
 
 @testset "modify — per-segment scaling applies independently" begin
-    spec = PathSpecBuilder()
-    straight!(spec; length = 1.0, meta = _mcm(1.0))   # α = 1 via ΔT = 0
-    straight!(spec; length = 1.0, meta = _mcm(0.5))
-    path = build(spec)
-
+    path = _build_path() do sb
+        straight!(sb; length = 1.0, meta = _mcm(1.0))   # α = 1 via ΔT = 0
+        straight!(sb; length = 1.0, meta = _mcm(0.5))
+    end
     path_s = _modify_fiber_path(path)
-    @test path_length(path_s) ≈ 1.5 atol = 1e-10
     @test arc_length(path_s.placed_segments[1].segment) ≈ 1.0
     @test arc_length(path_s.placed_segments[2].segment) ≈ 0.5
 end
 
 @testset "modify — segments without MCM annotations default to α = 1.0" begin
-    spec = PathSpecBuilder()
-    straight!(spec; length = 1.0)                     # no meta → α = 1
-    straight!(spec; length = 2.0, meta = _mcm(0.5))
-    path = build(spec)
-
+    path = _build_path() do sb
+        straight!(sb; length = 1.0)                     # no meta → α = 1
+        straight!(sb; length = 2.0, meta = _mcm(0.5))
+    end
     path_s = _modify_fiber_path(path)
     @test arc_length(path_s.placed_segments[1].segment) ≈ 1.0
     @test arc_length(path_s.placed_segments[2].segment) ≈ 1.0
 end
 
 @testset "modify — non-matching MCM symbols are ignored" begin
-    spec = PathSpecBuilder()
-    straight!(spec; length = 1.0,
-              meta = [MCMadd(:not_a_field, 1e6),
-                                  Nickname("labelled")])
-    path = build(spec)
-
+    path = _build_path() do sb
+        straight!(sb; length = 1.0,
+                  meta = [MCMadd(:not_a_field, 1e6),
+                          Nickname("labelled")])
+    end
     path_s = _modify_fiber_path(path)
     @test arc_length(path_s.placed_segments[1].segment) ≈ 1.0
 end
 
 # -----------------------------------------------------------------------
-# Direct field-level MCMs (new in fiber-path-modify.jl)
+# Direct field-level MCMs
 # -----------------------------------------------------------------------
 
 @testset "modify — direct field :length on StraightSegment" begin
-    spec = PathSpecBuilder()
-    straight!(spec; length = 1.0, meta = [MCMadd(:length, 0.05)])
-    path = build(spec)
+    path = _build_path() do sb
+        straight!(sb; length = 1.0, meta = [MCMadd(:length, 0.05)])
+    end
     seg = _modify_fiber_path(path).placed_segments[1].segment
     @test seg.length ≈ 1.05 atol = 1e-12
 end
 
 @testset "modify — direct field :radius on BendSegment" begin
-    spec = PathSpecBuilder()
-    bend!(spec; radius = 0.05, angle = π / 2,
-          meta = [MCMadd(:radius, 0.01)])
-    path = build(spec)
+    path = _build_path() do sb
+        bend!(sb; radius = 0.05, angle = π / 2,
+              meta = [MCMadd(:radius, 0.01)])
+    end
     seg = _modify_fiber_path(path).placed_segments[1].segment
     @test seg.radius ≈ 0.06 atol = 1e-12
     @test seg.angle ≈ π / 2
 end
 
 @testset "modify — direct field :angle on BendSegment" begin
-    spec = PathSpecBuilder()
-    bend!(spec; radius = 0.05, angle = π / 2,
-          meta = [MCMadd(:angle, π / 12)])
-    path = build(spec)
+    path = _build_path() do sb
+        bend!(sb; radius = 0.05, angle = π / 2,
+              meta = [MCMadd(:angle, π / 12)])
+    end
     seg = _modify_fiber_path(path).placed_segments[1].segment
     @test seg.angle ≈ π / 2 + π / 12 atol = 1e-12
     @test seg.radius ≈ 0.05
 end
 
 @testset "modify — direct field :pitch on HelixSegment (MCMmul)" begin
-    spec = PathSpecBuilder()
-    helix!(spec; radius = 0.03, pitch = 0.01, turns = 2.0,
-           meta = [MCMmul(:pitch, 1.1)])
-    path = build(spec)
+    path = _build_path() do sb
+        helix!(sb; radius = 0.03, pitch = 0.01, turns = 2.0,
+               meta = [MCMmul(:pitch, 1.1)])
+    end
     seg = _modify_fiber_path(path).placed_segments[1].segment
     @test seg.pitch ≈ 0.01 * 1.1 atol = 1e-14
     @test seg.radius ≈ 0.03
 end
 
 @testset "modify — direct field :a on CatenarySegment" begin
-    spec = PathSpecBuilder()
-    catenary!(spec; a = 0.2, length = 1.0,
-              meta = [MCMadd(:a, 0.002)])
-    path = build(spec)
+    path = _build_path() do sb
+        catenary!(sb; a = 0.2, length = 1.0,
+                  meta = [MCMadd(:a, 0.002)])
+    end
     seg = _modify_fiber_path(path).placed_segments[1].segment
     @test seg.a ≈ 0.202 atol = 1e-12
     @test seg.length ≈ 1.0
 end
 
 @testset "modify — combined :T_K and direct :length on StraightSegment" begin
-    # Order: T_K first (multiplicative length scaling via CTE), then the direct
+    # T_K first (multiplicative length scaling via CTE), then the direct
     # :length additive offset on top.
-    spec = PathSpecBuilder()
-    straight!(spec; length = 1.0,
-              meta = [MCMadd(:T_K, 10.0),
-                                  MCMadd(:length, 0.001)])
-    path = build(spec)
+    path = _build_path() do sb
+        straight!(sb; length = 1.0,
+                  meta = [MCMadd(:T_K, 10.0), MCMadd(:length, 0.001)])
+    end
     seg = _modify_fiber_path(path).placed_segments[1].segment
     expected = 1.0 * (1 + _MODIFY_ALPHA_LIN * 10.0) + 0.001
     @test seg.length ≈ expected atol = 1e-14
@@ -238,65 +271,49 @@ end
 @testset "modify — MCMadd Particles ΔT scales arc length" begin
     MonteCarloMeasurements.unsafe_comparisons(true)
     try
-        # Particles-valued ΔT with zero mean → nominal arc length preserved,
-        # output lifts to Particles.
+        # Particles-valued ΔT with zero mean → nominal interior arc length
+        # preserved; output segment length lifts to Particles.
         ΔT = 0.0 ± (0.01 / _MODIFY_ALPHA_LIN)    # σ_α = 0.01 around α = 1
-        spec = PathSpecBuilder()
-        bend!(spec; radius = 0.05, angle = π / 2,
-              meta = [MCMadd(:T_K, ΔT)])
-        path = build(spec)
+        path = _build_path() do sb
+            bend!(sb; radius = 0.05, angle = π / 2,
+                  meta = [MCMadd(:T_K, ΔT)])
+        end
         path_s = _modify_fiber_path(path)
 
-        @test arc_length(path_s) isa Particles
-        @test pmean(arc_length(path_s)) ≈ 0.05 * (π / 2) rtol = 1e-3
+        seg_s = path_s.placed_segments[1].segment
+        @test arc_length(seg_s) isa Particles
+        @test pmean(arc_length(seg_s)) ≈ 0.05 * (π / 2) rtol = 1e-3
     finally
         MonteCarloMeasurements.unsafe_comparisons(false)
     end
 end
 
-
 # -----------------------------------------------------------------------
 # QuinticConnector :T_K scaling
 # -----------------------------------------------------------------------
 
-@testset "modify — :T_K scales QuinticConnector arc length" begin
-    """
-    A JumpBy with :T_K MCM meta must scale through to the resolved
-    QuinticConnector after build(). The geometric scale τ should multiply the
-    coefficient matrix and the arc-length table uniformly so the post-modify
-    path length scales by τ.
-    """
-    spec = PathSpecBuilder()
-    jumpby!(spec; delta = (0.4, 0.0, 0.4),
-            tangent = (1.0, 0.0, 0.0),
-            meta = _mcm(0.5))
-    path = build(spec)
-    L_before = path_length(path)
+@testset "modify — :T_K scales QuinticConnector arc length (JumpBy)" begin
+    # A JumpBy with :T_K MCM meta must scale through to the resolved
+    # QuinticConnector after build(). The geometric scale τ should multiply
+    # the coefficient matrix and the arc-length table uniformly so the
+    # JumpBy segment length scales by τ.
+    path = _build_path() do sb
+        jumpby!(sb; delta = (0.4, 0.0, 0.4),
+                tangent = (1.0, 0.0, 0.0),
+                meta = _mcm(0.5))
+    end
+    L_before = arc_length(path.placed_segments[1].segment)
     path_s = _modify_fiber_path(path)
-    L_after = path_length(path_s)
+    L_after = arc_length(path_s.placed_segments[1].segment)
     @test isapprox(L_after, 0.5 * L_before; rtol = 1e-10, atol = 1e-12)
 end
 
-@testset "modify — :T_K on QuinticConnector preserves end-point shrinkage" begin
-    """
-    Geometric scaling of the connector by τ must move its endpoint to τ·delta
-    in the local frame. Verifies that QuinticConnector :T_K modify uses the
-    same coefficient-and-table scaling pattern as the prior HermiteConnector.
-    """
-    spec = PathSpecBuilder()
-    jumpby!(spec; delta = (0.0, 0.0, 1.0), meta = _mcm(0.5))
-    path = build(spec)
-    path_s = _modify_fiber_path(path)
-    @test end_point(path_s) ≈ [0.0, 0.0, 0.5] atol = 1e-10
-end
-
 @testset "modify — T-GUARDRAIL: upstream bend changes recompute connector K0" begin
-    spec = PathSpecBuilder()
-    bend!(spec; radius = 1.0, angle = π / 3,
-          meta = [MCMmul(:radius, 2.0)])
-    jumpby!(spec; delta = (1.0, 0.0, 0.2))
-
-    path_s = _modify_fiber_path(build(spec))
+    path_s = _modify_fiber_path(_build_path() do sb
+        bend!(sb; radius = 1.0, angle = π / 3,
+              meta = [MCMmul(:radius, 2.0)])
+        jumpby!(sb; delta = (1.0, 0.0, 0.2))
+    end)
     bend_seg = path_s.placed_segments[1].segment
     connector = path_s.placed_segments[2].segment
 
@@ -307,109 +324,31 @@ end
 @testset "modify — T-GUARDRAIL: Twist anchors tolerate MCM-valued modified length" begin
     MonteCarloMeasurements.unsafe_comparisons(true)
     try
-        spec = PathSpecBuilder()
-        straight!(spec; length = 1.0,
-                  meta = [
-                      Twist(; rate = 2.0),
-                      MCMadd(:length, 0.0 ± 0.01),
-                  ])
-
-        path_s = _modify_fiber_path(build(spec))
-
-        @test arc_length(path_s) isa Particles
-        @test total_material_twist(path_s) ≈ 2.0 * pmean(arc_length(path_s)) rtol = 1e-6
+        path = _build_path() do sb
+            straight!(sb; length = 1.0,
+                      meta = [
+                          Twist(; rate = 2.0),
+                          MCMadd(:length, 0.0 ± 0.01),
+                      ])
+        end
+        path_s = _modify_fiber_path(path)
+        seg_s = path_s.placed_segments[1].segment
+        L_seg = arc_length(seg_s)
+        @test L_seg isa Particles
+        # Twist run extends from the segment's start over its full length.
+        # Integrated material twist over the segment = 2.0 * L_seg.
+        @test total_material_twist(path_s; s_start = 0.0,
+                                   s_end = Float64(_qc_nominalize(L_seg))) ≈
+              2.0 * pmean(L_seg) rtol = 1e-3
     finally
         MonteCarloMeasurements.unsafe_comparisons(false)
     end
 end
 
 # -----------------------------------------------------------------------
-# JumpTo + :T_K — length-constrained connector resolve
+# conserve_path_length on a Subpath's terminal jumpto
 # -----------------------------------------------------------------------
-# JumpTo destination is a lab-frame invariant. Thermal expansion on the
-# connector itself must show up as arc length, not as a chord rescaling
-# (which would move the endpoint). modify() folds this into the resolver
-# via target_arc_length = τ_conn · baseline_L.
-
-@testset "modify — :T_K on JumpTo preserves destination" begin
-    spec = PathSpecBuilder()
-    jumpto!(spec; destination = (0.4, 0.0, 0.4),
-            tangent = (1.0, 0.0, 0.0),
-            meta = _mcm(1.05))
-    path = build(spec)
-    path_s = _modify_fiber_path(path)
-    @test end_point(path_s) ≈ [0.4, 0.0, 0.4] atol = 1e-6
-end
-
-@testset "modify — :T_K on JumpTo scales arc length only" begin
-    α = 1.05
-    spec = PathSpecBuilder()
-    jumpto!(spec; destination = (0.4, 0.0, 0.4),
-            tangent = (1.0, 0.0, 0.0),
-            meta = _mcm(α))
-    path = build(spec)
-    L_baseline = arc_length(path.placed_segments[1].segment)
-    path_s = _modify_fiber_path(path)
-    @test end_point(path_s) ≈ [0.4, 0.0, 0.4] atol = 1e-6
-    L_modified = arc_length(path_s.placed_segments[1].segment)
-    @test L_modified ≈ α * L_baseline rtol = 1e-4
-end
-
-@testset "modify — JumpTo without :T_K is unchanged" begin
-    spec = PathSpecBuilder()
-    jumpto!(spec; destination = (0.5, 0.0, 0.5),
-            tangent = (1.0, 0.0, 0.0))
-    path = build(spec)
-    path_s = _modify_fiber_path(path)
-    @test end_point(path_s) ≈ [0.5, 0.0, 0.5] atol = 1e-10
-    @test path_length(path_s) ≈ path_length(path) atol = 1e-10
-end
-
-@testset "modify — JumpTo absorbs upstream thermal drift" begin
-    α = 1.05
-    spec = PathSpecBuilder()
-    straight!(spec; length = 0.5, meta = _mcm(α))
-    jumpto!(spec; destination = (0.0, 0.0, 1.0))
-    path = build(spec)
-    path_s = _modify_fiber_path(path)
-
-    # Endpoint pinned at lab-frame destination despite upstream expansion.
-    @test end_point(path_s) ≈ [0.0, 0.0, 1.0] atol = 1e-8
-
-    # Straight expanded by α; connector has no own :T_K so no length target,
-    # arc length is whatever the unconstrained smooth ramp produces. Sanity:
-    # connector arc length ≈ |1 - α·0.5| (chord magnitude, since tangents
-    # default to chord-aligned for a straight-on jump).
-    seg_straight = path_s.placed_segments[1].segment
-    @test seg_straight.length ≈ α * 0.5 atol = 1e-12
-    L_conn = arc_length(path_s.placed_segments[2].segment)
-    @test L_conn ≈ (1.0 - α * 0.5) rtol = 1e-3
-end
-
-@testset "modify — JumpTo with both upstream and own :T_K" begin
-    α_up = 1.05    # upstream straight expansion
-    α_jt = 1.10    # connector's own thermal expansion
-    spec = PathSpecBuilder()
-    straight!(spec; length = 0.5, meta = _mcm(α_up))
-    jumpto!(spec; destination = (0.0, 0.0, 1.0), meta = _mcm(α_jt))
-    path = build(spec)
-    L_conn_baseline = arc_length(path.placed_segments[2].segment)
-    path_s = _modify_fiber_path(path)
-
-    @test end_point(path_s) ≈ [0.0, 0.0, 1.0] atol = 1e-6
-    seg_straight = path_s.placed_segments[1].segment
-    @test seg_straight.length ≈ α_up * 0.5 atol = 1e-12
-    L_conn_modified = arc_length(path_s.placed_segments[2].segment)
-    @test L_conn_modified ≈ α_jt * L_conn_baseline rtol = 1e-4
-end
-
-@testset "modify — JumpTo with infeasible :T_K shrinkage throws" begin
-    # τ < 1 with a chord that already equals baseline arc length: target
-    # falls below chord magnitude, which is geometrically infeasible.
-    spec = PathSpecBuilder()
-    jumpto!(spec; destination = (0.0, 0.0, 1.0),
-            tangent = (0.0, 0.0, 1.0),
-            meta = _mcm(0.5))
-    path = build(spec)
-    @test_throws ArgumentError _modify_fiber_path(path)
-end
+# Pass 1/3 introduced `conserve_path_length=true` as the new mechanism for
+# pinning a Subpath's total arc length under meta-induced length changes.
+# Pass 3's test_fiber_path_pass3.jl covers this in detail; the rest of the
+# old `:T_K`-on-JumpTo testsets have been deleted.

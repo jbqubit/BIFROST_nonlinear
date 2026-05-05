@@ -124,9 +124,10 @@ function demo_mcm_temperature_ptf(;
     ΔT_K_particles = T_K_particles - _MCM_DEMO_T_REF_K
 
     fiber_mcm     = _mcm_demo_fiber(ΔT_K_particles)
-    modified_path = modify(fiber_mcm)
+    modified_path = modify(fiber_mcm).path
     fiber_mod     = Fiber(modified_path; cross_section = _MCM_DEMO_XS, T_ref_K = T_K_particles)
-    J_p, _        = propagate_fiber(fiber_mod; λ_m = _MCM_DEMO_λ_M)
+    J_p, _        = propagate_fiber(fiber_mod; λ_m = _MCM_DEMO_λ_M,
+                                    rtol = 1e-5, atol = 1e-9, h_min = 1e-12)
     MonteCarloMeasurements.unsafe_comparisons(false)
 
     N = 50
@@ -256,13 +257,14 @@ function demo_mcm_temperature_ptf_scatter(;
     ΔT_K_particles = T_K_particles - _MCM_DEMO_T_REF_K
 
     fiber_mcm = _mcm_demo_fiber(ΔT_K_particles)
-    modified_path = modify(fiber_mcm)
+    modified_path = modify(fiber_mcm).path
     # T_ref_K = Particles so material birefringence is also uncertain.
     fiber_mod = Fiber(modified_path;
                       cross_section = _MCM_DEMO_XS,
                       T_ref_K       = T_K_particles)
 
-    J_p, _ = propagate_fiber(fiber_mod; λ_m = _MCM_DEMO_λ_M)
+    J_p, _ = propagate_fiber(fiber_mod; λ_m = _MCM_DEMO_λ_M,
+                             rtol = 1e-5, atol = 1e-9, h_min = 1e-12)
     MonteCarloMeasurements.unsafe_comparisons(false)
 
     # Extract per-particle output state: apply J to [1,0] for each particle.

@@ -46,7 +46,7 @@ function _bench_build_fiber(make_T)
     T_K    = T_val + 273.15
     ΔT_K   = T_K - _MCM_DEMO_T_REF_K
     fiber  = _mcm_demo_fiber(ΔT_K)
-    mpath  = modify(fiber)
+    mpath  = modify(fiber).path
     return Fiber(mpath; cross_section = _MCM_DEMO_XS, T_ref_K = T_K)
 end
 
@@ -90,7 +90,8 @@ function _run_benchmarks(; scenario::Symbol = :propagate)
         if scenario === :propagate
             # Benchmark: propagate_fiber only (fiber pre-built)
             fiber  = _bench_build_fiber(make_T)
-            fn     = () -> propagate_fiber(fiber; λ_m = _MCM_DEMO_λ_M)
+            fn     = () -> propagate_fiber(fiber; λ_m = _MCM_DEMO_λ_M,
+                              rtol = 1e-5, atol = 1e-9, h_min = 1e-12)
         else
             # Benchmark: modify + propagate_fiber together
             T_val  = make_T()
@@ -98,9 +99,10 @@ function _run_benchmarks(; scenario::Symbol = :propagate)
             ΔT_K   = T_K - _MCM_DEMO_T_REF_K
             base_f = _mcm_demo_fiber(ΔT_K)
             fn     = () -> begin
-                mp = modify(base_f)
+                mp = modify(base_f).path
                 f2 = Fiber(mp; cross_section = _MCM_DEMO_XS, T_ref_K = T_K)
-                propagate_fiber(f2; λ_m = _MCM_DEMO_λ_M)
+                propagate_fiber(f2; λ_m = _MCM_DEMO_λ_M,
+                                rtol = 1e-5, atol = 1e-9, h_min = 1e-12)
             end
         end
 

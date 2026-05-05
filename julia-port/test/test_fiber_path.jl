@@ -7,6 +7,29 @@ if !isdefined(Main, :sample_fiber_centerline)
     include("../fiber-path-plot.jl")
 end
 
+# Seal a SubpathBuilder at the natural exit of its current interior segments
+# via a trial-build. Used by tests that author paths whose natural exit is
+# not analytically convenient.
+function _test_seal_natural!(sb::SubpathBuilder)
+    @assert isnothing(sb.jumpto_point) "_test_seal_natural!: builder already sealed"
+    tmp = deepcopy(sb)
+    jumpto!(tmp; point = (1e9, 1e9, 1e9))
+    b_tmp = build(Subpath(tmp))
+    s_end_int = Float64(_qc_nominalize(b_tmp.jumpto_placed.s_offset_eff))
+    if s_end_int <= 0.0
+        natural_pos = collect(sb.start_point::NTuple{3, Float64})
+        natural_tan = collect(sb.start_outgoing_tangent::NTuple{3, Float64})
+    else
+        natural_pos = collect(position(b_tmp, s_end_int))
+        natural_tan = collect(tangent(b_tmp, s_end_int))
+    end
+    jumpto!(sb;
+        point = (natural_pos[1], natural_pos[2], natural_pos[3]),
+        incoming_tangent = (natural_tan[1], natural_tan[2], natural_tan[3]),
+    )
+    return sb
+end
+
 const CENTERLINE_ATOL = 5e-8
 const TANGENT_ATOL = 5e-13
 const SAMPLE_COUNT = 8001
@@ -81,19 +104,21 @@ end
 
 function build_centerline_test_fiber(segments)
     @assert !isempty(segments) "Use build_straight_test_fiber for the straight case"
-    spec = PathSpecBuilder()
+    sb = SubpathBuilder(); start!(sb)
     for raw_seg in segments
         seg = canonical_bend_segment(raw_seg)
-        bend!(spec; radius = seg.R, angle = seg.θ, axis_angle = seg.α)
+        bend!(sb; radius = seg.R, angle = seg.θ, axis_angle = seg.α)
     end
-    path = build(spec)
+    _test_seal_natural!(sb)
+    path = build(Subpath(sb))
     return Fiber(path; cross_section = test_cross_section())
 end
 
 function build_straight_test_fiber(length::Real)
-    spec = PathSpecBuilder()
-    straight!(spec; length = length)
-    path = build(spec)
+    sb = SubpathBuilder(); start!(sb)
+    straight!(sb; length = length)
+    _test_seal_natural!(sb)
+    path = build(Subpath(sb))
     return Fiber(path; cross_section = test_cross_section())
 end
 
@@ -248,9 +273,10 @@ end
     xs = test_cross_section()
 
     function straight_fiber(; T_ref_K = DEFAULT_T_REF_K, length = 10.0)
-        spec = PathSpecBuilder()
-        straight!(spec; length = length)
-        return Fiber(build(spec); cross_section = xs, T_ref_K = T_ref_K)
+        sb = SubpathBuilder(); start!(sb)
+        straight!(sb; length = length)
+        _test_seal_natural!(sb)
+        return Fiber(build(Subpath(sb)); cross_section = xs, T_ref_K = T_ref_K)
     end
 
     @testset "default T_ref_K is 297.15" begin
@@ -270,30 +296,33 @@ end
     # TODO: twist refactor — the twist! call and twist breakpoints in this test
     # are pending the per-segment-meta twist subsystem.
     @testset "T-GUARDRAIL: domain, coverage, and breakpoint derivation" begin
-        spec = PathSpecBuilder()
-        straight!(spec; length = 1.0)
-        bend!(spec; radius = 0.2, angle = π / 2)
-        path = build(spec)
+        sb = SubpathBuilder(); start!(sb)
+        straight!(sb; length = 1.0)
+        bend!(sb; radius = 0.2, angle = π / 2)
+        _test_seal_natural!(sb)
+        path = build(Subpath(sb))
         fiber = Fiber(path; cross_section = xs)
 
         @test fiber.s_start == 0.0
-        @test fiber.s_end ≈ Float64(path.s_end)
+        @test fiber.s_end ≈ Float64(_qc_nominalize(arc_length(path)))
         @test fiber.path === path
         @test fiber.cross_section === xs
 
-        expected_breaks = sort(unique([
-            0.0,
-            1.0,
-            1.0 + 0.2 * (π / 2),
-        ]))
-        @test fiber_breakpoints(fiber) ≈ expected_breaks atol = 1e-12
-        @test breakpoints(fiber.path) ≈ expected_breaks atol = 1e-12
+        # Breakpoints: 0, end-of-first-straight, end-of-bend, plus the
+        # terminal connector start (which equals end-of-bend in the
+        # natural-exit seal).
+        bps = fiber_breakpoints(fiber)
+        @test 0.0 in bps
+        @test any(b -> isapprox(b, 1.0; atol = 1e-9), bps)
+        @test any(b -> isapprox(b, 1.0 + 0.2 * (π / 2); atol = 1e-9), bps)
+        @test breakpoints(fiber.path) == bps
     end
 
     @testset "T-PHYSICS: straight path gives zero generators" begin
-        spec = PathSpecBuilder()
-        straight!(spec; length = 0.8)
-        fiber = Fiber(build(spec); cross_section = xs)
+        sb = SubpathBuilder(); start!(sb)
+        straight!(sb; length = 0.8)
+        _test_seal_natural!(sb)
+        fiber = Fiber(build(Subpath(sb)); cross_section = xs)
 
         @test generator_K(fiber, 1550e-9)(0.4) ≈ zeros(ComplexF64, 2, 2) atol = 1e-14
         @test generator_Kω(fiber, 1550e-9)(0.4) ≈ zeros(ComplexF64, 2, 2) atol = 1e-14
@@ -303,10 +332,13 @@ end
         λ = 1550e-9
         T = 297.15
         R = 0.04
-        spec = PathSpecBuilder()
-        bend!(spec; radius = R, angle = π / 3)
-        fiber = Fiber(build(spec); cross_section = xs, T_ref_K = T)
-        K = generator_K(fiber, λ)(0.5 * fiber.s_end)
+        sb = SubpathBuilder(); start!(sb)
+        bend!(sb; radius = R, angle = π / 3)
+        _test_seal_natural!(sb)
+        fiber = Fiber(build(Subpath(sb)); cross_section = xs, T_ref_K = T)
+        # Query at the midpoint of the bend (which is interior, not the
+        # connector). The bend's arc length is R*π/3.
+        K = generator_K(fiber, λ)(0.5 * R * π / 3)
         Δβ = bending_birefringence(xs, λ, T; bend_radius_m = R)
 
         @test K[1, 1] ≈ 0.5im * Δβ atol = 1e-12
