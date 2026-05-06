@@ -13,8 +13,13 @@
 #     demo_path_geometry_all()
 # =====================================================================
 
-include("path-geometry.jl")
-include("path-geometry-plot.jl")
+if !isdefined(Main, :PathGeometry)
+    include("path-geometry.jl")
+end
+if !isdefined(Main, :write_path_geometry_plot3d)
+    include("path-geometry-plot.jl")
+end
+include("demo-index-helpers.jl")
 
 const _OUTPUT_DIR = joinpath(@__DIR__, "..", "output")
 
@@ -319,11 +324,19 @@ const _DEMO_PATH_GEOMETRY_INDEX = [
 ]
 
 function demo_path_geometry_all(;
-    index_output::AbstractString = _path_html("demo-path-geometry-index.html"),
+    index_output::AbstractString = DEMO_MONOLITHIC_INDEX_OUTPUT,
 )
     isdir(_OUTPUT_DIR) || mkpath(_OUTPUT_DIR)
 
-    # entries: (group, title, path, desc)
+    return _write_demo_index(
+        [(title = "Path-geometry-only demos",
+          entries = demo_path_geometry_entries(),
+          group_titles = Dict{String, String}())];
+        index_output,
+    )
+end
+
+function demo_path_geometry_entries()
     entries = Tuple{String, String, String, String}[]
     for d in _DEMO_PATH_GEOMETRY_INDEX
         println("[ demo ] $(nameof(d.fn))")
@@ -331,60 +344,7 @@ function demo_path_geometry_all(;
         push!(entries, (d.group, basename(result.plot_path),
                         result.plot_path, d.desc))
     end
-
-    # Group ordering preserves insertion order.
-    seen_groups = String[]
-    for (g, _, _, _) in entries
-        g in seen_groups || push!(seen_groups, g)
-    end
-
-    open(index_output, "w") do io
-        println(io, """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BIFROST path-geometry-only demos</title>
-  <style>
-    body { font-family: sans-serif; max-width: 800px; margin: 2em auto; background: #111; color: #ddd; }
-    h1   { font-size: 1.5em; border-bottom: 1px solid #444; padding-bottom: 0.3em; }
-    h2   { font-size: 1.15em; margin-top: 1.8em; color: #4db87a; }
-    ul   { padding-left: 1.2em; }
-    li   { margin: 1em 0; }
-    a    { font-weight: bold; color: #4db87a; }
-    p.desc { margin: 0.3em 0 0 0; color: #999; font-size: 0.95em; }
-    p.intro { color: #aaa; font-size: 0.95em; }
-  </style>
-</head>
-<body>
-  <h1>BIFROST path-geometry-only demos</h1>
-  <p class="intro">
-    These demos exercise <code>path-geometry*.jl</code> end-to-end without
-    the fiber, cross-section, or propagation layers. Each demo authors a
-    <code>Subpath</code> (or a <code>PathBuilt</code> of multiple Subpaths)
-    via the <code>SubpathBuilder</code> API and writes an interactive
-    Plotly HTML.
-  </p>""")
-        for g in seen_groups
-            println(io, "  <h2>$(g)</h2>")
-            println(io, "  <ul>")
-            for (eg, title, path, desc) in entries
-                eg == g || continue
-                href = basename(path)
-                println(io, "    <li>")
-                println(io, "      <a href=\"$(href)\">$(title)</a>")
-                println(io, "      <p class=\"desc\">$(desc)</p>")
-                println(io, "    </li>")
-            end
-            println(io, "  </ul>")
-        end
-        println(io, """</body>
-</html>""")
-    end
-
-    println()
-    println("Wrote demo index to: ", index_output)
-    return index_output
+    return entries
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

@@ -9,6 +9,7 @@ include("path-integral.jl")
 include("fiber-path.jl")
 include("fiber-path-plot.jl")
 include("fiber-path-modify.jl")
+include("demo-index-helpers.jl")
 
 
 const DEMO_FIBER_CROSS_SECTION = FiberCrossSection(
@@ -598,8 +599,8 @@ const DEMO_INDEX = [
 """
     demo_all(; index_output)
 
-Run every demo in `DEMO_INDEX` and write `demo1.html` linking to each output
-file with a short description.
+Run every demo in `DEMO_INDEX` and write `demo-index.html` linking to each
+output file with a short description.
 
 Geometry-only demos live in `demo-path-geometry.jl`; this file covers
 modify-pipeline demos plus the adaptive step-doubling and helix-mcm-twist
@@ -611,77 +612,27 @@ const _DEMO1_GROUP_TITLES = Dict(
     "adaptive-step" => "Adaptive step-doubling",
 )
 
-function demo_all(; index_output::AbstractString = joinpath(@__DIR__, "..", "output", "demo1.html"))
+function demo_entries()
     entries = Tuple{String, String, String, String}[]
 
     for d in DEMO_INDEX
         println("[ demo ] $(d.fn)")
         result = d.fn(; d.kwargs...)
-        paths = result isa NamedTuple ? values(result) : (result,)
-        for v in paths
-            if v isa AbstractString && endswith(v, ".html")
-                push!(entries, (d.group, basename(v), v, d.desc))
-            elseif v isa AbstractVector
-                for item in v
-                    item isa AbstractString && endswith(item, ".html") &&
-                        push!(entries, (d.group, basename(item), item, d.desc))
-                end
-            end
+        desc = _demo_result_desc(result, d)
+        for path in _demo_html_paths(result)
+            push!(entries, (d.group, basename(path), path, desc))
         end
     end
+    return entries
+end
 
-    seen_groups = String[]
-    for (g, _, _, _) in entries
-        g in seen_groups || push!(seen_groups, g)
-    end
-
-    open(index_output, "w") do io
-        println(io, """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BIFROST modify + diagnostics demos</title>
-  <style>
-    body { font-family: sans-serif; max-width: 800px; margin: 2em auto; background: #111; color: #ddd; }
-    h1   { font-size: 1.5em; border-bottom: 1px solid #444; padding-bottom: 0.3em; }
-    h2   { font-size: 1.15em; margin-top: 1.8em; color: #4db87a; }
-    ul   { padding-left: 1.2em; }
-    li   { margin: 1em 0; }
-    a    { font-weight: bold; color: #4db87a; }
-    p.desc { margin: 0.3em 0 0 0; color: #999; font-size: 0.95em; }
-    nav.index-nav { font-size: 0.85em; margin-bottom: 1em; color: #666; }
-    nav.index-nav a { font-weight: normal; color: #4db87a; margin-right: 0.8em; }
-  </style>
-</head>
-<body>
-  <nav class="index-nav">
-    <a href="demo-path-geometry-index.html">demo-path-geometry</a>
-    <a href="demo1.html">demo1</a>
-    <a href="demo2.html">demo2</a>
-    <a href="demo3mcm.html">demo3mcm</a>
-    <a href="demo3benchmark.html">demo3benchmark</a>
-  </nav>
-  <h1>BIFROST modify + diagnostics demos</h1>""")
-        for g in seen_groups
-            heading = get(_DEMO1_GROUP_TITLES, g, g)
-            println(io, "  <h2>$(heading)</h2>")
-            println(io, "  <ul>")
-            for (eg, title, path, desc) in entries
-                eg == g || continue
-                println(io, "    <li>")
-                println(io, "      <a href=\"$(basename(path))\">$(title)</a>")
-                println(io, "      <p class=\"desc\">$(desc)</p>")
-                println(io, "    </li>")
-            end
-            println(io, "  </ul>")
-        end
-        println(io, """</body>
-</html>""")
-    end
-
-    println("Wrote demo index to: ", index_output)
-    return index_output
+function demo_all(; index_output::AbstractString = DEMO_MONOLITHIC_INDEX_OUTPUT)
+    return _write_demo_index(
+        [(title = "Modify + diagnostics demos",
+          entries = demo_entries(),
+          group_titles = _DEMO1_GROUP_TITLES)];
+        index_output,
+    )
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

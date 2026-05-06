@@ -9,7 +9,7 @@
 #   * demo_mcm_temperature_ptf_scatter — Particles(2000), single propagation,
 #                                       Poincaré equatorial scatter
 #
-# `demo3mcm_all()` runs both and writes `output/demo3mcm.html`.
+# `demo3mcm_all()` runs both and writes `output/demo-index.html`.
 #
 # This file expects to be `include`d after demo2.jl is in scope (it
 # reuses `_sample_segment_xyz` and the path-builder API).
@@ -370,7 +370,7 @@ Plotly.newPlot('poincare_scatter',
 end
 
 # =====================================================================
-# Index page (demo3mcm.html)
+# Monolithic index entries
 # =====================================================================
 
 const DEMO3MCM_INDEX = [
@@ -381,79 +381,29 @@ const DEMO3MCM_INDEX = [
 """
     demo3mcm_all(; index_output)
 
-Run every demo in `DEMO3MCM_INDEX` and write `demo3mcm.html`.
+Run every demo in `DEMO3MCM_INDEX` and write `demo-index.html`.
 """
-function demo3mcm_all(;
-    index_output::AbstractString = joinpath(@__DIR__, "..", "output", "demo3mcm.html"),
-)
+function demo3mcm_entries()
     entries = Tuple{String, String, String, String}[]
 
     for d in DEMO3MCM_INDEX
         println("[ demo3mcm ] $(d.fn)")
         result = d.fn(; d.kwargs...)
-        desc_inline = (result isa NamedTuple && haskey(result, :desc)) ?
-                      String(result.desc) : ""
-        desc_entry  = hasproperty(d, :desc) ? d.desc : ""
-        desc        = isempty(desc_inline) ? desc_entry : desc_inline
-
-        paths = result isa NamedTuple ? values(result) : (result,)
-        for v in paths
-            if v isa AbstractString && endswith(v, ".html")
-                push!(entries, (d.group, basename(v), v, desc))
-            end
+        desc = _demo_result_desc(result, d)
+        for path in _demo_html_paths(result)
+            push!(entries, (d.group, basename(path), path, desc))
         end
     end
+    return entries
+end
 
-    open(index_output, "w") do io
-        println(io, """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BIFROST MCM temperature PTF demos</title>
-  <style>
-    body { font-family: sans-serif; max-width: 800px; margin: 2em auto; color: #222; }
-    h1   { font-size: 1.5em; border-bottom: 1px solid #ccc; padding-bottom: 0.3em; }
-    h2   { font-size: 1.15em; margin-top: 1.8em; color: #1a6; }
-    ul   { padding-left: 1.2em; }
-    li   { margin: 1em 0; }
-    a    { font-weight: bold; color: #1a6; }
-    p.desc { margin: 0.3em 0 0 0; color: #555; font-size: 0.95em; }
-    nav.index-nav { font-size: 0.85em; margin-bottom: 1em; color: #888; }
-    nav.index-nav a { font-weight: normal; color: #1a6; margin-right: 0.8em; }
-  </style>
-</head>
-<body>
-  <nav class="index-nav">
-    <a href="demo1.html">demo1</a>
-    <a href="demo2.html">demo2</a>
-    <a href="demo3mcm.html">demo3mcm</a>
-    <a href="demo3benchmark.html">demo3benchmark</a>
-  </nav>
-  <h1>BIFROST MCM temperature PTF demos</h1>""")
-
-        seen_groups = String[]
-        for (g, _, _, _) in entries
-            g in seen_groups || push!(seen_groups, g)
-        end
-        for g in seen_groups
-            println(io, "  <h2>MCM / temperature-dependent PTF</h2>")
-            println(io, "  <ul>")
-            for (eg, title, path, desc) in entries
-                eg == g || continue
-                println(io, "    <li>")
-                println(io, "      <a href=\"$(path)\">$(title)</a>")
-                println(io, "      <p class=\"desc\">$(desc)</p>")
-                println(io, "    </li>")
-            end
-            println(io, "  </ul>")
-        end
-        println(io, """</body>
-</html>""")
-    end
-
-    println("Wrote demo3mcm index to: ", index_output)
-    return index_output
+function demo3mcm_all(; index_output::AbstractString = DEMO_MONOLITHIC_INDEX_OUTPUT)
+    return _write_demo_index(
+        [(title = "MCM temperature PTF demos",
+          entries = demo3mcm_entries(),
+          group_titles = Dict("MCM" => "MCM / temperature-dependent PTF"))];
+        index_output,
+    )
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

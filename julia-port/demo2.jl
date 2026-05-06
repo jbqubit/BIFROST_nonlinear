@@ -15,7 +15,7 @@
 #     surrounding fixed segments drawn in green.
 #
 # `demo2_all()` runs every demo in `DEMO2_INDEX` and writes
-# `output/demo2.html` with the groups under separate headings.
+# `output/demo-index.html` with the groups under separate headings.
 #
 # This file expects to be `include`d after demo1.jl is in scope (it
 # reuses `_sample_segment_xyz` and the path-builder API).
@@ -1387,7 +1387,7 @@ function demo_jumpto_routing(;
 end
 
 # ---------------------------------------------------------------------
-# Index page (demo2.html)
+# Monolithic index entries
 # ---------------------------------------------------------------------
 
 const DEMO2_INDEX = [
@@ -1436,89 +1436,36 @@ const DEMO2_INDEX = [
 """
     demo2_all(; index_output)
 
-Run every demo in `DEMO2_INDEX` and write `demo2.html` linking each
+Run every demo in `DEMO2_INDEX` and write `demo-index.html` linking each
 output file with a short description.
 """
-function demo2_all(; index_output::AbstractString = joinpath(@__DIR__, "..", "output", "demo2.html"))
-    # Each entry: (group, title, path, desc).
+const _DEMO2_GROUP_TITLES = Dict(
+    "2D"        => "2D scenes (inline SVG)",
+    "2D-modify" => "meta and JumpTo interplay (2D)",
+    "3D"        => "3D scenes (Plotly)",
+)
+
+function demo2_entries()
     entries = Tuple{String, String, String, String}[]
 
     for d in DEMO2_INDEX
         println("[ demo2 ] $(d.fn)")
         result = d.fn(; d.kwargs...)
-        # Prefer `desc` provided inline by the demo function (kept next
-        # to the implementation it describes); otherwise fall back to
-        # the index entry's `desc` field.
-        desc_inline = (result isa NamedTuple && haskey(result, :desc)) ?
-                      String(result.desc) : nothing
-        desc_entry  = hasproperty(d, :desc) ? d.desc : ""
-        desc        = isnothing(desc_inline) ? desc_entry : desc_inline
-
-        paths = result isa NamedTuple ? values(result) : (result,)
-        for v in paths
-            if v isa AbstractString && endswith(v, ".html")
-                push!(entries, (d.group, basename(v), v, desc))
-            end
+        desc = _demo_result_desc(result, d)
+        for path in _demo_html_paths(result)
+            push!(entries, (d.group, basename(path), path, desc))
         end
     end
+    return entries
+end
 
-    open(index_output, "w") do io
-        println(io, """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BIFROST JumpBy / JumpTo demos</title>
-  <style>
-    body { font-family: sans-serif; max-width: 800px; margin: 2em auto; background: #111; color: #ddd; }
-    h1   { font-size: 1.5em; border-bottom: 1px solid #444; padding-bottom: 0.3em; }
-    h2   { font-size: 1.15em; margin-top: 1.8em; color: #4db87a; }
-    ul   { padding-left: 1.2em; }
-    li   { margin: 1em 0; }
-    a    { font-weight: bold; color: #4db87a; }
-    p.desc { margin: 0.3em 0 0 0; color: #999; font-size: 0.95em; }
-    nav.index-nav { font-size: 0.85em; margin-bottom: 1em; color: #666; }
-    nav.index-nav a { font-weight: normal; color: #4db87a; margin-right: 0.8em; }
-  </style>
-</head>
-<body>
-  <nav class="index-nav">
-    <a href="demo-path-geometry-index.html">demo-path-geometry</a>
-    <a href="demo1.html">demo1</a>
-    <a href="demo2.html">demo2</a>
-    <a href="demo3mcm.html">demo3mcm</a>
-    <a href="demo3benchmark.html">demo3benchmark</a>
-  </nav>
-  <h1>BIFROST JumpBy / JumpTo demos</h1>""")
-
-        seen_groups = String[]
-        for (g, _, _, _) in entries
-            g in seen_groups || push!(seen_groups, g)
-        end
-        group_titles = Dict(
-            "2D"        => "2D scenes (inline SVG)",
-            "2D-modify" => "meta and JumpTo interplay (2D)",
-            "3D"        => "3D scenes (Plotly)",
-        )
-        for g in seen_groups
-            heading = get(group_titles, g, g)
-            println(io, "  <h2>$(heading)</h2>")
-            println(io, "  <ul>")
-            for (eg, title, path, desc) in entries
-                eg == g || continue
-                println(io, "    <li>")
-                println(io, "      <a href=\"$(basename(path))\">$(title)</a>")
-                println(io, "      <p class=\"desc\">$(desc)</p>")
-                println(io, "    </li>")
-            end
-            println(io, "  </ul>")
-        end
-        println(io, """</body>
-</html>""")
-    end
-
-    println("Wrote demo2 index to: ", index_output)
-    return index_output
+function demo2_all(; index_output::AbstractString = DEMO_MONOLITHIC_INDEX_OUTPUT)
+    return _write_demo_index(
+        [(title = "JumpBy / JumpTo demos",
+          entries = demo2_entries(),
+          group_titles = _DEMO2_GROUP_TITLES)];
+        index_output,
+    )
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
