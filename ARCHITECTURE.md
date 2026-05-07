@@ -63,7 +63,7 @@ legacy behavior and must not be modified without explicit user authorization.
 - Separate material physics, path geometry, fiber assembly, and numerical
   propagation.
 - Keep the core propagation API usable with any callable `K(s)` and `Kω(s)`.
-- Support continuous/function-valued geometry and twist rather than only fixed
+- Support continuous/function-valued geometry and spinning rather than only fixed
   pre-sliced segment grids.
 - Keep lossless Jones propagation isolated from any future gain/loss model.
 - Preserve MCM compatibility on uncertainty-carrying code paths.
@@ -83,7 +83,7 @@ The fiber-specific layers combine those pieces:
 | File | How it extends the standalone pieces |
 | --- | --- |
 | `fiber-cross-section.jl` | Adds step-index fiber optics and birefringence responses. |
-| `fiber-path.jl` | Binds path geometry to a cross section and assembles bend/twist `K` and `Kω`. |
+| `fiber-path.jl` | Binds path geometry to a cross section and assembles bend/spinning `K` and `Kω`. |
 
 ## Layered Design
 
@@ -97,7 +97,7 @@ The fiber-specific layers combine those pieces:
    - `freeze(builder) → Subpath` and `build(sub::Subpath) → SubpathCached`
      compile to immutable forms. `build(::Vector{Subpath}) → PathCached`
      concatenates multiple subpaths under a shared global arc-length.
-   - Resolves material twist metadata into path-coordinate twist runs.
+   - Resolves material spinning metadata into path-coordinate spinning runs.
    - Resolves `JumpBy` and the terminal `jumpto!` connector into G2
      quintic connectors at build time.
    - `path-geometry-meta.jl` defines the `AbstractMeta` vocabulary
@@ -120,7 +120,7 @@ The fiber-specific layers combine those pieces:
      `FiberCrossSection` and `T_ref_K`.
    - Keeps operating wavelength as a per-query argument rather than `Fiber`
      state.
-   - Assembles fiber-level bend and twist generators `K(s)` and `Kω(s)`.
+   - Assembles fiber-level bend and spinning generators `K(s)` and `Kω(s)`.
    - Interprets per-segment metadata such as `Nickname`, `MCMadd`, and
      `MCMmul`.
    - Applies meta-driven path perturbations and thermal length scaling through
@@ -160,7 +160,7 @@ The fiber-specific layers combine those pieces:
 
 - Path breakpoints are normalized and globally merged before piecewise
   propagation.
-- The propagator must not step across path segment or twist-run boundaries.
+- The propagator must not step across path segment or spinning-run boundaries.
 - Numerical tolerances (`rtol`, `atol`, step controls) are explicit API inputs,
   not hidden globals.
 - Global phase-insensitive error metrics are used in adaptive acceptance checks.

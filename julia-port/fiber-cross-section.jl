@@ -8,7 +8,7 @@ concatenation of segments.
 
 The baseline object is a circular step-index fiber cross section described by
 core/cladding materials and diameters. Perturbations such as core ellipticity,
-bending, axial tension, and twist are handled by separate functions with
+bending, axial tension, and spinning are handled by separate functions with
 explicit arguments rather than stored on the type.
 
 NOTE: All the dω derivatives computed in this file are computed by ChatGPT-5.4 and have

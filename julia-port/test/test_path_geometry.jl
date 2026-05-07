@@ -374,7 +374,7 @@ end
 end
 
 # -----------------------------------------------------------------------
-# Twist meta and material_twist
+# Spinning meta and spinning_rate
 # -----------------------------------------------------------------------
 
 # Helper: terminate a straight-only spec at its natural endpoint with
@@ -383,165 +383,165 @@ function _seal_at_z(sb::SubpathBuilder, z::Real)
     jumpto!(sb; point = (0.0, 0.0, z), incoming_tangent = (0.0, 0.0, 1.0))
 end
 
-@testset "Twist — constant rate (Float64) is exact" begin
+@testset "Spinning — constant rate (Float64) is exact" begin
     sb = SubpathBuilder(); start!(sb)
-    straight!(sb; length = 2.0, meta = [Twist(; rate = 1.5, phi_0 = 0.0)])
+    straight!(sb; length = 2.0, meta = [Spinning(; rate = 1.5, phi_0 = 0.0)])
     _seal_at_z(sb, 2.0)
     b = build(sb)
-    @test material_twist(b, 0.0) == 1.5
-    @test material_twist(b, 0.7) == 1.5
-    @test material_twist(b, 2.0) == 1.5
-    # The twist run extends from s=0 to the end of the Subpath. Over the
-    # interior [0, 2.0] the integrated twist is exactly 1.5*2.0; the
+    @test spinning_rate(b, 0.0) == 1.5
+    @test spinning_rate(b, 0.7) == 1.5
+    @test spinning_rate(b, 2.0) == 1.5
+    # The spinning run extends from s=0 to the end of the Subpath. Over the
+    # interior [0, 2.0] the integrated spinning is exactly 1.5*2.0; the
     # connector is degenerate so the full integral is the same to numerical
     # precision.
-    @test isapprox(total_material_twist(b; s_start = 0.0, s_end = 2.0), 1.5 * 2.0;
+    @test isapprox(total_spinning(b; s_start = 0.0, s_end = 2.0), 1.5 * 2.0;
                    atol = 1e-12)
 end
 
-@testset "Twist — zero outside the run" begin
+@testset "Spinning — zero outside the run" begin
     sb = SubpathBuilder(); start!(sb)
     straight!(sb; length = 1.0)
-    straight!(sb; length = 1.0, meta = [Twist(; rate = 2.0)])
+    straight!(sb; length = 1.0, meta = [Spinning(; rate = 2.0)])
     straight!(sb; length = 1.0)
     _seal_at_z(sb, 3.0)
     b = build(sb)
     # Run starts at s=1.0 (its anchor segment's offset) and extends to s_end
     # of the Subpath since there is no later anchor.
-    @test material_twist(b, 0.5) == 0.0
-    @test material_twist(b, 1.5) == 2.0
-    @test material_twist(b, 2.5) == 2.0   # extends to s_end
+    @test spinning_rate(b, 0.5) == 0.0
+    @test spinning_rate(b, 1.5) == 2.0
+    @test spinning_rate(b, 2.5) == 2.0   # extends to s_end
 end
 
-@testset "Twist — run terminates at next Twist anchor" begin
+@testset "Spinning — run terminates at next Spinning anchor" begin
     sb = SubpathBuilder(); start!(sb)
-    straight!(sb; length = 1.0, meta = [Twist(; rate = 1.0)])
-    straight!(sb; length = 1.0, meta = [Twist(; rate = 3.0, is_continuous = true)])
+    straight!(sb; length = 1.0, meta = [Spinning(; rate = 1.0)])
+    straight!(sb; length = 1.0, meta = [Spinning(; rate = 3.0, is_continuous = true)])
     _seal_at_z(sb, 2.0)
     b = build(sb)
-    @test length(b.resolved_twists) == 2
-    @test b.resolved_twists[1].s_eff_end == 1.0
-    @test b.resolved_twists[2].s_eff_start == 1.0
-    @test material_twist(b, 0.5) == 1.0
-    @test material_twist(b, 1.5) == 3.0
+    @test length(b.resolved_spinning) == 2
+    @test b.resolved_spinning[1].s_eff_end == 1.0
+    @test b.resolved_spinning[2].s_eff_start == 1.0
+    @test spinning_rate(b, 0.5) == 1.0
+    @test spinning_rate(b, 1.5) == 3.0
 end
 
-@testset "Twist — function rate is invariant under run-local s" begin
+@testset "Spinning — function rate is invariant under run-local s" begin
     f = s -> sin(s)
     sb = SubpathBuilder(); start!(sb)
-    straight!(sb; length = 1.0)                                    # no twist
-    straight!(sb; length = 2π, meta = [Twist(; rate = f)])
+    straight!(sb; length = 1.0)                                    # no spinning
+    straight!(sb; length = 2π, meta = [Spinning(; rate = f)])
     _seal_at_z(sb, 1.0 + 2π)
     b = build(sb)
     # At absolute s = 1.0 + 0.7, run-local s_local = 0.7
-    @test material_twist(b, 1.7) == f(0.7)
+    @test spinning_rate(b, 1.7) == f(0.7)
     # Total over the run (over the interior portion): ∫₀^{2π} sin(s) ds = 0
-    @test isapprox(total_material_twist(b; s_start = 1.0, s_end = 1.0 + 2π), 0.0;
+    @test isapprox(total_spinning(b; s_start = 1.0, s_end = 1.0 + 2π), 0.0;
                    atol = 1e-7)
 end
 
-@testset "Twist — oscillatory rate handled by adaptive quadrature" begin
+@testset "Spinning — oscillatory rate handled by adaptive quadrature" begin
     sb = SubpathBuilder(); start!(sb)
     straight!(sb; length = 2π,
-              meta = [Twist(; rate = s -> sin(50 * s))])
+              meta = [Spinning(; rate = s -> sin(50 * s))])
     _seal_at_z(sb, 2π)
     b = build(sb)
     # ∫₀^{2π} sin(50 s) ds = (1 - cos(100π)) / 50 = 0
-    @test isapprox(total_material_twist(b; s_start = 0.0, s_end = 2π), 0.0;
+    @test isapprox(total_spinning(b; s_start = 0.0, s_end = 2π), 0.0;
                    atol = 1e-7)
 end
 
-@testset "Twist — phi_0 carry-over with is_continuous=true" begin
+@testset "Spinning — phi_0 carry-over with is_continuous=true" begin
     sb = SubpathBuilder(); start!(sb)
     L1 = 1.5
     τ1 = 2.0
-    straight!(sb; length = L1, meta = [Twist(; rate = τ1, phi_0 = 0.5)])
-    straight!(sb; length = 1.0, meta = [Twist(; rate = 1.0, is_continuous = true)])
+    straight!(sb; length = L1, meta = [Spinning(; rate = τ1, phi_0 = 0.5)])
+    straight!(sb; length = 1.0, meta = [Spinning(; rate = 1.0, is_continuous = true)])
     _seal_at_z(sb, L1 + 1.0)
     b = build(sb)
-    @test b.resolved_twists[1].phi_0 == 0.5
-    @test isapprox(b.resolved_twists[2].phi_0, 0.5 + τ1 * L1; atol = 1e-12)
+    @test b.resolved_spinning[1].phi_0 == 0.5
+    @test isapprox(b.resolved_spinning[2].phi_0, 0.5 + τ1 * L1; atol = 1e-12)
 end
 
-@testset "Twist — phi_0 carry-over with function rate" begin
+@testset "Spinning — phi_0 carry-over with function rate" begin
     sb = SubpathBuilder(); start!(sb)
     L1 = π
     f1 = s -> cos(s)   # ∫₀^π cos(s) ds = sin(π) - sin(0) = 0
-    straight!(sb; length = L1, meta = [Twist(; rate = f1, phi_0 = 0.7)])
-    straight!(sb; length = 1.0, meta = [Twist(; rate = 1.0, is_continuous = true)])
+    straight!(sb; length = L1, meta = [Spinning(; rate = f1, phi_0 = 0.7)])
+    straight!(sb; length = 1.0, meta = [Spinning(; rate = 1.0, is_continuous = true)])
     _seal_at_z(sb, L1 + 1.0)
     b = build(sb)
-    @test isapprox(b.resolved_twists[2].phi_0, 0.7; atol = 1e-8)
+    @test isapprox(b.resolved_spinning[2].phi_0, 0.7; atol = 1e-8)
 end
 
-@testset "Twist — total_material_twist partial interval" begin
+@testset "Spinning — total_spinning partial interval" begin
     sb = SubpathBuilder(); start!(sb)
-    straight!(sb; length = 4.0, meta = [Twist(; rate = 0.5)])
+    straight!(sb; length = 4.0, meta = [Spinning(; rate = 0.5)])
     _seal_at_z(sb, 4.0)
     b = build(sb)
-    @test total_material_twist(b; s_start = 1.0, s_end = 3.0) == 0.5 * 2.0
+    @test total_spinning(b; s_start = 1.0, s_end = 3.0) == 0.5 * 2.0
 end
 
-@testset "Twist — no anchors → zero everywhere" begin
+@testset "Spinning — no anchors → zero everywhere" begin
     sb = SubpathBuilder(); start!(sb)
     straight!(sb; length = 1.0)
     _seal_at_z(sb, 1.0)
     b = build(sb)
-    @test b.resolved_twists == ResolvedTwistRate[]
-    @test material_twist(b, 0.5) == 0.0
-    @test total_material_twist(b; s_start = 0.0, s_end = 1.0) == 0.0
+    @test b.resolved_spinning == ResolvedSpinningRate[]
+    @test spinning_rate(b, 0.5) == 0.0
+    @test total_spinning(b; s_start = 0.0, s_end = 1.0) == 0.0
 end
 
-@testset "Twist — first Twist with is_continuous=true on Subpath_1 throws at PathBuilt level" begin
+@testset "Spinning — first Spinning with is_continuous=true on Subpath_1 throws at PathBuilt level" begin
     # T-GUARDRAIL: in a single Subpath / Subpath_1 in a PathBuilt, an
     # is_continuous=true first anchor has no prior phase to inherit. The
     # Subpath build leaves it pending; PathBuilt build throws.
     sb = SubpathBuilder(); start!(sb)
     straight!(sb; length = 1.0,
-              meta = [Twist(; rate = 1.0, is_continuous = true)])
+              meta = [Spinning(; rate = 1.0, is_continuous = true)])
     _seal_at_z(sb, 1.0)
     b = build(sb)
-    @test b.pending_continuous_first_twist
+    @test b.pending_continuous_first_spinning
     @test_throws ArgumentError build([b])
 end
 
-@testset "Twist — validation: two Twists per segment rejected" begin
+@testset "Spinning — validation: two Spinnings per segment rejected" begin
     sb = SubpathBuilder(); start!(sb)
     straight!(sb; length = 1.0,
-              meta = [Twist(; rate = 1.0), Twist(; rate = 2.0)])
+              meta = [Spinning(; rate = 1.0), Spinning(; rate = 2.0)])
     _seal_at_z(sb, 1.0)
     @test_throws ArgumentError build(sb)
 end
 
-@testset "Twist — validation: phi_0 with is_continuous rejected at construction" begin
-    @test_throws ArgumentError Twist(; rate = 1.0, phi_0 = 0.7, is_continuous = true)
+@testset "Spinning — validation: phi_0 with is_continuous rejected at construction" begin
+    @test_throws ArgumentError Spinning(; rate = 1.0, phi_0 = 0.7, is_continuous = true)
 end
 
-@testset "Twist — frame() returns material_twist" begin
+@testset "Spinning — frame() returns spinning_rate" begin
     sb = SubpathBuilder(); start!(sb)
-    straight!(sb; length = 1.0, meta = [Twist(; rate = 2.5)])
+    straight!(sb; length = 1.0, meta = [Spinning(; rate = 2.5)])
     _seal_at_z(sb, 1.0)
     b = build(sb)
-    @test frame(b, 0.4).material_twist == 2.5
+    @test frame(b, 0.4).spinning_rate == 2.5
 end
 
-@testset "Twist — total_frame_rotation = τ_geom + Ω_material" begin
+@testset "Spinning — total_frame_rotation = τ_geom + Ω_spin" begin
     sb = SubpathBuilder(); start!(sb)
-    # straight segment has τ_geom = 0, so total_frame_rotation = ∫τ_mat ds.
-    straight!(sb; length = 2.0, meta = [Twist(; rate = 0.5)])
+    # straight segment has τ_geom = 0, so total_frame_rotation = ∫τ_spin ds.
+    straight!(sb; length = 2.0, meta = [Spinning(; rate = 0.5)])
     _seal_at_z(sb, 2.0)
     b = build(sb)
     @test isapprox(total_frame_rotation(b; s_start = 0.0, s_end = 2.0), 1.0; atol = 1e-12)
 end
 
-@testset "Twist — path_twist_breakpoints includes run boundaries" begin
+@testset "Spinning — path_spinning_breakpoints includes run boundaries" begin
     sb = SubpathBuilder(); start!(sb)
     straight!(sb; length = 1.0)
-    straight!(sb; length = 1.0, meta = [Twist(; rate = 1.0)])
+    straight!(sb; length = 1.0, meta = [Spinning(; rate = 1.0)])
     straight!(sb; length = 1.0)
     _seal_at_z(sb, 3.0)
     b = build(sb)
-    bps = path_twist_breakpoints(b)
+    bps = path_spinning_breakpoints(b)
     @test 0.0 in bps
     @test 1.0 in bps
     # Run extends to the Subpath's local s_end (interior + connector). The
@@ -816,18 +816,18 @@ end
     @test_throws ArgumentError build([Subpath(sb1), Subpath(sb2)])
 end
 
-@testset "PathBuilt — Twist(is_continuous) inherits from prior Subpath" begin
+@testset "PathBuilt — Spinning(is_continuous) inherits from prior Subpath" begin
     # T-PHYSICS: the second Subpath's is_continuous=true first anchor inherits
-    # phi_0 from the prior Subpath's terminal twist phase.
+    # phi_0 from the prior Subpath's terminal spinning phase.
     L1 = 2.0; rate1 = 0.5; phi0_1 = 0.3
     sb1 = SubpathBuilder(); start!(sb1)
-    straight!(sb1; length = L1, meta = [Twist(; rate = rate1, phi_0 = phi0_1)])
+    straight!(sb1; length = L1, meta = [Spinning(; rate = rate1, phi_0 = phi0_1)])
     jumpto!(sb1; point = (0.0, 0.0, L1), incoming_tangent = (0.0, 0.0, 1.0))
 
     sb2 = SubpathBuilder()
     start!(sb2; point = (0.0, 0.0, L1), outgoing_tangent = (0.0, 0.0, 1.0))
     straight!(sb2; length = 1.0,
-              meta = [Twist(; rate = 1.0, is_continuous = true)])
+              meta = [Spinning(; rate = 1.0, is_continuous = true)])
     jumpto!(sb2; point = (0.0, 0.0, L1 + 1.0), incoming_tangent = (0.0, 0.0, 1.0))
 
     p = build([Subpath(sb1), Subpath(sb2)])
@@ -835,7 +835,7 @@ end
     # The run extends from s=0 to the Subpath_1's local s_end.
     sub1_s_end = arc_length(p.subpaths[1])
     expected_phi0 = phi0_1 + rate1 * Float64(_qc_nominalize(sub1_s_end))
-    @test isapprox(p.subpaths[2].resolved_twists[1].phi_0, expected_phi0;
+    @test isapprox(p.subpaths[2].resolved_spinning[1].phi_0, expected_phi0;
                    atol = 1e-8)
 end
 

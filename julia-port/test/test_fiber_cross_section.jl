@@ -13,7 +13,7 @@ What could do better.
 - Compare against literature values for a specific fiber, wavelength, and temperature.
 - Compare against fiber.py for several specific fibers, wavelengths, and temperatures.
 - Scaling tests like bend birefringence ~ 1/R^2, axial-tension term ~ tension/R, 
-  twist birefringence linear in twist rate.
+  spinning birefringence linear in spinning rate.
 - Independently derived dispersion checks using a different numerical route than the 
   implementation.
 """

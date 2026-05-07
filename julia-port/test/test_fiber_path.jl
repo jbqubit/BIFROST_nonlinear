@@ -293,8 +293,8 @@ end
 @testset "Path-backed fiber assembly" begin
     xs = test_cross_section()
 
-    # TODO: twist refactor — the twist! call and twist breakpoints in this test
-    # are pending the per-segment-meta twist subsystem.
+    # TODO: spinning refactor — the spinning! call and spinning breakpoints in this test
+    # are pending the per-segment-meta spinning subsystem.
     @testset "T-GUARDRAIL: domain, coverage, and breakpoint derivation" begin
         sb = SubpathBuilder(); start!(sb)
         straight!(sb; length = 1.0)
@@ -347,8 +347,8 @@ end
         @test K[2, 1] ≈ 0.0 atol = 1e-12
     end
 
-    # TODO: twist refactor — pending per-segment-meta twist subsystem.
-    @testset "T-PHYSICS: twist overlay uses twisting_birefringence" begin
+    # TODO: spinning refactor — pending per-segment-meta spinning subsystem.
+    @testset "T-PHYSICS: spinning overlay uses twisting_birefringence" begin
         @test_skip true
     end
 

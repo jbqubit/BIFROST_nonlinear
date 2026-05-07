@@ -145,7 +145,7 @@ and ultimately exercises:
 
 - `Fiber`
 - `bend_geometry`
-- `twist_rate`
+- `spinning_rate`
 - `sample_fiber_centerline`
 
 ### Test set `fiber-path centerline geometry`
@@ -294,14 +294,14 @@ This file checks the basic source-based fiber abstraction and a few calibration 
 
 #### Breakpoint union
 
-The test constructs a bend source and a twist source with different discontinuity sets and checks that
+The test constructs a bend source and a spinning source with different discontinuity sets and checks that
 
 $$
 \mathrm{fiber\_breakpoints}(F)
 =
 \{s_{\min},s_{\max}\}\cup
 \mathrm{breakpoints}(\mathrm{bend})\cup
-\mathrm{breakpoints}(\mathrm{twist}).
+\mathrm{breakpoints}(\mathrm{spinning}).
 $$
 
 Why this matters:
@@ -315,13 +315,13 @@ Subroutines exercised:
 At a sample point $s=0.25$, the test checks
 
 $$
-K(s)=K_{\mathrm{bend}}(s)+K_{\mathrm{twist}}(s),
+K(s)=K_{\mathrm{bend}}(s)+K_{\mathrm{spinning}}(s),
 $$
 
 and likewise
 
 $$
-K_\omega(s)=K_{\omega,\mathrm{bend}}(s)+K_{\omega,\mathrm{twist}}(s),
+K_\omega(s)=K_{\omega,\mathrm{bend}}(s)+K_{\omega,\mathrm{spinning}}(s),
 $$
 
 via the subroutines `generator_K` and `generator_Kω`.
@@ -334,7 +334,7 @@ Subroutines exercised:
 
 #### Zero generator gives zero DGD
 
-The `zero_fiber` case sets both bend and twist contributions to zero. Then
+The `zero_fiber` case sets both bend and spinning contributions to zero. Then
 
 $$
 K(s)=0,\qquad K_\omega(s)=0,
@@ -554,7 +554,7 @@ The test file defines:
 - `propagate_dgd_case(K, Komega, breaks)`
 - `accepted_steps(stats)`
 
-The point of these helpers is to test the DGD solver directly with analytically prescribed matrices, rather than only through bend and twist physics.
+The point of these helpers is to test the DGD solver directly with analytically prescribed matrices, rather than only through bend and spinning physics.
 
 ### Test set `DGD exact cases`
 
@@ -845,7 +845,7 @@ Subroutines exercised:
 
 #### `Automatic breakpoint union matches explicit partition`
 
-This test returns to the actual `Fiber` abstraction with a bend source and a twist source carrying different breakpoint sets. It compares
+This test returns to the actual `Fiber` abstraction with a bend source and a spinning source carrying different breakpoint sets. It compares
 
 $$
 \texttt{propagate\_fiber\_sensitivity(fiber)}
@@ -888,4 +888,4 @@ The strongest tests in this suite are the ones with exact analytic answers or ex
 - absence of spurious DGD when $K_\omega=0$
 - agreement of the direct sensitivity solver with a finite-difference reference in a regime where the latter is trustworthy
 
-They do not, by themselves, prove that every bend or twist constitutive law in the model is the final law for every real fiber experiment. A unit test can show that the solver reproduces a chosen model correctly. It cannot, by itself, prove that the chosen model is the unique correct physical model of the laboratory system.
+They do not, by themselves, prove that every bend or spinning constitutive law in the model is the final law for every real fiber experiment. A unit test can show that the solver reproduces a chosen model correctly. It cannot, by itself, prove that the chosen model is the unique correct physical model of the laboratory system.

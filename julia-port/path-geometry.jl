@@ -9,7 +9,7 @@ Three-dimensional path geometry for smooth space curves.
   Subpath specification begins with `start!(...)` and ends with `jumpto!(...)`.
 - `Subpath` (immutable) — frozen snapshot of user-supplied data only.
 - `SubpathBuilt` (immutable) — derived layout: `subpath` + `placed_segments`
-  + `jumpto_quintic_connector` + `resolved_twists`.
+  + `jumpto_quintic_connector` + `resolved_spinning`.
 - `PathBuilt` (immutable) — ordered container of `SubpathBuilt`s.
 
 `build(builder_or_subpath) → SubpathBuilt` runs the placement loop on one
@@ -32,15 +32,15 @@ Interior `jumpby!` is supported as a relative jump within a Subpath. Each
 Subpath must call `start!` before any segment and `jumpto!` exactly once at
 the end.
 
-# Material twist
+# Spinning
 
-Material twist is attached as per-segment meta via `Twist <: AbstractMeta`.
-A `Twist` placed in a segment's `meta` vector starts a twist run at that
-segment's start and continues until the next `Twist`-bearing segment, or
+Spinning is attached as per-segment meta via `Spinning <: AbstractMeta`.
+A `Spinning` placed in a segment's `meta` vector starts a spinning run at that
+segment's start and continues until the next `Spinning`-bearing segment, or
 until the Subpath ends.
 
 `rate` may be a `Real` (constant rad/m) or a `Function` `rate(s_local)`. A
-`Twist` with `is_continuous = true` placed on the first twist anchor of a
+`Spinning` with `is_continuous = true` placed on the first spinning anchor of a
 Subpath leaves the resolution pending; `build(::Vector{SubpathBuilt})` then
 inherits `phi_0` from the prior Subpath's terminal phase.
 
@@ -50,7 +50,7 @@ Each `Subpath` and `SubpathBuilt` is fully independent of all others. The
 Subpath holds its `start_point` and `jumpto_point` as the only globally-anchored
 values. `build(::Vector{SubpathBuilt})` is the first ordering-aware layer; it
 checks endpoint conformity between adjacent Subpaths and resolves any
-cross-Subpath twist continuity.
+cross-Subpath spinning continuity.
 
 # Interface
 
@@ -58,7 +58,7 @@ cross-Subpath twist continuity.
     arc_length(path, s1, s2)
     curvature(seg_or_path, s)
     geometric_torsion(seg_or_path, s)
-    material_twist(path, s)
+    spinning_rate(path, s)
     position(path, s)
     tangent(path, s)
     normal(path, s)
@@ -107,36 +107,36 @@ segment_meta(seg::AbstractPathSegment) =
     :meta ∈ fieldnames(typeof(seg)) ? seg.meta : AbstractMeta[]
 
 # -----------------------------------------------------------------------
-# Twist  (per-segment material-twist annotation)
+# Spinning  (per-segment material-spinning annotation)
 # -----------------------------------------------------------------------
 
 """
-    Twist(; rate, phi_0 = 0.0, is_continuous = false)
+    Spinning(; rate, phi_0 = 0.0, is_continuous = false)
 
-Material-twist annotation attached to a segment's `meta` vector. The twist run
+Material-spinning annotation attached to a segment's `meta` vector. The spinning run
 begins at the host segment's start (effective arc length `s_offset_eff`) and
-extends until the next segment carrying a `Twist`, or until the path ends.
+extends until the next segment carrying a `Spinning`, or until the path ends.
 
 - `rate` may be a `Real` (constant rad/m) or a `Function` `rate(s_local)` of
-  run-local arc length where `s_local = 0` at the start of the twist run.
+  run-local arc length where `s_local = 0` at the start of the spinning run.
 - `phi_0` is the absolute initial phase (rad) at the start of the run when
   `is_continuous = false`.
 - `is_continuous = true` means the resolver computes `phi_0` from the prior
-  twist run's accumulated phase. In that case `phi_0` must be left at its
+  spinning run's accumulated phase. In that case `phi_0` must be left at its
   default `0.0`.
 
-At most one `Twist` may appear in any single segment's `meta`. The first
-`Twist` on a path must have `is_continuous = false`.
+At most one `Spinning` may appear in any single segment's `meta`. The first
+`Spinning` on a path must have `is_continuous = false`.
 """
-struct Twist <: AbstractMeta
+struct Spinning <: AbstractMeta
     rate::Union{Float64, Function}
     phi_0::Float64
     is_continuous::Bool
 
-    function Twist(; rate, phi_0 = 0.0, is_continuous::Bool = false)
+    function Spinning(; rate, phi_0 = 0.0, is_continuous::Bool = false)
         if is_continuous && phi_0 != 0.0
             throw(ArgumentError(
-                "Twist: do not specify phi_0 when is_continuous=true (phase is carried over from prior run)"))
+                "Spinning: do not specify phi_0 when is_continuous=true (phase is carried over from prior run)"))
         end
         r = rate isa Function ? rate : Float64(rate)
         new(r, Float64(phi_0), is_continuous)
@@ -144,13 +144,13 @@ struct Twist <: AbstractMeta
 end
 
 """
-    ResolvedTwistRate(s_eff_start, s_eff_end, rate, phi_0)
+    ResolvedSpinningRate(s_eff_start, s_eff_end, rate, phi_0)
 
-A single twist run resolved to absolute path coordinates. `rate` is called
+A single spinning run resolved to absolute path coordinates. `rate` is called
 (when a `Function`) with run-local arc length `s_local = s - s_eff_start`.
 `phi_0` is the absolute phase (rad) at `s_eff_start`.
 """
-struct ResolvedTwistRate
+struct ResolvedSpinningRate
     s_eff_start::Float64
     s_eff_end::Float64
     rate::Union{Float64, Function}
@@ -160,7 +160,7 @@ end
 # -----------------------------------------------------------------------
 # Quadrature helper
 # -----------------------------------------------------------------------
-# Integrate a twist rate over a run-local interval. Constant rates take the
+# Integrate a spinning rate over a run-local interval. Constant rates take the
 # analytic branch; function rates use QuadGK adaptive Gauss–Kronrod, which
 # subdivides automatically for oscillatory integrands.
 
@@ -363,7 +363,7 @@ function end_frame_local(seg::CatenarySegment)
 end
 
 # -----------------------------------------------------------------------
-# HelixSegment  (stub)
+# HelixSegment
 # -----------------------------------------------------------------------
 
 """
@@ -525,7 +525,7 @@ end_frame_local(::JumpBy)        = error("JumpBy: call build() to resolve jump g
 include(joinpath(@__DIR__, "path-geometry-connector.jl"))
 
 # Concrete meta vocabulary lives in path-geometry-meta.jl. It is part of the
-# geometry layer (Twist, Nickname, MCMadd, MCMmul). Included here so Subpath
+# geometry layer (Spinning, Nickname, MCMadd, MCMmul). Included here so Subpath
 # constructors can reference MCMadd/MCMmul for validation.
 include(joinpath(@__DIR__, "path-geometry-meta.jl"))
 
@@ -744,7 +744,7 @@ arc_length(::Subpath)               = error("Subpath: call build(subpath) before
 arc_length(::Subpath, ::Real, ::Real) = error("Subpath: call build(subpath) before querying arc_length")
 curvature(::Subpath, ::Real)        = error("Subpath: call build(subpath) before querying curvature")
 geometric_torsion(::Subpath, ::Real) = error("Subpath: call build(subpath) before querying geometric_torsion")
-material_twist(::Subpath, ::Real)   = error("Subpath: call build(subpath) before querying material_twist")
+spinning_rate(::Subpath, ::Real)   = error("Subpath: call build(subpath) before querying spinning_rate")
 position(::Subpath, ::Real)         = error("Subpath: call build(subpath) before querying position")
 tangent(::Subpath, ::Real)          = error("Subpath: call build(subpath) before querying tangent")
 normal(::Subpath, ::Real)           = error("Subpath: call build(subpath) before querying normal")
@@ -767,8 +767,8 @@ Built form of a `Subpath`. Contains:
   (s offset, global origin, global frame at its start). Carried so query
   functions can treat the terminal connector uniformly with interior
   segments.
-- `resolved_twists` — twist runs resolved within this Subpath.
-- `pending_continuous_first_twist` — true if the first twist anchor was
+- `resolved_spinning` — spinning runs resolved within this Subpath.
+- `pending_continuous_first_spinning` — true if the first spinning anchor was
   deferred for `build(::Vector{SubpathBuilt})` to fill in.
 
 Local arc length runs from `0` to `s_end(::SubpathBuilt)` (computed on demand
@@ -779,8 +779,8 @@ struct SubpathBuilt
     placed_segments::Vector{PlacedSegment}        # interior only
     jumpto_quintic_connector::QuinticConnector    # terminal connector
     jumpto_placed::PlacedSegment                  # placement of the terminal connector
-    resolved_twists::Vector{ResolvedTwistRate}
-    pending_continuous_first_twist::Bool
+    resolved_spinning::Vector{ResolvedSpinningRate}
+    pending_continuous_first_spinning::Bool
 end
 
 """
@@ -883,19 +883,19 @@ function build(sub::Subpath)
     L_conn = arc_length(connector)
     s_end_eff = s_eff + L_conn
 
-    # Resolve twists local to this Subpath. If the first twist anchor has
+    # Resolve spinnings local to this Subpath. If the first spinning anchor has
     # is_continuous=true it is left pending for the PathBuilt build to fix up.
-    resolved, pending = _resolve_twists_subpath_local(placed, connector,
+    resolved, pending = _resolve_spinning_subpath_local(placed, connector,
                                                       Float64(_qc_nominalize(s_eff)),
                                                       Float64(_qc_nominalize(s_end_eff)))
     return SubpathBuilt(sub, placed, connector, jumpto_placed, resolved, pending)
 end
 
 # -----------------------------------------------------------------------
-# Twist resolution (per Subpath)
+# Spinning resolution (per Subpath)
 # -----------------------------------------------------------------------
-# Walk placed segments in order, collect Twist anchors from each segment's
-# meta, and emit one ResolvedTwistRate per anchor. Each run extends from the
+# Walk placed segments in order, collect Spinning anchors from each segment's
+# meta, and emit one ResolvedSpinningRate per anchor. Each run extends from the
 # anchor's segment start to the next anchor's segment start, or to the end
 # of the Subpath. is_continuous=true on a non-first anchor takes its phi_0
 # from the prior run's accumulated phase. is_continuous=true on the *first*
@@ -904,41 +904,41 @@ end
 
 # Anchor scan also includes the terminal connector (queries on a Subpath's
 # domain include the connector segment past the last interior).
-function _collect_twist_anchors(placed::Vector{PlacedSegment},
+function _collect_spinning_anchors(placed::Vector{PlacedSegment},
                                 connector::QuinticConnector,
                                 connector_s_offset::Float64)
-    anchors = Tuple{Float64, Twist}[]
+    anchors = Tuple{Float64, Spinning}[]
     for ps in placed
-        twists_here = Twist[]
+        spinnings_here = Spinning[]
         for m in segment_meta(ps.segment)
-            m isa Twist && push!(twists_here, m)
+            m isa Spinning && push!(spinnings_here, m)
         end
-        if length(twists_here) > 1
+        if length(spinnings_here) > 1
             throw(ArgumentError(
                 "Subpath build: segment at s_offset_eff = $(ps.s_offset_eff) carries " *
-                "$(length(twists_here)) Twist meta entries; at most one is permitted"))
+                "$(length(spinnings_here)) Spinning meta entries; at most one is permitted"))
         end
-        if !isempty(twists_here)
-            push!(anchors, (Float64(_qc_nominalize(ps.s_offset_eff)), twists_here[1]))
+        if !isempty(spinnings_here)
+            push!(anchors, (Float64(_qc_nominalize(ps.s_offset_eff)), spinnings_here[1]))
         end
     end
     # The terminal connector also carries a meta vector but in the new design
-    # it has no `meta` slot exposed for Twist — kept structural. Skip.
+    # it has no `meta` slot exposed for Spinning — kept structural. Skip.
     return anchors
 end
 
-# Resolve twist runs for a single Subpath. If the first anchor is_continuous=true
+# Resolve spinning runs for a single Subpath. If the first anchor is_continuous=true
 # the run is emitted with phi_0=NaN as a sentinel, and `pending_first=true`. The
 # PathBuilt-level resolver replaces phi_0 with the inherited value.
-function _resolve_twists_subpath_local(placed::Vector{PlacedSegment},
+function _resolve_spinning_subpath_local(placed::Vector{PlacedSegment},
                                        connector::QuinticConnector,
                                        connector_s_offset::Float64,
                                        s_end::Float64)
-    anchors = _collect_twist_anchors(placed, connector, connector_s_offset)
-    isempty(anchors) && return (ResolvedTwistRate[], false)
+    anchors = _collect_spinning_anchors(placed, connector, connector_s_offset)
+    isempty(anchors) && return (ResolvedSpinningRate[], false)
 
     n = length(anchors)
-    out = Vector{ResolvedTwistRate}(undef, n)
+    out = Vector{ResolvedSpinningRate}(undef, n)
     prev_phi_0 = 0.0
     prev_run_length = 0.0
     prev_rate::Union{Float64, Function} = 0.0
@@ -960,7 +960,7 @@ function _resolve_twists_subpath_local(placed::Vector{PlacedSegment},
             phi_0 = tw.phi_0
         end
 
-        out[i] = ResolvedTwistRate(s_start_i, s_run_end, tw.rate, phi_0)
+        out[i] = ResolvedSpinningRate(s_start_i, s_run_end, tw.rate, phi_0)
 
         prev_phi_0 = phi_0
         prev_run_length = s_run_end - s_start_i
@@ -971,38 +971,38 @@ function _resolve_twists_subpath_local(placed::Vector{PlacedSegment},
 end
 
 # PathBuilt-level fix-up: walk subpaths in order; if a Subpath has
-# pending_continuous_first_twist=true, look up the prior Subpath's terminal
-# twist phase and rebuild that Subpath's resolved_twists list with the inherited
+# pending_continuous_first_spinning=true, look up the prior Subpath's terminal
+# spinning phase and rebuild that Subpath's resolved_spinning list with the inherited
 # phi_0. The first Subpath cannot have pending=true; throw if so.
-function _resolve_pending_continuous_twists(builts::Vector{SubpathBuilt})
+function _resolve_pending_continuous_spinning(builts::Vector{SubpathBuilt})
     n = length(builts)
     out = Vector{SubpathBuilt}(undef, n)
     for i in 1:n
         b = builts[i]
-        if !b.pending_continuous_first_twist
+        if !b.pending_continuous_first_spinning
             out[i] = b
             continue
         end
         if i == 1
             throw(ArgumentError(
-                "PathBuilt: first Subpath has Twist(is_continuous=true) on its first " *
+                "PathBuilt: first Subpath has Spinning(is_continuous=true) on its first " *
                 "anchor, but there is no prior Subpath to inherit phase from"))
         end
         prev = out[i - 1]
-        # Compute the prior Subpath's terminal phase: the last resolved twist
+        # Compute the prior Subpath's terminal phase: the last resolved spinning
         # run's phi_0 plus integral over its length.
-        if isempty(prev.resolved_twists)
+        if isempty(prev.resolved_spinning)
             throw(ArgumentError(
-                "PathBuilt: Subpath $i has pending continuous first twist but " *
-                "Subpath $(i-1) has no twist runs to inherit from"))
+                "PathBuilt: Subpath $i has pending continuous first spinning but " *
+                "Subpath $(i-1) has no spinning runs to inherit from"))
         end
-        last_run = prev.resolved_twists[end]
+        last_run = prev.resolved_spinning[end]
         run_len  = last_run.s_eff_end - last_run.s_eff_start
         phi_end  = last_run.phi_0 + _integrate_rate(last_run.rate, 0.0, run_len)
 
-        # Rebuild this Subpath's resolved_twists list, replacing the first run's phi_0.
-        rt_old = b.resolved_twists
-        rt_new = Vector{ResolvedTwistRate}(undef, length(rt_old))
+        # Rebuild this Subpath's resolved_spinning list, replacing the first run's phi_0.
+        rt_old = b.resolved_spinning
+        rt_new = Vector{ResolvedSpinningRate}(undef, length(rt_old))
         # First run: inherit phi_end. Then propagate forward through subsequent
         # runs that were resolved with prev_phi_0 originating from the (NaN)
         # first run — re-run the phi_0 chain from this corrected start.
@@ -1014,7 +1014,7 @@ function _resolve_pending_continuous_twists(builts::Vector{SubpathBuilt})
             if k == 1
                 phi_0 = phi_end
             else
-                # Re-derive: was tw.is_continuous? We don't have the raw Twist
+                # Re-derive: was tw.is_continuous? We don't have the raw Spinning
                 # object handy, so detect by NaN propagation in the original
                 # resolution. The simple rule: if the original phi_0 isn't NaN
                 # and was deterministic (from tw.phi_0), keep it. If it was
@@ -1022,11 +1022,11 @@ function _resolve_pending_continuous_twists(builts::Vector{SubpathBuilt})
                 # would have been computed without the corrected base.
                 # To be safe, recompute: phi_0 = prev_phi_0 + ∫ prev_rate over prev_run_length
                 # only if the original is "close" to that expression. We
-                # cannot disambiguate without the source Twist meta, so we
+                # cannot disambiguate without the source Spinning meta, so we
                 # walk the segments again below.
                 phi_0 = r.phi_0
             end
-            rt_new[k] = ResolvedTwistRate(r.s_eff_start, r.s_eff_end, r.rate, phi_0)
+            rt_new[k] = ResolvedSpinningRate(r.s_eff_start, r.s_eff_end, r.rate, phi_0)
             prev_phi_0 = phi_0
             prev_run_length = r.s_eff_end - r.s_eff_start
             prev_rate = r.rate
@@ -1037,10 +1037,10 @@ function _resolve_pending_continuous_twists(builts::Vector{SubpathBuilt})
         # prev_phi_0=NaN and need recomputation. Re-resolve from raw anchors with
         # phi_end as the seed.
         if any(r -> isnan(r.phi_0), rt_old) && length(rt_old) >= 2
-            anchors = _collect_twist_anchors(b.placed_segments, b.jumpto_quintic_connector, 0.0)
+            anchors = _collect_spinning_anchors(b.placed_segments, b.jumpto_quintic_connector, 0.0)
             # Recompute with first phi_0 = phi_end (forced is_continuous semantics)
             n_a = length(anchors)
-            rt_new = Vector{ResolvedTwistRate}(undef, n_a)
+            rt_new = Vector{ResolvedSpinningRate}(undef, n_a)
             prev_phi_0 = phi_end
             prev_run_length = 0.0
             prev_rate = 0.0
@@ -1058,7 +1058,7 @@ function _resolve_pending_continuous_twists(builts::Vector{SubpathBuilt})
                 else
                     phi_0 = tw.phi_0
                 end
-                rt_new[k] = ResolvedTwistRate(s_start_k, s_run_end, tw.rate, phi_0)
+                rt_new[k] = ResolvedSpinningRate(s_start_k, s_run_end, tw.rate, phi_0)
                 prev_phi_0 = phi_0
                 prev_run_length = s_run_end - s_start_k
                 prev_rate = tw.rate
@@ -1120,7 +1120,7 @@ end
 
 Stitch already-built `SubpathBuilt`s into a `PathBuilt`, validating that
 adjacent Subpaths' endpoint states agree, and resolving any cross-Subpath
-twist continuity. The vector-of-Subpath form builds each first; the single
+spinning continuity. The vector-of-Subpath form builds each first; the single
 `SubpathBuilt` form wraps a length-1 PathBuilt.
 """
 function build(builts::Vector{SubpathBuilt})
@@ -1128,7 +1128,7 @@ function build(builts::Vector{SubpathBuilt})
     for i in 2:length(builts)
         _check_subpath_conformity(builts[i-1].subpath, builts[i].subpath, i)
     end
-    fixed = _resolve_pending_continuous_twists(builts)
+    fixed = _resolve_pending_continuous_spinning(builts)
     return PathBuilt(fixed)
 end
 
@@ -1199,15 +1199,15 @@ function geometric_torsion(b::SubpathBuilt, s::Real)
 end
 
 """
-    material_twist(b, s)
+    spinning_rate(b, s)
 
-Material twist rate (rad/m) at local arc length `s`, summed over all resolved
-twist runs that contain `s`. Runs are disjoint by construction; the sum
+Spinning rate (rad/m) at local arc length `s`, summed over all resolved
+spinning runs that contain `s`. Runs are disjoint by construction; the sum
 exists only as a robustness guard.
 """
-function material_twist(b::SubpathBuilt, s)
+function spinning_rate(b::SubpathBuilt, s)
     τ = zero(s isa AbstractFloat ? s : Float64(s))
-    for r in b.resolved_twists
+    for r in b.resolved_spinning
         if r.s_eff_start <= s <= r.s_eff_end
             τ += r.rate isa Function ? r.rate(s - r.s_eff_start) : r.rate
         end
@@ -1241,9 +1241,9 @@ function frame(b::SubpathBuilt, s::Real)
     Bi = binormal(b, s)
     κ = curvature(b, s)
     τ = geometric_torsion(b, s)
-    m = material_twist(b, s)
+    m = spinning_rate(b, s)
     return (; position = position(b, s), tangent = T, normal = N, binormal = Bi,
-              curvature = κ, geometric_torsion = τ, material_twist = m)
+              curvature = κ, geometric_torsion = τ, spinning_rate = m)
 end
 
 # -----------------------------------------------------------------------
@@ -1324,13 +1324,13 @@ function total_torsion(b::SubpathBuilt)
 end
 
 """
-    total_material_twist(b; s_start, s_end, rtol = 1e-8, atol = 0.0) → Float64
+    total_spinning(b; s_start, s_end, rtol = 1e-8, atol = 0.0) → Float64
 
-Integrated material twist ``∫ τ_{\\mathrm{mat}}(s) \\, ds`` over local arc length
+Integrated material spinning ``∫ τ_{\\mathrm{mat}}(s) \\, ds`` over local arc length
 from `s_start` to `s_end` (defaults: full Subpath). Both endpoints must lie
 in `[0, s_end(b)]`.
 """
-function total_material_twist(
+function total_spinning(
     b::SubpathBuilt;
     s_start::Real = 0.0,
     s_end::Real   = s_end(b),
@@ -1341,13 +1341,13 @@ function total_material_twist(
     s_hi = Float64(_qc_nominalize(s_end))
     if s_lo > s_hi
         throw(ArgumentError(
-            "total_material_twist: require s_start ≤ s_end; got s_start=$(s_lo), s_end=$(s_hi)"))
+            "total_spinning: require s_start ≤ s_end; got s_start=$(s_lo), s_end=$(s_hi)"))
     end
     ps0 = 0.0
     ps1 = Float64(_qc_nominalize(arc_length(b)))
     if !(ps0 - 1e-12 <= s_lo <= ps1 + 1e-12) || !(ps0 - 1e-12 <= s_hi <= ps1 + 1e-12)
         throw(ArgumentError(
-            "total_material_twist: require 0 ≤ s ≤ s_end(b) for both endpoints; " *
+            "total_spinning: require 0 ≤ s ≤ s_end(b) for both endpoints; " *
             "got [$(s_lo), $(s_hi)] m vs subpath domain [$(ps0), $(ps1)] m"))
     end
     s_lo == s_hi && return 0.0
@@ -1355,7 +1355,7 @@ function total_material_twist(
     total = 0.0
     rtolf = Float64(rtol)
     atolf = Float64(atol)
-    for r in b.resolved_twists
+    for r in b.resolved_spinning
         a = max(r.s_eff_start, s_lo)
         bb = min(r.s_eff_end, s_hi)
         bb <= a && continue
@@ -1368,7 +1368,7 @@ end
 """
     total_frame_rotation(b; s_start, s_end, rtol = 1e-8, atol = 0.0) → Float64
 
-Total frame rotation `∫ (τ_geom + Ω_material) ds` over local arc length from
+Total frame rotation `∫ (τ_geom + Ω_spin) ds` over local arc length from
 `s_start` to `s_end`.
 """
 function total_frame_rotation(
@@ -1427,7 +1427,7 @@ function total_frame_rotation(
         end
     end
 
-    Ω_total = total_material_twist(b; s_start = s_lo, s_end = s_hi,
+    Ω_total = total_spinning(b; s_start = s_lo, s_end = s_hi,
                                    rtol = rtolf, atol = atolf)
     return τ_total + Ω_total
 end
@@ -1474,7 +1474,7 @@ struct Sample
     binormal          :: AbstractVector
     curvature         :: Real
     geometric_torsion :: Real
-    material_twist    :: Real
+    spinning_rate    :: Real
 end
 
 """
@@ -1542,11 +1542,11 @@ function _segment_point_budget(
     geom_angle  = _budget_scalar(_segment_total_angle(seg) * frac)
     geom_budget = max(2, ceil(Int, fidelity * geom_angle / (2π) * 32))
 
-    twist_total  = total_material_twist(b; s_start = a, s_end = bb, rtol = 1e-3)
-    twist_angle  = abs(_budget_scalar(twist_total))
-    twist_budget = max(2, ceil(Int, fidelity * twist_angle / (2π) * 32))
+    spinning_total  = total_spinning(b; s_start = a, s_end = bb, rtol = 1e-3)
+    spinning_angle  = abs(_budget_scalar(spinning_total))
+    spinning_budget = max(2, ceil(Int, fidelity * spinning_angle / (2π) * 32))
 
-    return max(geom_budget, twist_budget)
+    return max(geom_budget, spinning_budget)
 end
 
 """
@@ -1599,7 +1599,7 @@ function sample_path(b::SubpathBuilt, s1::Real, s2::Real; fidelity::Float64 = 1.
             fr.binormal,
             fr.curvature,
             fr.geometric_torsion,
-            fr.material_twist,
+            fr.spinning_rate,
         )
     end
     return PathSample(samples, s_lo, s_hi, n)
@@ -1625,9 +1625,9 @@ function path_segment_breakpoints(b::SubpathBuilt)
     return normalize_breakpoints(points)
 end
 
-function path_twist_breakpoints(b::SubpathBuilt)
+function path_spinning_breakpoints(b::SubpathBuilt)
     points = Float64[0.0, Float64(_qc_nominalize(arc_length(b)))]
-    for r in b.resolved_twists
+    for r in b.resolved_spinning
         push!(points, r.s_eff_start)
         push!(points, r.s_eff_end)
     end
@@ -1636,7 +1636,7 @@ end
 
 function breakpoints(b::SubpathBuilt)
     return normalize_breakpoints(vcat(path_segment_breakpoints(b),
-                                      path_twist_breakpoints(b)))
+                                      path_spinning_breakpoints(b)))
 end
 
 function sample(b::SubpathBuilt, s_values)
@@ -1690,7 +1690,7 @@ function _find_subpath(p::PathBuilt, s)
 end
 
 # Forward all "point-query at s" methods through _find_subpath.
-for f in (:curvature, :geometric_torsion, :material_twist,
+for f in (:curvature, :geometric_torsion, :spinning_rate,
           :position, :tangent, :normal, :binormal, :frame)
     @eval function $f(p::PathBuilt, s::Real)
         sb, s_local = _find_subpath(p, s)
@@ -1722,7 +1722,7 @@ total_turning_angle(p::PathBuilt) = sum(total_turning_angle(b) for b in p.subpat
 total_torsion(p::PathBuilt)       = sum(total_torsion(b)       for b in p.subpaths;
                                         init = 0.0)
 
-function total_material_twist(p::PathBuilt;
+function total_spinning(p::PathBuilt;
                               s_start::Real = 0.0,
                               s_end::Real   = s_end(p),
                               rtol::Real    = 1e-8,
@@ -1737,7 +1737,7 @@ function total_material_twist(p::PathBuilt;
         a_local = max(0.0, s_lo - offs[i])
         b_local = min(L,   s_hi - offs[i])
         b_local <= a_local && continue
-        total += total_material_twist(p.subpaths[i];
+        total += total_spinning(p.subpaths[i];
                                       s_start = a_local, s_end = b_local,
                                       rtol = rtol, atol = atol)
     end
@@ -1836,7 +1836,7 @@ function sample_path(p::PathBuilt, s1::Real, s2::Real; fidelity::Float64 = 1.0)
             fr.binormal,
             fr.curvature,
             fr.geometric_torsion,
-            fr.material_twist,
+            fr.spinning_rate,
         )
     end
     return PathSample(samples, s_lo, s_hi, n)

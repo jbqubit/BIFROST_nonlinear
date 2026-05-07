@@ -63,8 +63,8 @@ function _expand(ps::PathGeometry.PathSample)
     bz       = [smpl.binormal[3]          for smpl in ps.samples]
     kappa    = [smpl.curvature            for smpl in ps.samples]
     tau_geom = [smpl.geometric_torsion    for smpl in ps.samples]
-    tau_mat  = [smpl.material_twist       for smpl in ps.samples]
-    return (; s, x, y, z, tx, ty, tz, nx, ny, nz, bx, by, bz, kappa, tau_geom, tau_mat)
+    tau_spin  = [smpl.spinning_rate       for smpl in ps.samples]
+    return (; s, x, y, z, tx, ty, tz, nx, ny, nz, bx, by, bz, kappa, tau_geom, tau_spin)
 end
 
 # ---------------------------------------------------------------------------
@@ -101,7 +101,7 @@ end
 
 
 """
-    write_path_geometry_plot3d(path::PathGeometry.Path, s1, s2; fidelity, output, title, plane_extent_frac, axis_extent_frac, segment_label_nudge_frac, twist_n_quad)
+    write_path_geometry_plot3d(path::PathGeometry.Path, s1, s2; fidelity, output, title, plane_extent_frac, axis_extent_frac, segment_label_nudge_frac, spinning_n_quad)
 
 Write a standalone Plotly HTML file. Horizontal mouse position (without a mouse button pressed)
 scrubs arc length: left-to-right maps linearly in ``s`` over the plotted ``[s_1, s_2]`` interval
@@ -128,11 +128,11 @@ osculating plane. `segment_label_nudge_frac` scales that offset relative to the 
 diagonal.
 
 A red arrow in the local **N̂**–**B̂** plane at the cursor points along
-cos(Φ) N̂ + sin(Φ) B̂, where Φ is [`PathGeometry.total_material_twist`](path-geometry.jl) from `s1`
-to the cursor arc length (same effective-``s`` as the plot), using `twist_n_quad` for overlay
+cos(Φ) N̂ + sin(Φ) B̂, where Φ is [`PathGeometry.total_spinning`](path-geometry.jl) from `s1`
+to the cursor arc length (same effective-``s`` as the plot), using `spinning_n_quad` for overlay
 quadrature.
 
-Keyword `twist_n_quad` is passed to `total_material_twist` when building Φ at each sample index
+Keyword `spinning_n_quad` is passed to `total_spinning` when building Φ at each sample index
 (default 128).
 """
 # -----------------------------------------------------------------------
@@ -283,7 +283,7 @@ function write_path_geometry_plot3d(
     plane_extent_frac::Float64 = 0.08,
     axis_extent_frac::Float64 = 0.06,
     segment_label_nudge_frac::Float64 = 0.035,
-    twist_n_quad::Int = 128,
+    spinning_n_quad::Int = 128,
 )
     path_sample = PathGeometry.sample_path(path, s1, s2; fidelity = fidelity)
     samples = _expand(path_sample)
@@ -320,8 +320,13 @@ function write_path_geometry_plot3d(
     title_html = replace(replace(title, "&" => "&amp;"), "<" => "&lt;")
 
     s_samples = Vector{Float64}(samples.s)
-    # TODO: twist refactor — total_material_twist is currently a stub.
-    integrated_tau_mat = zeros(Float64, length(s_samples))
+    # Φ(s) = ∫_{s1}^{s} τ_spin(s') ds' for the red ∫τ_spin overlay arrow.
+    integrated_tau_spin = [
+        s <= s1f ? 0.0 :
+            Float64(PathGeometry.total_spinning(
+                path; s_start = s1f, s_end = s, rtol = 1e-6))
+        for s in s_samples
+    ]
 
     html = """
     <!--
@@ -338,7 +343,7 @@ function write_path_geometry_plot3d(
       - T̂: orange segment, unit tangent at the cursor.
       - N̂: blue segment, principal normal at the cursor.
       - B̂: green segment, binormal T̂×N̂ at the cursor.
-      - ∫τ_mat: red arrow in the N̂–B̂ plane at the cursor; Φ = total_material_twist(path; s_start
+      - ∫τ_spin: red arrow in the N̂–B̂ plane at the cursor; Φ = total_spinning(path; s_start
         = plot start, s_end = cursor) (same length scale as T̂/N̂/B̂ axes).
       - segment labels (optional): 3D text for each authored segment that has a nickname, when
         that segment overlaps the plotted s-interval.
@@ -415,8 +420,8 @@ function write_path_geometry_plot3d(
         const bz = $(_js_array(samples.bz));
         const kappa = $(_js_array(samples.kappa));
         const tauGeom = $(_js_array(samples.tau_geom));
-        const tauMat = $(_js_array(samples.tau_mat));
-        const integratedTwist = $(_js_array(integrated_tau_mat));
+        const tauSpin = $(_js_array(samples.tau_spin));
+        const integratedTau = $(_js_array(integrated_tau_spin));
         const planeHalf = $(_js_real(plane_half));
         const axisLen = $(_js_real(axis_len));
 
@@ -506,8 +511,8 @@ function write_path_geometry_plot3d(
           };
         }
 
-        function twistArrowInNBPlane(i) {
-          const phi = integratedTwist[i];
+        function spinArrowInNBPlane(i) {
+          const phi = integratedTau[i];
           const r = [xs[i], ys[i], zs[i]];
           const N = [nx[i], ny[i], nz[i]];
           const B = [bx[i], by[i], bz[i]];
@@ -645,8 +650,8 @@ function write_path_geometry_plot3d(
           name: "B̂"
         };
 
-        const tw0 = twistArrowInNBPlane(0);
-        const traceTwistInt = {
+        const tw0 = spinArrowInNBPlane(0);
+        const traceTauInt = {
           type: "scatter3d",
           mode: "lines+markers",
           x: tw0.x,
@@ -660,7 +665,7 @@ function write_path_geometry_plot3d(
             line: { width: 1, color: "#7f0000" }
           },
           hoverinfo: "skip",
-          name: "∫τ_mat ds"
+          name: "∫τ_spin ds"
         };
 
         const layout = {
@@ -678,7 +683,7 @@ function write_path_geometry_plot3d(
           }
         };
 
-        const plotTraces = [pathTrace, segmentBoundaryTrace, startTrace, endTrace, cursorTrace, planeTrace, traceT, traceN, traceB, traceTwistInt];
+        const plotTraces = [pathTrace, segmentBoundaryTrace, startTrace, endTrace, cursorTrace, planeTrace, traceT, traceN, traceB, traceTauInt];
         if (labelX.length > 0) {
           plotTraces.push({
             type: "scatter3d",
@@ -703,14 +708,14 @@ function write_path_geometry_plot3d(
         let activeIndex = 0;
 
         function formatStatus(index) {
-          const deg = integratedTwist[index] * (180 / Math.PI);
+          const deg = integratedTau[index] * (180 / Math.PI);
           return [
             "Arc length s = " + ss[index].toFixed(5) + " m",
             "x, y, z = " + xs[index].toFixed(4) + ", " + ys[index].toFixed(4) + ", " + zs[index].toFixed(4) + " m",
             "κ = " + kappa[index].toExponential(4) + " 1/m",
             "τ_geom = " + tauGeom[index].toExponential(4) + " rad/m",
-            "τ_mat  = " + tauMat[index].toExponential(4) + " rad/m",
-            "∫τ_mat ds = " + integratedTwist[index].toFixed(5) + " rad (" + deg.toFixed(2) + "°)"
+            "τ_spin  = " + tauSpin[index].toExponential(4) + " rad/m",
+            "∫τ_spin ds = " + integratedTau[index].toFixed(5) + " rad (" + deg.toFixed(2) + "°)"
           ].join("\\n");
         }
 
@@ -749,7 +754,7 @@ function write_path_geometry_plot3d(
             z: [ax.B.z]
           }, [8]));
           p = chain(p, () => {
-            const tw = twistArrowInNBPlane(activeIndex);
+            const tw = spinArrowInNBPlane(activeIndex);
             return Plotly.restyle("plot", {
               x: [tw.x],
               y: [tw.y],

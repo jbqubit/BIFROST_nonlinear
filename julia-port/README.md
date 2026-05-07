@@ -58,7 +58,7 @@ The fiber layers combine and specialize those pieces:
 | File | How it extends the standalone pieces |
 | --- | --- |
 | `fiber-cross-section.jl` | Adds step-index fiber optics and birefringence responses. |
-| `fiber-path.jl` | Binds path geometry to a cross section and assembles bend/twist `K` and `Kω`. |
+| `fiber-path.jl` | Binds path geometry to a cross section and assembles bend/spinning `K` and `Kω`. |
 
 ## Current Model
 
@@ -91,9 +91,9 @@ resolved into a G2 quintic connector implemented in
 re-solved so that its endpoint stays anchored to the authored `jumpto_point`
 regardless of upstream perturbations.
 
-Material twist is attached as per-segment metadata using `Twist`. A twist run
+Spinning is attached as per-segment metadata using `Spinning`. A spinning run
 starts on the segment carrying the annotation and continues until the next
-twist annotation or the end of the path. Twist rates may be constant or
+spinning annotation or the end of the path. Spinning rates may be constant or
 callable functions of run-local arc length.
 
 The optical `Fiber` stores:
@@ -168,12 +168,12 @@ J_{\mathrm{total}}=\prod_i J_i,
 
 with matrix order matching the order light encounters along the fiber. That
 approach is simple, but it is difficult to attach a meaningful error bound when
-linear birefringence, twist, and other non-commuting terms vary along the path.
+linear birefringence, spinning, and other non-commuting terms vary along the path.
 
 The Julia implementation instead assembles a local generator:
 
 ```math
-K(s,\omega)=K_{\mathrm{bend}}(s,\omega)+K_{\mathrm{twist}}(s,\omega).
+K(s,\omega)=K_{\mathrm{bend}}(s,\omega)+K_{\mathrm{spinning}}(s,\omega).
 ```
 
 The bending contribution comes from path curvature. For a local bend radius
@@ -181,20 +181,20 @@ The bending contribution comes from path curvature. For a local bend radius
 from `fiber-cross-section.jl`; in the simplest stress model the magnitude
 scales like `1/R(s)^2`.
 
-The twist contribution uses the total frame twist rate:
+The spinning contribution uses the total frame spinning rate:
 
 ```math
-\tau_{\mathrm{path}}(s)=\tau_{\mathrm{geom}}(s)+\tau_{\mathrm{material}}(s).
+\tau_{\mathrm{path}}(s)=\tau_{\mathrm{geom}}(s)+\tau_{\mathrm{spin}}(s).
 ```
 
 Here `geometric_torsion(path, s)` comes from the centerline, while
-`material_twist(path, s)` comes from resolved `Twist` metadata.
+`spinning_rate(path, s)` comes from resolved `Spinning` metadata.
 
 The same decomposition exists for the frequency derivative:
 
 ```math
 K_\omega(s,\omega)
-=K_{\mathrm{bend},\omega}(s,\omega)+K_{\mathrm{twist},\omega}(s,\omega).
+=K_{\mathrm{bend},\omega}(s,\omega)+K_{\mathrm{spinning},\omega}(s,\omega).
 ```
 
 That keeps ordinary Jones propagation and DGD sensitivity propagation aligned:
@@ -229,7 +229,7 @@ Path breakpoints come from the built path:
 fiber_breakpoints(fiber) = breakpoints(fiber.path)
 ```
 
-Those breakpoints include path segment boundaries and resolved twist-run
+Those breakpoints include path segment boundaries and resolved spinning-run
 boundaries. `propagate_fiber` calls `propagate_piecewise`, which integrates
 independently over each smooth interval.
 
@@ -332,14 +332,14 @@ CTE at the fiber reference temperature.
 - `fiber-cross-section.jl`: step-index cross-section quantities, guided index,
   dispersion, nonlinear coefficient, and perturbative birefringence responses.
 - `path-geometry.jl`: `SubpathBuilder` / `Subpath` / `SubpathCached` /
-  `PathCached`, segment placement, differential geometry, material twist
+  `PathCached`, segment placement, differential geometry, material spinning
   resolution, sampling, and global path diagnostics.
 - `path-geometry-connector.jl`: quintic G2 connector used by `jumpby!` and
   by the terminal `jumpto!` connector.
 - `path-geometry-meta.jl`: concrete per-segment metadata vocabulary
   (`Nickname`, `MCMadd`, `MCMmul`).
 - `path-geometry-plot.jl`: path plotting and HTML helpers.
-- `fiber-path.jl`: `Fiber`, bend/twist generator assembly, and fiber-level
+- `fiber-path.jl`: `Fiber`, bend/spinning generator assembly, and fiber-level
   diagnostics.
 - `fiber-path-modify.jl`: meta-driven path perturbation, thermal scaling,
   and `jumpto_conserve_path_length` connector re-solving.
@@ -394,7 +394,7 @@ reduced through particle means rather than failing on particle-valued booleans.
   scattering, electric/magnetic effects, and polarization-dependent loss are
   not modeled.
 - `modify(fiber)` handles geometry and metadata perturbations, including
-  thermal scaling, but twist remapping through modification remains a known
+  thermal scaling, but spinning remapping through modification remains a known
   caveat area.
 - The Julia port has substantial internal tests, but it is not yet a validated
   replacement for the legacy Python model or for published fiber data.

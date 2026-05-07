@@ -23,8 +23,8 @@ highest-value tests. Mark them with the comment "T-PHYSICS".
 
 Examples:
 
-- A straight fiber with no twist produces an identity Jones matrix.
-- Pure twist at rate τ over length L produces a rotation matrix with angle ∝ τL.
+- A straight fiber with no spinning produces an identity Jones matrix.
+- Pure spinning at rate τ over length L produces a rotation matrix with angle ∝ τL.
 - Bending at small radius produces birefringence that scales as 1/R².
 - DGD of a constant-birefringence fiber equals the analytic beat-length formula.
 
@@ -52,7 +52,7 @@ stable across code changes. Mark them with the comment "T-SIM-REGRESSION".
 
 Examples:
 
-- Propagate a standard bend-twist fiber at 1550 nm and verify the final Jones matrix and
+- Propagate a standard bend-spinning fiber at 1550 nm and verify the final Jones matrix and
   DGD against stored expected values.
 
 Standard: Tolerance should be set to something physically meaningful (e.g., DGD to 1 fs,
@@ -114,12 +114,12 @@ Do not break these without explicit user discussion:
   not introduce gain/loss there; that requires a separate module.
 - **Phase-insensitive error**: Adaptive step-doubling uses `phase_insensitive_error`, not
   raw matrix difference. This is intentional.
-- **Function-valued inputs**: Physical profiles (bend radius, twist rate, temperature,
+- **Function-valued inputs**: Physical profiles (bend radius, spinning rate, temperature,
   axis angle) must be callable at arbitrary `s`, not just on a fixed grid.
 - **MCM compatibility**: `material-properties.jl`, `fiber-cross-section.jl`,
   `path-geometry.jl`, and `path-integral.jl` accept
   `MonteCarloMeasurements.Particles` on the uncertain inputs (`T_K`,
-  bend/twist/tension/axis-ratio properties, segment shrinkage, and the
+  bend/spinning/tension/axis-ratio properties, segment shrinkage, and the
   per-entry eltype of the Jones matrices `J` and sensitivity `G`). Keep
   these files `::Real`-free on uncertain-input slots and avoid `Float64(·)`
   coercions on those paths. Test files using MCM must wrap blocks in

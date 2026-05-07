@@ -55,7 +55,7 @@ upcoming features. Agents should not start work on these without explicit author
       illustrating the transformation of an input polarization state as a function of
       distance s along the length of an optical fiber.
 
-- [ ] Is this what we want? Piecewise bend! loops don't accumulate geometric twist in total_material_twist — but they shouldn't, because a BendSegment has geometric_torsion = 0 (circular arcs have zero torsion). A helix does have nonzero geometric_torsion, but that's captured in geometric_torsion(seg, s), not in total_material_twist.
+- [ ] Is this what we want? Piecewise bend! loops don't accumulate geometric spinning in total_spinning — but they shouldn't, because a BendSegment has geometric_torsion = 0 (circular arcs have zero torsion). A helix does have nonzero geometric_torsion, but that's captured in geometric_torsion(seg, s), not in total_spinning.
 
 - [ ] Update demo.jl to use physical birefringences if possible.
 
@@ -64,7 +64,7 @@ upcoming features. Agents should not start work on these without explicit author
   .md and accompanied by code-generated .png that illustrate the points. The
   file defining these illustrations is called path-geometry-illustrated.jl. 
     - [ ] Show that the reference frame for adding additional segments does not 
-    rotate with fiber twist.
+    rotate with fiber spinning.
     - [ ] Illustrate how the axis_angle option is defined and how it
     changes segment addition.
     - [ ] Show how the orientation of the prior segment influences the orientation of a helix and the helix exit path.
@@ -74,8 +74,8 @@ upcoming features. Agents should not start work on these without explicit author
 
 - [ ] TODO fix the MCM demo in demo.jl 4/28 task
 
-- [ ] Verify the `Twist` `is_continuous = true` carry-over semantics are what we
-      want: when a `Twist` meta has `is_continuous = true`, the resolver in
+- [ ] Verify the `Spinning` `is_continuous = true` carry-over semantics are what we
+      want: when a `Spinning` meta has `is_continuous = true`, the resolver in
       path-geometry.jl computes its `phi_0` as `prev.phi_0 + ∫_0^{prev_run_length}
       prev.rate(s_local) ds_local` — i.e. the absolute phase at the start of the
       new run equals the accumulated phase at the end of the prior run. Confirm
@@ -85,7 +85,7 @@ upcoming features. Agents should not start work on these without explicit author
 - [ ] Add a `resolved::Bool` flag (or similar mechanism) to `AbstractMeta`
       so the system can certify that all meta on a `SubpathBuilt` /
       `PathBuilt` has been fully processed. Some meta is interpreted by code
-      internal to `path-geometry*.jl` (e.g. `Twist`); other meta is
+      internal to `path-geometry*.jl` (e.g. `Spinning`); other meta is
       interpreted by external code (e.g. `MCMadd`/`MCMmul` in
       `fiber-path-modify.jl`). A `resolved` flag would let downstream
       consumers (or a `complete(::SubpathBuilt)` / `complete(::PathBuilt)`
@@ -98,23 +98,23 @@ upcoming features. Agents should not start work on these without explicit author
 
 - [ ] I want to make some modifications that focus on path-geometry.jl. Let's worry about the downstream consequences of these changes later. 
 
-Currently TwistOverlay is specified by s_start and length. I want to make changes so that the start and end of each twist is defined with respect to segment boundaries. There are several ways  I can think of implementing this. 
+Currently SpinningOverlay is specified by s_start and length. I want to make changes so that the start and end of each spinning is defined with respect to segment boundaries. There are several ways  I can think of implementing this. 
 
 OPTION 1 :: use meta
-Create a new struct Twist <: AbstractMeta with members
+Create a new struct Spinning <: AbstractMeta with members
       rate::Function
       \phi_0::Real
       is_continuous::Bool
-    In this approach Twist meta is associated with the segment where a particular twist rate commences and continues until the end of the Path or until another segment has an associated Twist meta. The bool is_continuous specifies if the twist phase remains continuous with the prior Twist specification. If is_continuous is True then \phi_0 shouldn't be specified. If is_continuous is False than \phi_0 must be specified as this is the starting phase. The rate::Function must accept \phi as a parameter. 
+    In this approach Spinning meta is associated with the segment where a particular spinning rate commences and continues until the end of the Path or until another segment has an associated Spinning meta. The bool is_continuous specifies if the spinning phase remains continuous with the prior Spinning specification. If is_continuous is True then \phi_0 shouldn't be specified. If is_continuous is False than \phi_0 must be specified as this is the starting phase. The rate::Function must accept \phi as a parameter. 
 
 OPTION 2 :: Use zero-length Segment
-Create a new struct Twist <: AbstractPathSegment with members
+Create a new struct Spinning <: AbstractPathSegment with members
       rate::Function
       \phi_0::Real
       is_continuous::Bool
-In this approach, a Twist segment is inserted into Path placed_segment as a zero-length segment that demarks the start of a particular twist specified by its member data. The same twist rate  continues until the end of the Path or until another Twist segment is added to the Path. The bool is_continuous specifies if the twist phase remains continuous with the prior Twist specification. If is_continuous is True then \phi_0 shouldn't be specified. If is_continuous is False than \phi_0 must be specified as this is the starting phase. The rate::Function must accept \phi as a parameter. 
+In this approach, a Spinning segment is inserted into Path placed_segment as a zero-length segment that demarks the start of a particular spinning specified by its member data. The same spinning rate  continues until the end of the Path or until another Spinning segment is added to the Path. The bool is_continuous specifies if the spinning phase remains continuous with the prior Spinning specification. If is_continuous is True then \phi_0 shouldn't be specified. If is_continuous is False than \phi_0 must be specified as this is the starting phase. The rate::Function must accept \phi as a parameter. 
 
-One detail common to both approaches is that if is_continuous is True the length of prior segments is important in calculating the phase continuity at the boundary between old and new twist rates. 
+One detail common to both approaches is that if is_continuous is True the length of prior segments is important in calculating the phase continuity at the boundary between old and new spinning rates. 
 
 While it's outside the context of the current refactoring it's important to note that properties of individual path segments can be modified using meta
 

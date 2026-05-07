@@ -68,7 +68,7 @@ end
 
 # Path-backed fibers use the path's local normal/binormal frame. The bend
 # axis is the curvature normal, so the local transverse bend components are
-# (κ, 0) in that frame. Frame rotation enters through the path twist rate.
+# (κ, 0) in that frame. Frame rotation enters through the path spinning rate.
 function bend_components(path::Union{SubpathBuilt, PathBuilt}, s::Real)
     κ = curvature(path, s)
     if κ == zero(κ)
@@ -105,8 +105,8 @@ function Fiber(
     )
 end
 
-path_twist_rate(path::Union{SubpathBuilt, PathBuilt}, s::Real) =
-    geometric_torsion(path, s) + material_twist(path, s)
+frame_rotation_rate(path::Union{SubpathBuilt, PathBuilt}, s::Real) =
+    geometric_torsion(path, s) + spinning_rate(path, s)
 
 fiber_path(f::Fiber) = f.path
 
@@ -156,8 +156,8 @@ function bend_generator_Kω(f::Fiber, s::Real, λ_m::Real)
     ]
 end
 
-function twist_generator_K(f::Fiber, s::Real, λ_m::Real)
-    tau = path_twist_rate(f.path, s)
+function spinning_generator_K(f::Fiber, s::Real, λ_m::Real)
+    tau = frame_rotation_rate(f.path, s)
     T = f.T_ref_K
     Δβt = twisting_birefringence(f.cross_section, λ_m, T; twist_rate_rad_per_m = tau)
     return [
@@ -166,8 +166,8 @@ function twist_generator_K(f::Fiber, s::Real, λ_m::Real)
     ]
 end
 
-function twist_generator_Kω(f::Fiber, s::Real, λ_m::Real)
-    tau = path_twist_rate(f.path, s)
+function spinning_generator_Kω(f::Fiber, s::Real, λ_m::Real)
+    tau = frame_rotation_rate(f.path, s)
     T = f.T_ref_K
     Δβtω = twisting_birefringence(
         WithDerivative(),
@@ -193,7 +193,7 @@ operating wavelength `λ_m` (metres). Temperature is `fiber.T_ref_K`.
 function generator_K(f::Fiber, λ_m::Real)
     return function (s::Real)
         return bend_generator_K(f, s, λ_m) +
-               twist_generator_K(f, s, λ_m)
+               spinning_generator_K(f, s, λ_m)
     end
 end
 
@@ -205,7 +205,7 @@ Frequency-derivative counterpart of `generator_K`.
 function generator_Kω(f::Fiber, λ_m::Real)
     return function (s::Real)
         return bend_generator_Kω(f, s, λ_m) +
-               twist_generator_Kω(f, s, λ_m)
+               spinning_generator_Kω(f, s, λ_m)
     end
 end
 
@@ -225,6 +225,6 @@ function bend_geometry(f::Fiber, s::Real)
     return (Rb = inv(sqrt(k2)), theta_b = atan(ky, kx), kx = kx, ky = ky, k2 = k2)
 end
 
-function twist_rate(f::Fiber, s::Real)
-    return path_twist_rate(f.path, s)
+function spinning_rate(f::Fiber, s::Real)
+    return frame_rotation_rate(f.path, s)
 end

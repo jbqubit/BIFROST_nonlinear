@@ -42,7 +42,7 @@ At present, BIFROST models birefringence from four mechanisms:
 * Core noncircularity
 * Asymmetric thermal stress (due to differing coefficients of thermal expansion between core and cladding when core is noncircular)
 * Bending
-* Twisting
+* Spinning
 It does **not** model birefringence due to:
 * Cladding noncircularity
 * Non-concentric cladding and core

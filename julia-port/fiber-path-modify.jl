@@ -80,10 +80,13 @@ Angles (`:angle`, `:axis_angle`) and counts (`:turns`) do not respond to
 With no matching MCM entries `MCMcombine` returns its input unchanged, so
 segments without annotations incur no arithmetic.
 
-# Twist overlays
+# Spinning overlays
 
-STUB: twist overlay remapping was removed pending the per-segment-meta twist
-refactor. `modify(fiber)` no longer carries twist data through.
+Per-segment `Spinning` meta is carried through `modify(fiber)`: the rebuilt
+Subpath's spinning runs are re-resolved against the perturbed segment arc
+lengths via `_resolve_spinning_subpath_local`, so spinning anchors track the
+modified geometry. Spinning `rate` and `phi_0` are not themselves perturbed by
+MCM annotations.
 """
 
 if !@isdefined(Fiber)
@@ -276,7 +279,7 @@ function _modified_rebuild_subpath(sp_built::SubpathBuilt, T_ref, α_lin)
     jumpto_placed = PlacedSegment(connector, s_eff, copy(pos), copy(frame))
     s_end_eff = s_eff + arc_length(connector)
 
-    resolved, pending = _resolve_twists_subpath_local(
+    resolved, pending = _resolve_spinning_subpath_local(
         placed, connector, Float64(_qc_nominalize(s_eff)),
         Float64(_qc_nominalize(s_end_eff)),
     )
@@ -291,6 +294,6 @@ _modified_rebuild(path::SubpathBuilt, T_ref, α_lin) =
 function _modified_rebuild(path::PathBuilt, T_ref, α_lin)
     new_subs = [_modified_rebuild_subpath(sp, T_ref, α_lin) for sp in path.subpaths]
     # Re-stitch via build(::Vector{SubpathBuilt}). This re-runs the
-    # endpoint-conformity check and any cross-Subpath twist resolution.
+    # endpoint-conformity check and any cross-Subpath spinning resolution.
     return build(new_subs)
 end

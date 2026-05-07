@@ -23,7 +23,7 @@ Pass 4 migrates these consumers in **one pass** and brings `runtests.jl`
 back to green. Per Pass 3's planning Q&A:
 
 - **Delete `demo.jl`** (near-duplicate of `demo1.jl`). Port its unique
-  `demo_helix_mcm_twist` into `demo1.jl` first.
+  `demo_helix_mcm_spinning` into `demo1.jl` first.
 - **Strip the 6 geometry-only demos** out of `demo1.jl` (they already live
   in `demo-path-geometry.jl`). `demo1.jl` becomes the modify + adaptive
   step demo file.
@@ -49,8 +49,8 @@ back to green. Per Pass 3's planning Q&A:
 |------|--------|
 | `julia-port/fiber-path-plot.jl` | Verify it loads under the migrated stack; fix any incidental old-API references (esp. inside the `PlotRuntime` module's sampling path). |
 | `julia-port/demo-smallest.jl` | Migrate to new API. |
-| `julia-port/demo.jl` | **Delete** after porting `demo_helix_mcm_twist` into `demo1.jl`. |
-| `julia-port/demo1.jl` | Strip geometry demos; migrate modify + adaptive-step demos; absorb `demo_helix_mcm_twist`. |
+| `julia-port/demo.jl` | **Delete** after porting `demo_helix_mcm_spinning` into `demo1.jl`. |
+| `julia-port/demo1.jl` | Strip geometry demos; migrate modify + adaptive-step demos; absorb `demo_helix_mcm_spinning`. |
 | `julia-port/demo2.jl` | Restructure each multi-jumpto path as a multi-Subpath `PathBuilt`. Migrate kwargs (`destination=` → `point=`, `tangent=` → `incoming_tangent=`, `curvature_out=` → `incoming_curvature=`). Translate the 3 thermal-anchor demos to `conserve_path_length=true`. |
 | `julia-port/demo3mcm.jl` | Migrate path build + `Fiber()` + `modify()` to new API. |
 | `julia-port/demo3benchmark.jl` | Migrate `Fiber()` + `modify()` calls. |
@@ -133,9 +133,9 @@ println("J ="); display(J)
 println("intervals = ", length(stats))
 ```
 
-### Phase 3 — `demo.jl` deletion + `demo_helix_mcm_twist` port
+### Phase 3 — `demo.jl` deletion + `demo_helix_mcm_spinning` port
 
-1. Read `demo.jl`'s `demo_helix_mcm_twist` function body.
+1. Read `demo.jl`'s `demo_helix_mcm_spinning` function body.
 2. Append a migrated equivalent to `demo1.jl`, using the new builder API.
 3. `git rm julia-port/demo.jl`.
 
@@ -154,7 +154,7 @@ Delete these 6 functions from `demo1.jl` (already in `demo-path-geometry.jl`):
 
 #### 4b. Migrate modify demos
 
-12 modify demos + `demo_adaptive_step_doubling` + `demo_helix_mcm_twist`
+12 modify demos + `demo_adaptive_step_doubling` + `demo_helix_mcm_spinning`
 (ported from `demo.jl`). For each:
 
 1. Convert `_build_modify_variant` (and its helix variant) helpers from
@@ -171,7 +171,7 @@ Delete these 6 functions from `demo1.jl` (already in `demo-path-geometry.jl`):
 
 Update the `demo1.html` index so links still resolve (the geometry-only
 entries are gone; entries for the 12 modify demos + adaptive-step +
-helix-mcm-twist remain).
+helix-mcm-spinning remain).
 
 ### Phase 5 — `demo2.jl` migration
 
@@ -321,7 +321,7 @@ test ! -f julia-port/demo.jl && echo "demo.jl removed"
 Expected outputs in `julia-port/../output/`:
 
 - `demo-path-geometry-index.html` and the seven path-geometry HTMLs (Pass 2).
-- `demo1.html` index plus 12 modify HTMLs + adaptive-step + helix-mcm-twist.
+- `demo1.html` index plus 12 modify HTMLs + adaptive-step + helix-mcm-spinning.
 - `demo2.html` index plus 18 jump HTMLs.
 - `demo3mcm.html` plus the MCM temperature PTF artifacts.
 - `demo3benchmark.html` plus benchmark artifacts.

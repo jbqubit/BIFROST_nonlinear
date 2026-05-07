@@ -252,11 +252,11 @@ end
 end
 
 # -----------------------------------------------------------------------
-# Twist overlay remapping
+# Spinning overlay remapping
 # -----------------------------------------------------------------------
 
-# TODO: twist refactor — pending per-segment-meta twist subsystem.
-@testset "modify — :T_K preserves constant twist rate; total scales with length" begin
+# TODO: spinning refactor — pending per-segment-meta spinning subsystem.
+@testset "modify — :T_K preserves constant spinning rate; total scales with length" begin
     @test_skip true
 end
 
@@ -321,13 +321,13 @@ end
     @test curvature(connector, 0.0) ≈ 0.5 atol = 1e-12
 end
 
-@testset "modify — T-GUARDRAIL: Twist anchors tolerate MCM-valued modified length" begin
+@testset "modify — T-GUARDRAIL: Spinning anchors tolerate MCM-valued modified length" begin
     MonteCarloMeasurements.unsafe_comparisons(true)
     try
         path = _build_path() do sb
             straight!(sb; length = 1.0,
                       meta = [
-                          Twist(; rate = 2.0),
+                          Spinning(; rate = 2.0),
                           MCMadd(:length, 0.0 ± 0.01),
                       ])
         end
@@ -335,9 +335,9 @@ end
         seg_s = path_s.placed_segments[1].segment
         L_seg = arc_length(seg_s)
         @test L_seg isa Particles
-        # Twist run extends from the segment's start over its full length.
-        # Integrated material twist over the segment = 2.0 * L_seg.
-        @test total_material_twist(path_s; s_start = 0.0,
+        # Spinning run extends from the segment's start over its full length.
+        # Integrated material spinning over the segment = 2.0 * L_seg.
+        @test total_spinning(path_s; s_start = 0.0,
                                    s_end = Float64(_qc_nominalize(L_seg))) ≈
               2.0 * pmean(L_seg) rtol = 1e-3
     finally

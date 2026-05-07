@@ -22,8 +22,8 @@ As regards your questions...
 
 4. PathBuilt should be a high level bag that holds many SubpathBuilt. 
 
-5. Twist is_continuous requires some glue logic at the interface between subsequent Subpaths. 
-I want for a twist specification to extend no longer than a single Subpath. That is, each Subpath needs its own twist (if any). This is part of making each Subpath fully independent of all others. 
+5. Spinning is_continuous requires some glue logic at the interface between subsequent Subpaths. 
+I want for a spinning specification to extend no longer than a single Subpath. That is, each Subpath needs its own spinning (if any). This is part of making each Subpath fully independent of all others. 
 
 6. - The thermal-expansion-on-JumpTo behavior described in the existing
   docstring is being deleted, not refactored.  Agreed. 
@@ -67,7 +67,7 @@ Regarding the new Plan for A.
 - Although PathBuilt is intended to be a bag it should still be a distinct struct. 
 ----
 
-Rgarding, build(spb::SubpathBuilt)... It may need to do more to construct PathBuilt. This is the first layer of the stack that know about the overall ordering of the Subpath elements. All the methods that For example, stitching together twist adjacent SubpathBuilt. Make note of that and let's come back to it. Perhaps this can be delegated back to the PathBuilt level? 
+Rgarding, build(spb::SubpathBuilt)... It may need to do more to construct PathBuilt. This is the first layer of the stack that know about the overall ordering of the Subpath elements. All the methods that For example, stitching together spinning adjacent SubpathBuilt. Make note of that and let's come back to it. Perhaps this can be delegated back to the PathBuilt level? 
 
 
 

@@ -411,12 +411,12 @@ module PlotRuntime
     `κ(s) = (cos(θ_b(s))/Rb(s), sin(θ_b(s))/Rb(s), 0)`
 
     in the lab frame, and the centerline is recovered by integrating the tangent vector.
-    `dtwist` is included in the returned metadata in rad/m but does not affect the centerline
+    `frame_rate` is included in the returned metadata in rad/m but does not affect the centerline
     geometry.
 
     Returns a named tuple containing `s`, `x`, `y`, `zc`, `tx`, `ty`, `tz`, Frenet-Serret
     `nx`, `ny`, `nz`, `bx`, `by`, `bz`, the transported frame `e1x`, `e1y`, `e1z`, `e2x`,
-    `e2y`, `e2z`, `Rb`, `theta_b`, `dtwist`, `kx`, `ky`, and `k2`.
+    `e2y`, `e2z`, `Rb`, `theta_b`, `frame_rate`, `kx`, `ky`, and `k2`.
     """
     function sample_fiber_centerline(f::Main.Fiber, s1::Real, s2::Real; n::Int = 1001)
         @assert s2 > s1 "Require s2 > s1"
@@ -450,10 +450,10 @@ module PlotRuntime
             k2 = [κ^2 for κ in kx]
             Rb = [iszero(fr.curvature) ? Inf : Float64(inv(fr.curvature)) for fr in frames]
             theta_b = zeros(Float64, n)
-            dtwist = [Float64(fr.geometric_torsion + fr.material_twist) for fr in frames]
+            frame_rate = [Float64(fr.geometric_torsion + fr.spinning_rate) for fr in frames]
 
             return (; s = ss, x, y, zc, tx, ty, tz, e1x, e1y, e1z, e2x, e2y, e2z,
-                      Rb, theta_b, dtwist, kx, ky, k2, nx, ny, nz, bx, by, bz)
+                      Rb, theta_b, frame_rate, kx, ky, k2, nx, ny, nz, bx, by, bz)
         end
 
         ss = collect(range(Float64(s1), Float64(s2), length = n))
@@ -462,7 +462,7 @@ module PlotRuntime
         zc = zeros(Float64, n)
         Rb = Vector{Float64}(undef, n)
         theta_b = Vector{Float64}(undef, n)
-        dtwist = Vector{Float64}(undef, n)
+        frame_rate = Vector{Float64}(undef, n)
         kx = zeros(Float64, n)
         ky = zeros(Float64, n)
         k2 = zeros(Float64, n)
@@ -496,11 +496,11 @@ module PlotRuntime
             bend = Main.bend_geometry(f, si)
             R = Float64(bend.Rb)
             θ = Float64(bend.theta_b)
-            τ = Float64(Main.twist_rate(f, si))
+            τ = Float64(Main.spinning_rate(f, si))
 
             Rb[i] = R
             theta_b[i] = θ
-            dtwist[i] = τ
+            frame_rate[i] = τ
 
             kx[i] = bend.kx
             ky[i] = bend.ky
@@ -542,7 +542,7 @@ module PlotRuntime
             end
         end
 
-        path = (; s = ss, x, y, zc, tx, ty, tz, e1x, e1y, e1z, e2x, e2y, e2z, Rb, theta_b, dtwist, kx, ky, k2)
+        path = (; s = ss, x, y, zc, tx, ty, tz, e1x, e1y, e1z, e2x, e2y, e2z, Rb, theta_b, frame_rate, kx, ky, k2)
         for i in eachindex(ss)
             fs = Main.frenet_serret_frame(path, ss[i])
             nx[i], ny[i], nz[i] = fs.normal
@@ -688,7 +688,7 @@ module PlotRuntime
             "z=$(samples.zc[i]) m<br>" *
             "Rb=$(samples.Rb[i]) m<br>" *
             "theta_b=$(samples.theta_b[i]) rad<br>" *
-            "dtwist=$(samples.dtwist[i]) rad/m<br>" *
+            "frame_rate=$(samples.frame_rate[i]) rad/m<br>" *
             "DGD=$(dgd.dgd[i]) s<br>" *
             "S1=$(pol.s1[i])<br>" *
             "S2=$(pol.s2[i])<br>" *
@@ -782,7 +782,7 @@ module PlotRuntime
             const bz = $(js_array(samples.bz));
             const rb = $(js_array(samples.Rb));
             const theta = $(js_array(samples.theta_b));
-            const dtwist = $(js_array(samples.dtwist));
+            const frame_rate = $(js_array(samples.frame_rate));
             const dgd = $(js_array(dgd.dgd));
             const hoverText = $(js_string_array(hover_text));
             const linearAngle = $(js_array(pol.linear_angle_rad));
@@ -1169,7 +1169,7 @@ module PlotRuntime
                 "z = " + zs[index].toFixed(4) + " m",
                 "Rb = " + (Number.isFinite(rb[index]) ? rb[index].toFixed(4) : "Inf") + " m",
                 "theta_b = " + theta[index].toFixed(4) + " rad",
-                "dtwist = " + dtwist[index].toFixed(4) + " rad/m",
+                "frame_rate = " + frame_rate[index].toFixed(4) + " rad/m",
                 "DGD = " + dgd[index].toExponential(6) + " s",
                 "S1 = " + s1[index].toFixed(4),
                 "S2 = " + s2[index].toFixed(4),

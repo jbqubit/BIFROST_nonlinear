@@ -2,7 +2,7 @@
 
 ## Context
 
-`path-geometry.jl` is meant to hold a **static, immutable representation of geometry** — a space curve with segments, twist overlays, and Frenet-frame queries. Today it also carries `shrinkage`: a per-segment scalar that rescales arc length and curvature. Shrinkage is a *fiber* phenomenon (thermal / drawing contraction), not a property of an abstract space curve, so it violates the file's stated intent.
+`path-geometry.jl` is meant to hold a **static, immutable representation of geometry** — a space curve with segments, spinning overlays, and Frenet-frame queries. Today it also carries `shrinkage`: a per-segment scalar that rescales arc length and curvature. Shrinkage is a *fiber* phenomenon (thermal / drawing contraction), not a property of an abstract space curve, so it violates the file's stated intent.
 
 Two related concerns follow from the same observation:
 
@@ -28,7 +28,7 @@ Remove from [path-geometry.jl](julia-port/path-geometry.jl):
 - `_apply_shrinkage_override` (L901–910) and the `shrinkage` kwarg on `build(spec; shrinkage=...)` (L948, L961–967).
 - `segment_shrinkage` accessor (L92).
 - `PlacedSegment.s_offset_nom` field — no longer meaningful when nominal == effective.
-- TwistOverlay handling in `_resolve_overlay` simplifies: `α = 1` everywhere, so `s_eff == s_nom` and the two offsets collapse.
+- SpinningOverlay handling in `_resolve_overlay` simplifies: `α = 1` everywhere, so `s_eff == s_nom` and the two offsets collapse.
 
 All segment arithmetic that currently multiplies by `seg.shrinkage` (e.g. BendSegment `R = shrinkage * radius`) drops the factor.
 
@@ -68,7 +68,7 @@ Create [julia-port/fiber-path-shrinkage.jl](julia-port/fiber-path-shrinkage.jl).
 
 The caller supplies `α` directly. This file is **purely geometric** — it does not know about glass thermal expansion or `T_ref_K`. A future layer can convert `(T_operating, T_ref, material)` → `α`, but that lives elsewhere.
 
-Under the hood, `shrink` rebuilds each segment with scaled dimensional fields (e.g. `BendSegment(radius * α, angle, axis_angle)` — angle is preserved, radius scales), re-places them via the same frame-advancing logic as `build`, and reconciles twist overlays. The overlay reconciliation is the logic currently in `_resolve_overlay` (L912–936): overlays authored in reference coordinates are mapped into effective coordinates after scaling. That mapping moves from `build` into `shrink`.
+Under the hood, `shrink` rebuilds each segment with scaled dimensional fields (e.g. `BendSegment(radius * α, angle, axis_angle)` — angle is preserved, radius scales), re-places them via the same frame-advancing logic as `build`, and reconciles spinning overlays. The overlay reconciliation is the logic currently in `_resolve_overlay` (L912–936): overlays authored in reference coordinates are mapped into effective coordinates after scaling. That mapping moves from `build` into `shrink`.
 
 Key semantic note: after this refactor, `build(spec)` always produces a reference-T `Path` where effective == nominal. `shrink` is the *only* way to introduce a divergence.
 
@@ -103,7 +103,7 @@ Key semantic note: after this refactor, `build(spec)` always produces a referenc
 ## Verification
 
 1. `julia --project=julia-port -e 'include("julia-port/test/test_path_geometry.jl")'` — passes with the shrinkage-free geometry.
-2. `julia --project=julia-port -e 'include("julia-port/test/test_fiber_path_shrinkage.jl")'` — new tests cover uniform and per-index shrinkage, arc-length scaling, curvature invariance, twist-overlay remapping, and MCM `Particles` compatibility.
+2. `julia --project=julia-port -e 'include("julia-port/test/test_fiber_path_shrinkage.jl")'` — new tests cover uniform and per-index shrinkage, arc-length scaling, curvature invariance, spinning-overlay remapping, and MCM `Particles` compatibility.
 3. `julia --project=julia-port -e 'include("julia-port/test/test_fiber_path.jl")'` and `test_dgd.jl`, `test_paddle_transfer.jl`, `test_mcm_compatability.jl` — all still pass. Most don't touch shrinkage; the MCM shrinkage cases have moved.
 4. Spot-check: construct a `Fiber` without passing `T_ref_K`, confirm it defaults to 297.15; construct with `T_ref_K = 300.0`, confirm the field round-trips. `Path` and `FiberCrossSection` remain temperature-free.
 5. `demo.jl` still runs end-to-end.
