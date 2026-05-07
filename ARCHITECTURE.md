@@ -20,11 +20,15 @@ This is a high-level schematic. Do not update it to reflect every file.
 │   ├── Manifest.toml
 │   ├── material-properties.jl       [9]
 │   ├── path-geometry.jl             [10]
+│   ├── path-geometry-connector.jl   [10]
+│   ├── path-geometry-meta.jl        [10]
+│   ├── path-geometry-plot.jl        [10]
 │   ├── path-integral.jl             [11]
 │   ├── fiber-cross-section.jl       [12]
 │   ├── fiber-path.jl                [13]
+│   ├── fiber-path-modify.jl         [13]
 │   ├── fiber-path-plot.jl           [14]
-│   ├── demo*.jl                     [15]
+│   ├── demo-index.jl, demo*.jl      [15]
 │   └── test                         [19]
 ├── output                           [20]
 └── *.py / *.jl supporting scripts
@@ -84,12 +88,20 @@ The fiber-specific layers combine those pieces:
 ## Layered Design
 
 0. **Geometry layer** (`path-geometry.jl`, `path-geometry-connector.jl`,
-   `path-geometry-plot.jl`)
+   `path-geometry-meta.jl`, `path-geometry-plot.jl`)
 
    - Builds and queries three-dimensional paths.
-   - Provides straight, bend, catenary, helix, `JumpBy`, and `JumpTo` authoring.
+   - Authoring lifecycle on a `SubpathBuilder`: `origin!` → segment-adding
+     calls (`straight!`, `bend!`, `helix!`, `catenary!`, `jumpby!`) →
+     `jumpto!` → `build()`.
+   - `freeze(builder) → Subpath` and `build(sub::Subpath) → SubpathCached`
+     compile to immutable forms. `build(::Vector{Subpath}) → PathCached`
+     concatenates multiple subpaths under a shared global arc-length.
    - Resolves material twist metadata into path-coordinate twist runs.
-   - Resolves `JumpBy` and `JumpTo` into G2 quintic connectors.
+   - Resolves `JumpBy` and the terminal `jumpto!` connector into G2
+     quintic connectors at build time.
+   - `path-geometry-meta.jl` defines the `AbstractMeta` vocabulary
+     (`Nickname`, `MCMadd`, `MCMmul`).
 
 1. **Material layer** (`material-properties.jl`)
 
@@ -102,17 +114,19 @@ The fiber-specific layers combine those pieces:
    - Converts material properties into guided-index, dispersion, nonlinearity,
      and local birefringence response coefficients.
 
-3. **Fiber assembly layer** (`fiber-path.jl`, `fiber-path-meta.jl`,
-   `fiber-path-modify.jl`)
+3. **Fiber assembly layer** (`fiber-path.jl`, `fiber-path-modify.jl`)
 
-   - Binds a built `PathSpecCached` to a `FiberCrossSection` and `T_ref_K`.
+   - Binds a built `SubpathCached` (or `PathCached`) to a
+     `FiberCrossSection` and `T_ref_K`.
    - Keeps operating wavelength as a per-query argument rather than `Fiber`
      state.
    - Assembles fiber-level bend and twist generators `K(s)` and `Kω(s)`.
    - Interprets per-segment metadata such as `Nickname`, `MCMadd`, and
      `MCMmul`.
    - Applies meta-driven path perturbations and thermal length scaling through
-     `modify(fiber)`.
+     `modify(fiber)`. When a Subpath has `jumpto_conserve_path_length=true`,
+     the terminal connector absorbs upstream length perturbations so the
+     Subpath's total arc length is preserved.
 
 4. **Propagation layer** (`path-integral.jl`)
 
@@ -133,8 +147,10 @@ The fiber-specific layers combine those pieces:
 ## Runtime Flow
 
 0. See `julia-port/demo-smallest.jl` for the smallest runnable example.
-1. Build a `PathSpecBuilder` with path primitives and optional metadata.
-2. Compile it with `build(...)`, producing a `PathSpecCached`.
+1. Build a `SubpathBuilder` with path primitives and optional metadata
+   (`origin!` → segment calls → `jumpto!`).
+2. Compile it with `build(...)`, producing a `SubpathCached` (or a
+   `PathCached` from a `Vector{Subpath}` for multi-subpath assemblies).
 3. Bind it into `Fiber(path; cross_section, T_ref_K)`.
 4. Propagate with `propagate_fiber(fiber; λ_m=...)` for Jones output.
 5. Use `propagate_fiber_sensitivity(fiber; λ_m=...)` when DGD is needed.

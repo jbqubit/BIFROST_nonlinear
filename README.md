@@ -26,12 +26,13 @@ To run the demos, navigate to the project directory and use the following comman
 
 ```bash
 cd /path/to/BIFROST_nonlinear
-julia --project=julia-port julia-port/demo.jl
+julia --project=julia-port julia-port/demo-index.jl
 ```
 
-Replace `demo.jl` with other demo files like `demo1.jl`, `demo2.jl`, etc., as needed.
-
-The demos generate HTML output files in the `output/` directory.
+`demo-index.jl` is the entry point for running demos; results are
+consolidated into `output/demo-index.html`. Individual `demo*.jl` files can
+also be run directly. The demos generate HTML output files in the `output/`
+directory.
 
 ### Regime of Operation
 

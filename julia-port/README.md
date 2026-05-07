@@ -64,24 +64,32 @@ The fiber layers combine and specialize those pieces:
 
 High-level authoring is path based:
 
-1. Build geometry with `PathSpecBuilder`.
-2. Freeze and place it with `build(...)`, producing a `PathSpecCached`.
+1. Build geometry on a `SubpathBuilder` in lifecycle order:
+   `origin!` → segment-adding calls → `jumpto!`.
+2. Compile it with `build(...)`, producing a `SubpathCached`. To assemble
+   multiple subpaths under a single global arc-length, freeze each one with
+   `freeze(builder) → Subpath` and call `build(::Vector{Subpath}) → PathCached`.
 3. Bind that path to a `FiberCrossSection` with `Fiber(path; cross_section,
    T_ref_K)`.
 4. Propagate at a requested wavelength with `propagate_fiber(fiber; λ_m=...)`.
 
-The current path primitives include:
+The current interior path primitives are:
 
-- `StraightSegment`
-- `BendSegment`
-- `CatenarySegment`
-- `HelixSegment`
-- `JumpBy`
-- `JumpTo`
+- `StraightSegment` (`straight!`)
+- `BendSegment` (`bend!`)
+- `CatenarySegment` (`catenary!`)
+- `HelixSegment` (`helix!`)
+- `JumpBy` (`jumpby!`) — interior G2 jump segment
 
-`JumpBy` and `JumpTo` are authoring conveniences. At build time they are
+A `SubpathBuilder` is sealed by `jumpto!`, which records a lab-frame
+destination and (optionally) an incoming tangent, incoming curvature,
+`min_bend_radius`, and `jumpto_conserve_path_length`. The terminal connector
+is structural — it lives on the Subpath itself rather than as a segment in
+`segments`. At `build()` time, `jumpby!` and the terminal `jumpto!` are
 resolved into a G2 quintic connector implemented in
-`path-geometry-connector.jl`.
+`path-geometry-connector.jl`. Under `modify(fiber)` the terminal connector is
+re-solved so that its endpoint stays anchored to the authored `jumpto_point`
+regardless of upstream perturbations.
 
 Material twist is attached as per-segment metadata using `Twist`. A twist run
 starts on the segment carrying the annotation and continues until the next
@@ -90,7 +98,7 @@ callable functions of run-local arc length.
 
 The optical `Fiber` stores:
 
-- the built `PathSpecCached`,
+- the built `SubpathCached` (or `PathCached`),
 - the `FiberCrossSection`,
 - a reference temperature `T_ref_K`,
 - the fiber domain `[s_start, s_end]`.
@@ -122,7 +130,8 @@ xs = FiberCrossSection(
     model_number = "SMF-like",
 )
 
-spec = PathSpecBuilder()
+spec = SubpathBuilder()
+origin!(spec)
 straight!(spec; length = 0.5, meta = [Nickname("lead-in")])
 bend!(spec; radius = 0.05, angle = pi / 2, meta = [Nickname("90 deg bend")])
 straight!(spec; length = 0.5, meta = [Nickname("lead-out")])
@@ -322,21 +331,24 @@ CTE at the fiber reference temperature.
   CTE, and nonlinear index helpers.
 - `fiber-cross-section.jl`: step-index cross-section quantities, guided index,
   dispersion, nonlinear coefficient, and perturbative birefringence responses.
-- `path-geometry.jl`: path authoring, placement, differential geometry,
-  material twist resolution, sampling, and global path diagnostics.
-- `path-geometry-connector.jl`: quintic G2 connector used by `JumpBy` and
-  `JumpTo`.
+- `path-geometry.jl`: `SubpathBuilder` / `Subpath` / `SubpathCached` /
+  `PathCached`, segment placement, differential geometry, material twist
+  resolution, sampling, and global path diagnostics.
+- `path-geometry-connector.jl`: quintic G2 connector used by `jumpby!` and
+  by the terminal `jumpto!` connector.
+- `path-geometry-meta.jl`: concrete per-segment metadata vocabulary
+  (`Nickname`, `MCMadd`, `MCMmul`).
 - `path-geometry-plot.jl`: path plotting and HTML helpers.
-- `fiber-path-meta.jl`: concrete per-segment metadata vocabulary.
 - `fiber-path.jl`: `Fiber`, bend/twist generator assembly, and fiber-level
   diagnostics.
-- `fiber-path-modify.jl`: meta-driven path perturbation and thermal scaling.
+- `fiber-path-modify.jl`: meta-driven path perturbation, thermal scaling,
+  and `jumpto_conserve_path_length` connector re-solving.
 - `fiber-path-plot.jl`: fiber and propagation visualization helpers.
 - `path-integral.jl`: Jones propagation, sensitivity propagation, DGD, and
   MCM-aware exponential formulas.
 - `demo1.jl`: path geometry, segment labels, helix, modification, and
   adaptive-step visual demos.
-- `demo2.jl`: `JumpBy` and `JumpTo` connector demos.
+- `demo2.jl`: `jumpby!` and `jumpto!` connector demos.
 - `demo3mcm.jl`: MCM temperature/PTF demos.
 - `demo3benchmark.jl`: MCM propagation benchmark demos.
 - `test/`: unit and regression tests.
